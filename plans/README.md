@@ -12,7 +12,7 @@ the table when done.
 |------|-------|----------|--------|------------|--------|
 | 001 | Import the missing `Pause` icon so the library drawer stops crashing | P1 | S | — | DONE |
 | 002 | Establish a verification baseline — `typecheck` and `test` that pass | P1 | M | 001 | DONE |
-| 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | TODO |
+| 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | DONE |
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 | 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | TODO |
@@ -62,6 +62,16 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   timings (never limited); 4001 chars → 413; 4000 → not 413; limiter throwing → fails
   open. Executor also confirmed `wrangler dev` accepts the config and proved the
   free-path test is load-bearing by temporarily inverting the guard.
+
+- **003 — DONE**, merged to `main` as `33c7a8e`. Auth bypass closed: the client now POSTs
+  the token to `/api/auth/verify` and takes the profile from the response body, never the
+  URL; `replaceState` runs before the await. Pending records moved from the in-memory Map
+  to Workers KV (namespace created and bound). 27 tests pass (6 new). Reviewer verified
+  six behaviours independently against a KV stub: forged token → 400 no user; wrong token
+  → 400; correct token → 200 with the *server-supplied* name; replay → 400 (single-use);
+  expired → 400; and **no KV binding at all → 400, fails closed**. Executor also proved
+  the regression test is load-bearing by stashing the fix and watching both App tests
+  fail. Superseded later by plan 008.
 
 ## Architecture decision (operator, 2026-08-28)
 
