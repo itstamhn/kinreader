@@ -15,6 +15,10 @@ the table when done.
 | 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | TODO |
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
+| 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | TODO |
+| 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | TODO |
+| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
+| 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -59,6 +63,41 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   open. Executor also confirmed `wrangler dev` accepts the config and proved the
   free-path test is load-bearing by temporarily inverting the guard.
 
+## Architecture decision (operator, 2026-08-28)
+
+**Convex replaces the Spiceflow backend only.** Cloudflare Workers keeps serving the
+static SPA and keeps owning `kinreader.com`. This is deliberately *not* a move to Convex
+hosting.
+
+The deciding constraint: Convex HTTP actions serve from `<deployment>.convex.site`, and
+putting them on the apex domain requires **custom domains, which need a Convex Pro plan**.
+Cloudflare already does it for free. So `/r/:id` and `/api/og` — the share page and its
+OG card, both tied to the public domain — stay on the Worker as plain handlers (plan 009),
+while every data endpoint moves to Convex (plans 006–008).
+
+End state: Cloudflare owns domain + static assets + two presentation routes. Convex owns
+data, auth, file storage, and all provider calls. No HTTP framework, no Pro plan.
+
+## kitcn findings (2026-08-28)
+
+The repo carries a complete kitcn + Convex install that currently does nothing:
+
+- **The routers bypass the cRPC layer.** `convex/routers/articles.ts:2` and
+  `convex/routers/users.ts:1` import `mutation`/`query` from `../_generated/server`
+  instead of the builders exported by `convex/crpc.ts`. Result:
+  `convex/generated/procedure-names.gen.ts` is `export const procedureNames = {};` and
+  `convex/shared/api.ts` exports `api = { _http: {} }`. Codegen has found zero
+  procedures, so the typed client surface is empty. Plan 006 fixes this.
+- **Better Auth is scaffolded but disabled.** `convex/generated/auth.ts` builds a disabled
+  runtime with reason `missing_auth_file` for `convex/auth.ts`, which does not exist.
+  Better Auth is the JWT issuer that makes `ctx.auth.getUserIdentity()` work at all —
+  without it, the authorization fixes in plan 008 are impossible.
+- **`@tanstack/react-query` is installed and imported by nothing.** kitcn's client is
+  built on it; plan 006 puts it to use.
+- **`convex/routers/articles.ts` exports a dead `extractArticle`** — a weaker duplicate of
+  `src/server.ts:229` that lacks the direct-HTML fallback. Plan 006 deletes it rather than
+  maintaining two copies.
+
 ## Dependency notes
 
 - **001 first, alone.** It is a one-line import fix for a crash that is live in
@@ -68,6 +107,11 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   request handling. Each one's "Done criteria" is `bun run typecheck` exiting 0 and
   `bun test` passing — neither command exists until 002 creates it. Landing them first
   would mean shipping security changes with no gate behind them.
+- **003 still ships next, and is later superseded by 008.** 003 closes the live auth
+  bypass using Workers KV; 008 deletes that KV layer when Better Auth lands. That is ~40
+  lines of deliberate throwaway, accepted because the bypass is trivially exploitable
+  today and 008 is multi-session work. Closing the hole in hours beats closing it
+  elegantly in weeks. Mark 003 SUPERSEDED (not REJECTED) when 008 lands.
 - **003, 004 and 005 are independent of each other** and can run in parallel once 002
   lands. They touch overlapping regions of `src/server.ts`, so expect to rebase:
   - 003 → the auth routes (lines ~6-210)
@@ -98,12 +142,10 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 Real, confirmed findings that were audited and left out of this round. Recorded so they
 are not re-audited from scratch next session.
 
-- **Convex functions trust a `userId` argument** — `convex/routers/users.ts:64` and
-  `:96` read and write any user's playlist by id, and `:6` mints a 30-day session token
-  for any email with no verification. There is no `ctx.auth` call anywhere under
-  `convex/`. Not planned this round because `src/` never imports Convex, so it is not
-  reachable through the app — but the functions are public on the deployment. Plan this
-  before wiring the frontend to Convex.
+- ~~**Convex functions trust a `userId` argument**~~ — now planned as **008**. Note the
+  urgency changed: once plan 006 wires the frontend to Convex, these functions stop being
+  unreachable-in-practice and become live attack surface. 008 must land before any
+  user-scoped Convex data ships.
 - **SSRF in `/api/extract`** (`src/server.ts:216`) — fetches an arbitrary user-supplied
   URL server-side and returns the body, with no scheme or host validation. Contained on
   Workers; reaches localhost and link-local addresses on the `bun src/server.ts`
