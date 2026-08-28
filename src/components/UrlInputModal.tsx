@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { X, Link2, FileText, Sparkles, Loader2, Clipboard, Play } from 'lucide-react';
+import { useCRPC } from '../lib/convex';
 import type { ArticleData } from '../types';
 
 interface UrlInputModalProps {
@@ -30,6 +32,9 @@ export function UrlInputModal({
   onLoadArticle,
   onAddToQueue,
 }: UrlInputModalProps) {
+  const crpc = useCRPC();
+  const extractMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
+
   const [activeTab, setActiveTab] = useState<'url' | 'text'>('url');
   const [url, setUrl] = useState('');
   const [rawText, setRawText] = useState('');
@@ -60,18 +65,7 @@ export function UrlInputModal({
     setError(null);
 
     try {
-      const res = await fetch('/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Extraction failed');
-      }
-
-      const data: ArticleData = await res.json();
+      const data = await extractMutation.mutateAsync({ url: url.trim() });
       if (shouldAddToQueue && onAddToQueue) {
         onAddToQueue(data);
       } else {
