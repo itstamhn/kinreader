@@ -5,6 +5,7 @@ import { sendMagicLinkEmail } from './lib/autosend';
 interface MagicLinkBody { email?: string; autosendApiKey?: string }
 interface VerifyBody { email?: string; code?: string; token?: string }
 interface ExtractBody { url?: string; monidApiKey?: string }
+type AuthRecord = { code: string; token: string; expires: number; name?: string; avatar?: string };
 interface TtsBody {
   text?: string;
   provider?: string;
@@ -15,9 +16,6 @@ interface TtsBody {
   apiKey?: string;
   voiceId?: string;
 }
-
-// Ephemeral memory store for pending auth requests (15-min TTL)
-const authCodes = new Map<string, { code: string; token: string; expires: number }>();
 
 export const app = new Spiceflow()
   // Health Check
@@ -54,7 +52,7 @@ export const app = new Spiceflow()
       const token = crypto.randomUUID();
       const expires = Date.now() + 15 * 60 * 1000; // 15 minutes
 
-      authCodes.set(email, { code, token, expires });
+      await putAuthRecord(env, email, { code, token, expires });
 
       const urlObj = new URL(request.url);
       const magicUrl = `${urlObj.origin}/?auth_token=${token}&email=${encodeURIComponent(email)}`;
@@ -96,7 +94,9 @@ export const app = new Spiceflow()
         });
       }
 
-      const record = authCodes.get(email);
+      const env = ((request as any).env || (typeof process !== 'undefined' ? process.env : {})) || {};
+
+      const record = await getAuthRecord(env, email);
       if (!record || Date.now() > record.expires) {
         return new Response(JSON.stringify({ error: 'Invalid or expired verification code' }), {
           status: 400,
@@ -113,15 +113,15 @@ export const app = new Spiceflow()
       }
 
       // Clear used code
-      authCodes.delete(email);
+      await deleteAuthRecord(env, email);
 
       const username = email.split('@')[0] ?? email;
       return {
         success: true,
         user: {
           email,
-          name: username.charAt(0).toUpperCase() + username.slice(1),
-          avatar: `https://unavatar.io/${encodeURIComponent(email)}`,
+          name: record.name || username.charAt(0).toUpperCase() + username.slice(1),
+          avatar: record.avatar || `https://unavatar.io/${encodeURIComponent(email)}`,
           tier: 'pro',
         },
       };
@@ -207,11 +207,15 @@ export const app = new Spiceflow()
       const expires = Date.now() + 15 * 60 * 1000;
 
       // Register session
-      authCodes.set(email, { code: 'GOOGLE_OAUTH', token, expires });
+      await putAuthRecord(env, email, {
+        code: 'GOOGLE_OAUTH',
+        token,
+        expires,
+        name: googleUser.name || undefined,
+        avatar: googleUser.picture || undefined,
+      });
 
-      const returnUrl = `${urlObj.origin}/?auth_token=${token}&email=${encodeURIComponent(
-        email
-      )}&name=${encodeURIComponent(googleUser.name || '')}&avatar=${encodeURIComponent(googleUser.picture || '')}`;
+      const returnUrl = `${urlObj.origin}/?auth_token=${token}&email=${encodeURIComponent(email)}`;
 
       return new Response(null, {
         status: 302,
@@ -902,6 +906,26 @@ async function checkRateLimit(env: any, key: string): Promise<boolean> {
     // Limiter unavailable — allow rather than break playback.
     return true;
   }
+}
+
+const AUTH_TTL_SECONDS = 15 * 60;
+
+async function putAuthRecord(env: any, email: string, record: AuthRecord): Promise<void> {
+  if (!env.AUTH_CODES) throw new Error('AUTH_CODES KV namespace is not bound');
+  await env.AUTH_CODES.put(`auth:${email}`, JSON.stringify(record), {
+    expirationTtl: AUTH_TTL_SECONDS,
+  });
+}
+
+async function getAuthRecord(env: any, email: string): Promise<AuthRecord | null> {
+  if (!env.AUTH_CODES) return null;
+  const raw = await env.AUTH_CODES.get(`auth:${email}`);
+  return raw ? (JSON.parse(raw) as AuthRecord) : null;
+}
+
+async function deleteAuthRecord(env: any, email: string): Promise<void> {
+  if (!env.AUTH_CODES) return;
+  await env.AUTH_CODES.delete(`auth:${email}`);
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {

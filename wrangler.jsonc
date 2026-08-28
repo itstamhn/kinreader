@@ -10,6 +10,9 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
+  "kv_namespaces": [
+    { "binding": "AUTH_CODES", "id": "7348870b7ec3415ea3c4e751a860022c" }
+  ],
   "ratelimits": [
     {
       "name": "TTS_RATE_LIMITER",

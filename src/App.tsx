@@ -315,25 +315,35 @@ export function App() {
 
   // Check URL on mount for auth token
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const urlParams = new URLSearchParams(window.location.search);
-      const token = urlParams.get('auth_token');
-      const email = urlParams.get('email');
-      const name = urlParams.get('name');
-      const avatar = urlParams.get('avatar');
+    if (typeof window === 'undefined') return;
 
-      if (token && email) {
-        const newUser: UserProfile = {
-          email,
-          name: name ? decodeURIComponent(name) : (email.split('@')[0] ?? email),
-          avatar: avatar ? decodeURIComponent(avatar) : `https://unavatar.io/${encodeURIComponent(email)}`,
-          tier: 'pro',
-        };
-        setUser(newUser);
-        localStorage.setItem('kinreader_user', JSON.stringify(newUser));
-        window.history.replaceState({}, document.title, window.location.pathname);
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('auth_token');
+    const email = urlParams.get('email');
+    if (!token || !email) return;
+
+    // Strip the credentials from the address bar before any await.
+    window.history.replaceState({}, document.title, window.location.pathname);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, token }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.success || !data.user) return;
+        setUser(data.user);
+        localStorage.setItem('kinreader_user', JSON.stringify(data.user));
+      } catch {
+        // Verification failed — stay signed out.
       }
-    }
+    })();
+
+    return () => { cancelled = true; };
   }, []);
 
   const handleLoginSuccess = (newUser: UserProfile) => {
