@@ -73,4 +73,23 @@ export default defineSchema({
   })
     .index('by_token', ['token'])
     .index('by_user', ['userId']),
+
+  // 6. Rate limiter state (plan 007's TTS synthesis guard). This is
+  // `kitcn/ratelimit`'s standalone store shape -- a plain table this app's
+  // own `ctx.db` reads/writes, not the ORM-scaffolded `bunx kitcn add
+  // ratelimit` flow (this app doesn't use kitcn's ORM). Field names, types,
+  // and index names are fixed by kitcn's convex-store implementation
+  // (node_modules/kitcn/dist/ratelimit/index.js) -- do not rename them.
+  ratelimitState: defineTable({
+    name: v.string(),
+    key: v.optional(v.string()),
+    shard: v.number(),
+    value: v.number(),
+    ts: v.number(),
+    auxValue: v.optional(v.number()),
+    auxTs: v.optional(v.number()),
+  })
+    .index('by_name_key_shard', ['name', 'key', 'shard'])
+    .index('by_name_key', ['name', 'key'])
+    .index('by_ts', ['ts']),
 });

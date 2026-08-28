@@ -1,0 +1,280 @@
+import { test, expect, afterEach } from 'bun:test';
+import { convexTest } from 'convex-test';
+import { MINUTE } from 'kitcn/ratelimit';
+// kitcn's generated `api` surface is the type-complete one for cRPC
+// procedures -- Convex's own `_generated/api.d.ts` type filters kitcn's
+// wrapped `Procedure` out of `api.routers` entirely (see
+// convex/routers/articles.test.ts for the full explanation).
+import { api } from '../shared/api';
+import { internal } from '../_generated/api';
+import schema from '../schema';
+
+// See the comment in convex/routers/articles.test.ts for why this map is
+// built by hand instead of `import.meta.glob` (unsupported under `bun
+// test`) and why an entry containing "_generated" must be present. The rate
+// limiter (convex/lib/rateLimiter.ts) is plain `ctx.db` reads/writes
+// against this app's own `ratelimitState` table (schema.ts) -- unlike a
+// Convex *component*, it needs no separate registration here.
+const modules: Record<string, () => Promise<unknown>> = {
+  './_generated/server.js': () => import('../_generated/server'),
+  './routers/tts.ts': () => import('./tts'),
+  './routers/ttsInternal.ts': () => import('./ttsInternal'),
+  './lib/rateLimiter.ts': () => import('../lib/rateLimiter'),
+};
+
+const TTS_RATE_LIMIT_NAME = 'tts';
+
+const originalFetch = global.fetch;
+let fetchCalls: string[] = [];
+
+afterEach(() => {
+  global.fetch = originalFetch;
+  fetchCalls = [];
+});
+
+function stubFetch(impl: (url: string, init?: RequestInit) => Promise<Response> | Response) {
+  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    fetchCalls.push(url);
+    return impl(url, init);
+  }) as typeof fetch;
+}
+
+function fakeSonioxResponse(): Response {
+  // Content doesn't need to be real MP3 bytes -- nothing in the test or the
+  // action decodes it, it only needs to round-trip through `ctx.storage`.
+  return new Response(new Uint8Array([1, 2, 3, 4]).buffer, { status: 200 });
+}
+
+function fakeGroqResponse(words: Array<{ word: string; start: number; end: number }>): Response {
+  return new Response(JSON.stringify({ words }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function defaultProviderStub(words: Array<{ word: string; start: number; end: number }>) {
+  stubFetch((url) => {
+    if (url === 'https://tts-rt.soniox.com/tts') return fakeSonioxResponse();
+    if (url === 'https://api.groq.com/openai/v1/audio/transcriptions') return fakeGroqResponse(words);
+    throw new Error(`Unexpected live network call in test: ${url}`);
+  });
+}
+
+// Drains a client's rate-limit budget directly against the plain
+// `ratelimitState` table, the same one convex/lib/rateLimiter.ts's
+// `Ratelimit` instance reads and writes -- this exercises the exact
+// production limiter (sliding window, 20/min, prefixed "tts"), just
+// pre-loaded instead of hammered with 20 real calls.
+async function drainRateLimit(t: ReturnType<typeof convexTest>, clientId: string) {
+  await t.run(async (ctx) => {
+    const { Ratelimit } = await import('kitcn/ratelimit');
+    const limiter = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(20, MINUTE),
+      prefix: TTS_RATE_LIMIT_NAME,
+    });
+    await limiter.limit(clientId, { count: 20 });
+  });
+}
+
+test('cache miss stores exactly one file and inserts exactly one audioTracks row', async () => {
+  const t = convexTest(schema, modules);
+  defaultProviderStub([
+    { word: 'hello', start: 0, end: 0.3 },
+    { word: 'world', start: 0.3, end: 0.6 },
+  ]);
+
+  const result = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/cache-miss',
+    title: 'Cache Miss Article',
+    text: 'hello world',
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: 'client-a',
+  });
+
+  expect('audioUrl' in result && Boolean(result.audioUrl)).toBe(true);
+  expect(result.provider).toBe('soniox');
+  expect(result.cached).toBe(false);
+  expect(fetchCalls).toEqual([
+    'https://tts-rt.soniox.com/tts',
+    'https://api.groq.com/openai/v1/audio/transcriptions',
+  ]);
+
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks.length).toBe(1);
+});
+
+test('cache hit returns the stored audio and performs no provider fetch at all', async () => {
+  const t = convexTest(schema, modules);
+  defaultProviderStub([{ word: 'hi', start: 0, end: 0.2 }]);
+
+  const first = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/cache-hit',
+    title: 'Cache Hit Article',
+    text: 'hi',
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: 'client-b',
+  });
+  expect(first.cached).toBe(false);
+  expect(fetchCalls.length).toBe(2);
+
+  // Reset the call log, then repeat the identical request. This is the
+  // assertion the plan calls out explicitly: a cache hit must not merely
+  // return a usable response, it must call zero providers to get there.
+  fetchCalls = [];
+  // Fail loudly if the action calls fetch again -- a cache hit must not
+  // reach either provider.
+  stubFetch(() => {
+    throw new Error('cache hit must not call any provider');
+  });
+
+  const second = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/cache-hit',
+    title: 'Cache Hit Article',
+    text: 'hi',
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: 'client-b',
+  });
+
+  expect(second.cached).toBe(true);
+  expect('audioUrl' in second && Boolean(second.audioUrl)).toBe(true);
+  expect(fetchCalls).toEqual([]);
+
+  // One stored file / one row for both requests combined, not two.
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks.length).toBe(1);
+});
+
+test('rate-limit denial on a cache miss returns a client-usable browser-fallback result, not an error', async () => {
+  const t = convexTest(schema, modules);
+  // Drain the bucket for this client in one shot instead of looping 20
+  // real calls -- this leaves zero tokens for the very next `.limit()`
+  // call the action makes.
+  await drainRateLimit(t, 'client-drained');
+
+  stubFetch(() => {
+    throw new Error('a rate-limited request must never reach a provider');
+  });
+
+  const result = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/rate-limited',
+    title: 'Rate Limited Article',
+    text: 'this request should be denied',
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: 'client-drained',
+  });
+
+  expect(result.provider).toBe('browser');
+  expect(result.cached).toBe(false);
+  expect('warning' in result ? result.warning : undefined).toContain('Rate limit');
+  expect(result.words.length).toBeGreaterThan(0);
+  expect(fetchCalls).toEqual([]);
+
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks.length).toBe(0);
+});
+
+test('a words array over 8192 entries is capped, not thrown', async () => {
+  const t = convexTest(schema, modules);
+  const hugeWordList = Array.from({ length: 9000 }, (_, i) => ({
+    word: `w${i}`,
+    start: i * 0.1,
+    end: i * 0.1 + 0.05,
+  }));
+  defaultProviderStub(hugeWordList);
+
+  const result = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/huge-words',
+    title: 'Huge Words Article',
+    text: 'word '.repeat(500).trim(),
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: 'client-c',
+  });
+
+  expect(result.provider).toBe('soniox');
+  expect(result.words.length).toBe(8192);
+  expect('wordsTruncated' in result ? result.wordsTruncated : undefined).toBe(true);
+
+  // The mutation must have actually succeeded (not thrown on the 1MB/8192
+  // array ceiling) -- confirm the capped array made it into the row.
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks.length).toBe(1);
+  expect(tracks[0]?.words.length).toBe(8192);
+});
+
+test('text over the 4000 character cap is rejected before any provider or rate-limit check', async () => {
+  const t = convexTest(schema, modules);
+  stubFetch(() => {
+    throw new Error('oversized text must never reach a provider');
+  });
+
+  const result = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/too-long',
+    title: 'Too Long Article',
+    text: 'a'.repeat(4001),
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: 'client-d',
+  });
+
+  expect(result.provider).toBe('browser');
+  expect(fetchCalls).toEqual([]);
+});
+
+test('no Soniox key anywhere (input or env) uses the free browser path without consuming a rate-limit token', async () => {
+  const t = convexTest(schema, modules);
+  stubFetch(() => {
+    throw new Error('a keyless request must never reach a provider');
+  });
+
+  const result = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/no-key',
+    title: 'No Key Article',
+    text: 'hello there',
+    voice: 'Adrian',
+    speed: 1,
+    clientId: 'client-e',
+  });
+
+  expect(result.provider).toBe('browser');
+  expect(fetchCalls).toEqual([]);
+
+  // Confirm no token was spent: draining the same client's budget to zero
+  // and re-running the identical (keyless) request still succeeds via the
+  // free path, because it never touches the limiter at all.
+  await drainRateLimit(t, 'client-e');
+  const second = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/no-key',
+    title: 'No Key Article',
+    text: 'hello there',
+    voice: 'Adrian',
+    speed: 1,
+    clientId: 'client-e',
+  });
+  expect(second.provider).toBe('browser');
+});
+
+test('internal.routers.ttsInternal.consumeTtsRateLimit is reachable through the internal api surface', () => {
+  // Sanity check for the amendment's import rule: `internal` from
+  // shared/api.ts's sibling `_generated/api` must resolve the plain
+  // internalMutation this action's rate-limit step calls.
+  expect(internal.routers.ttsInternal.consumeTtsRateLimit).toBeDefined();
+});
