@@ -16,7 +16,7 @@ the table when done.
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 | 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | DONE |
-| 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | TODO |
+| 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | DONE |
 | 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | TODO |
@@ -203,6 +203,32 @@ action, which cannot be internalized — it is the app's front door):
 2. `getOrCreateArticleStub` writes to `articles` *before* the cache lookup, the size
    check and both limiters — unbounded unauthenticated write amplification. Sent back;
    fix in progress.
+
+- **007 — DONE**, merged to `main` as `73b7bdf`, after **two revision rounds**. 48 tests
+  pass. Audio now goes through `ctx.storage` (inline base64 would breach the 1MB value
+  cap); repeat reads hit the `audioTracks` cache with zero provider calls.
+  **Round 1 — the limiter was decorative.** It keyed on `input.clientId`, a localStorage
+  UUID sent as a procedure argument. An attacker rotates it per request and the limit
+  never fires; plan 005's `cf-connecting-ip` key was unforgeable. Fixed by adding a second
+  **global** limiter on the fixed key `tts:global` (200/min) alongside the per-client one
+  (20/min, documented as fairness-only). Public Convex actions get no trustworthy client
+  IP, so a global cap is the only unforgeable bound until plan 008 provides identity.
+  **Round 2 — writes happened before every gate.** `getOrCreateArticleStub` inserted an
+  `articles` row before the cache lookup, the size check and both limiters — unbounded
+  unauthenticated write amplification, entirely unprotected by the limiter just added.
+  Found by running the `convex-authz` skill over the branch. Fixed by resolving the cache
+  through a new read-only `findCachedTrackByUrl` (using the existing `by_url` index) so
+  no row is created to look one up; the first write now happens after every gate.
+  **Executor pushed back correctly**: my instructions listed limiters before the cache
+  lookup, which contradicted my own requirement that a cache hit consume zero tokens. It
+  kept cache-before-limiters and flagged the conflict rather than silently choosing. It
+  was right — a cache hit costs nothing, so charging it a token is wrong.
+  Also fixed: an orphaned-blob path where a throw after `ctx.storage.store()` leaked the
+  file. Regression proofs were demanded and delivered for both rounds.
+  Notable: kitcn's *scaffolded* ratelimit path requires `kitcn/orm`, which this app does
+  not use — adopting it would have dragged a full schema migration in as a side effect.
+  The executor used `kitcn/ratelimit`'s standalone `Ratelimit` class against a plain
+  `ratelimitState` table instead. Zero new dependencies, no Convex component.
 
 ## Architecture decision (operator, 2026-08-28)
 
