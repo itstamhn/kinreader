@@ -703,8 +703,10 @@ export const app = new Spiceflow()
     const snippet = urlObj.searchParams.get('snippet') || title;
     const image = urlObj.searchParams.get('image') || '';
 
-    const cleanTitle = title.length > 70 ? title.slice(0, 67) + '...' : title;
-    const cleanSnippet = snippet.length > 55 ? snippet.slice(0, 52) + '...' : snippet;
+    const cleanTitle = escapeHtml(title.length > 70 ? title.slice(0, 67) + '...' : title);
+    const cleanSnippet = escapeHtml(snippet.length > 55 ? snippet.slice(0, 52) + '...' : snippet);
+    const cleanAuthor = escapeHtml(author.toUpperCase());
+    const imageHref = safeImageUrl(image);
 
     const svg = `
     <svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
@@ -767,7 +769,7 @@ export const app = new Spiceflow()
         </foreignObject>
 
         <!-- Author Tag -->
-        <text x="90" y="420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#9ca3af" letter-spacing="1">by <tspan fill="#e5e7eb" font-weight="800">${author.toUpperCase()}</tspan></text>
+        <text x="90" y="420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#9ca3af" letter-spacing="1">by <tspan fill="#e5e7eb" font-weight="800">${cleanAuthor}</tspan></text>
 
         <!-- Action / Hear it out loud Pill -->
         <rect x="90" y="455" width="220" height="52" rx="26" fill="url(#pillGrad)" filter="drop-shadow(0 8px 16px rgba(139,92,246,0.3))"/>
@@ -780,7 +782,7 @@ export const app = new Spiceflow()
 
         <!-- Right Side Diagram / Cover Image -->
         <rect x="740" y="140" width="370" height="380" rx="24" fill="#0d0d14" stroke="#4338ca" stroke-width="2"/>
-        ${image ? `<image href="${image}" x="740" y="140" width="370" height="380" preserveAspectRatio="xMidYMid slice" clip-path="url(#imgClip)"/>` : `
+        ${imageHref ? `<image href="${imageHref}" x="740" y="140" width="370" height="380" preserveAspectRatio="xMidYMid slice" clip-path="url(#imgClip)"/>` : `
           <rect x="740" y="140" width="370" height="380" rx="24" fill="#181825"/>
           <text x="925" y="340" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="54" fill="#6b7280">🎧</text>
         `}
@@ -800,11 +802,16 @@ export const app = new Spiceflow()
   .get('/r/:id', ({ request, params }) => {
     const urlObj = new URL(request.url);
     const id = params.id;
-    const title = urlObj.searchParams.get('t') || 'Kinetic Reader Article';
-    const author = urlObj.searchParams.get('a') || 'Author';
-    const image = urlObj.searchParams.get('img') || '';
+    const rawTitle = urlObj.searchParams.get('t') || 'Kinetic Reader Article';
+    const rawAuthor = urlObj.searchParams.get('a') || 'Author';
+    const rawImage = urlObj.searchParams.get('img') || '';
 
-    const ogImageUrl = `${urlObj.origin}/api/og?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&image=${encodeURIComponent(image)}`;
+    const title = escapeHtml(rawTitle);
+    const author = escapeHtml(rawAuthor);
+
+    const ogImageUrl = escapeHtml(
+      `${urlObj.origin}/api/og?title=${encodeURIComponent(rawTitle)}&author=${encodeURIComponent(rawAuthor)}&image=${encodeURIComponent(rawImage)}`
+    );
 
     const html = `<!DOCTYPE html>
     <html lang="en">
@@ -825,7 +832,7 @@ export const app = new Spiceflow()
         <meta property="og:title" content="${title}" />
         <meta property="og:description" content="by ${author} • Made to listen on kinreader.com" />
         <meta property="og:image" content="${ogImageUrl}" />
-        <meta property="og:url" content="${request.url}" />
+        <meta property="og:url" content="${escapeHtml(request.url)}" />
 
         <meta http-equiv="refresh" content="0;url=/?read=${encodeURIComponent(id)}" />
       </head>
@@ -841,6 +848,25 @@ export const app = new Spiceflow()
 
 function round(num: number, decimals: number = 3) {
   return Number(Math.round(Number(num + 'e' + decimals)) + 'e-' + decimals);
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeImageUrl(input: string): string {
+  try {
+    const parsed = new URL(input);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+    return escapeHtml(parsed.toString());
+  } catch {
+    return '';
+  }
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
