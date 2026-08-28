@@ -13,7 +13,7 @@ the table when done.
 | 001 | Import the missing `Pause` icon so the library drawer stops crashing | P1 | S | — | DONE |
 | 002 | Establish a verification baseline — `typecheck` and `test` that pass | P1 | M | 001 | DONE |
 | 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | TODO |
-| 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | TODO |
+| 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
@@ -42,6 +42,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
      `unknown` error-recovery). Fixed with the same bind-then-guard pattern.
   Also note: `bun add` reformatted and reordered all of `package.json`, so that file's
   diff is noisier than the change warrants.
+
+- **004 — DONE**, merged to `main` as `c60d078`. `escapeHtml` + `safeImageUrl` added and
+  applied to every user-controlled interpolation in `/r/:id` and `/api/og`. 14 tests pass
+  (7 new, each asserting on response-body content rather than status alone). Reviewer ran
+  8 independent adversarial payloads not used by the tests (img/onerror, svg/onload,
+  data: URL, mixed-case `JaVaScRiPt:`, ampersand double-escape regression) — all
+  neutralised, zero real findings. Three initial regex hits were false positives on
+  escaped inert text, confirmed by inspecting the raw response bytes.
 
 ## Dependency notes
 
