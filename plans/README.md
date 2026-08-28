@@ -11,7 +11,7 @@ the table when done.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Import the missing `Pause` icon so the library drawer stops crashing | P1 | S | — | DONE |
-| 002 | Establish a verification baseline — `typecheck` and `test` that pass | P1 | M | 001 | TODO |
+| 002 | Establish a verification baseline — `typecheck` and `test` that pass | P1 | M | 001 | DONE |
 | 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | TODO |
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | TODO |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | TODO |
@@ -27,6 +27,21 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   wraps the elaboration of `src/App.tsx(328,11)` onto a second physical line, so `wc -l`
   returns 24 while the true error count is 23. The plan was wrong, not the executor.
   Both 001 and 002 now count with `grep -c "error TS"` instead.
+
+- **002 — DONE**, merged to `main` as `94c93d6`. `bun run typecheck` exits 0 and
+  `bun test` reports 7 pass / 0 fail on `main`. All source changes verified type-only.
+  Three documented deviations, all accepted:
+  1. `bun add -d typescript` unpinned resolved to 7.0.2 and introduced a new TS2882;
+     executor pinned `typescript@^5` (5.9.3) instead. `peerDependencies` was dropped and
+     typescript moved to `devDependencies` — the right outcome, though the executor's
+     report described it as "restoring" the peerDependencies entry, which it did not.
+  2. The plan's Step 4 snippet for `src/App.tsx:328` named the wrong expression — the
+     real TS2322 was in the `name` fallback (`email.split('@')[0]`), not the `email`
+     field. Plan text was inaccurate; executor applied the equivalent type-only fix.
+  3. A TS18048 on `username` surfaced once `body` got a real type (previously masked by
+     `unknown` error-recovery). Fixed with the same bind-then-guard pattern.
+  Also note: `bun add` reformatted and reordered all of `package.json`, so that file's
+  diff is noisier than the change warrants.
 
 ## Dependency notes
 
