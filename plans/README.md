@@ -20,7 +20,7 @@ the table when done.
 | 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | TODO |
-| 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | TODO |
+| 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
@@ -157,6 +157,52 @@ version-matched. Worth reading before any further Convex work.
 - **Testing**: kitcn documents its own harness (`convexTest` + `runCtx` from
   `setup.testing`) in `references/features/testing.md`. Its example uses vitest while this
   repo standardises on `bun test` per `CLAUDE.md`, so adopt the patterns, not the runner.
+
+- **011 — DONE**, merged to `main` as `05261ec`. 47 tests pass (11 new). Every rejection
+  case asserts the stubbed `fetch` was **never called** — the actual security property —
+  and two regression guards confirm `https://example.com/article` and an X status URL
+  still extract normally. Scope was tight: two files, no `src/` churn.
+  Honest limits, documented in the code and the commit: hostname deny-list only, no DNS
+  resolution (rebinding still passes), and `fetch` follows redirects with no per-hop
+  revalidation.
+
+## Convex authz audit (convex-authz skill, 2026-08-28)
+
+Run against `main` after the users.ts stopgap. **Result: the stopgap is the correct move,
+not merely an acceptable one.**
+
+The skill's mandatory first step is to check whether an auth foundation exists before
+recommending any `ctx.auth` enforcement. This app is **foundationless**:
+
+- no `convex/auth.config.ts` and no `convex/auth.ts`
+- `users` is keyed by `email` (`by_email`), not by `tokenIdentifier` / `identity.subject`
+- zero `ctx.auth` references anywhere under `convex/`
+
+On a foundationless app the skill explicitly says **do not** inject
+`requireIdentity`/`requireOwner` — `getUserIdentity()` returns null for everyone, so the
+enforcement is non-functional and reads as a *new* defect. The prescribed move is to
+convert privileged public functions to `internalQuery`/`internalMutation` and defer real
+ownership checks until auth exists. That is exactly what was done in `9e08fa5`.
+
+Scan results on `main`: **zero public `query`/`mutation` functions remain**, so shapes
+(a) identity-from-arg, (b) missing-ownership-check and (c) PII-leaking public query have
+no live hits. The `userId: v.id('users')` args still present at `convex/routers/users.ts`
+lines 76 and 108 are correctly exempt — they sit inside `internalQuery`/`internalMutation`
+now. The `schema.ts` matches are table definitions, not functions.
+
+**Open, and inherited by plan 008**: `users.email` is the de-facto identity key. When
+Better Auth lands, ownership must be re-keyed to the auth subject, and every function
+restored to public must derive identity from `ctx.auth` rather than taking `userId`.
+Comparing an `Id<"users">` to `identity.subject` silently never matches — resolve the
+caller's `users` row through a subject-keyed index and compare `user._id`.
+
+**Findings against the incoming plan 007 branch** (public, unauthenticated `synthesize`
+action, which cannot be internalized — it is the app's front door):
+1. Rate limiter keyed on a client-supplied `clientId` — forgeable, so bypassable. Sent
+   back; fixed with a second global limiter on a fixed key.
+2. `getOrCreateArticleStub` writes to `articles` *before* the cache lookup, the size
+   check and both limiters — unbounded unauthenticated write amplification. Sent back;
+   fix in progress.
 
 ## Architecture decision (operator, 2026-08-28)
 
