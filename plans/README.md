@@ -19,7 +19,7 @@ the table when done.
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | DONE |
 | 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
-| 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | TODO |
+| 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | TODO |
 
@@ -229,6 +229,25 @@ action, which cannot be internalized — it is the app's front door):
   not use — adopting it would have dragged a full schema migration in as a side effect.
   The executor used `kitcn/ratelimit`'s standalone `Ratelimit` class against a plain
   `ratelimitState` table instead. Zero new dependencies, no Convex component.
+
+- **010 — DONE**, merged to `main` as `eeb02ab`. 53 tests pass (5 new). `Math.random()`
+  replaced with `crypto.getRandomValues` + rejection sampling (no modulo bias); the code
+  is burned after 5 wrong guesses; `/api/auth/verify` is rate-limited per
+  `cf-connecting-ip` via a new `AUTH_RATE_LIMITER` binding (10/min).
+  Reviewer verified all five properties independently against a KV stub: failure bodies
+  byte-identical across unknown-email / wrong-code / expired (no enumeration oracle);
+  one typo then the correct code still succeeds (no first-mistake lockout); five wrong
+  guesses burn the record; the record is actually deleted; and `expires` is preserved
+  across attempt rewrites.
+  **Judgment call accepted**: the two pre-existing error strings differed
+  ("Invalid or expired..." vs "Incorrect verification code"), which was itself a small
+  oracle. Unifying them behind one `invalidCodeResponse()` helper is a real behaviour
+  change the plan's test requirement implied but did not spell out.
+  **Second judgment call accepted**: rewriting the record on a wrong guess would have
+  silently extended the KV TTL from write time, so `putAuthRecord` gained an optional
+  `ttlSeconds` clamped to Cloudflare's 60s floor. The record's own `expires` field still
+  enforces the true 15-minute cutoff — verified unchanged after a failed attempt.
+  Superseded by plan 008 along with the rest of the hand-rolled auth surface.
 
 ## Architecture decision (operator, 2026-08-28)
 
