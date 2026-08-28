@@ -7,6 +7,11 @@ import type { inferApiInputs, inferApiOutputs } from "kitcn/server";
 
 
 export const api = {
+  routers: {
+    articles: {
+      extract: createApiLeaf<"action", typeof import("../routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../routers/articles").extract>("routers/articles:extract"), { type: "action" }),
+    },
+  },
   _http: {
   },
 } as const;
