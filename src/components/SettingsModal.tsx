@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Sparkles, Sliders, Type, Volume2, Key, Check } from 'lucide-react';
+import { X, Sparkles, Sliders, Type, Volume2, Check } from 'lucide-react';
 import type { ReaderSettings } from '../types';
 
 interface SettingsModalProps {
@@ -26,8 +26,6 @@ export function SettingsModal({
   const [defaultRate, setDefaultRate] = useState(settings.defaultRate || 1.5);
   const [fontSize, setFontSize] = useState<'sm' | 'md' | 'lg'>(settings.fontSize || 'md');
   const [sonioxVoice, setSonioxVoice] = useState(settings.sonioxVoice || 'Adrian');
-  const [sonioxApiKey, setSonioxApiKey] = useState(settings.sonioxApiKey || '');
-  const [groqApiKey, setGroqApiKey] = useState(settings.groqApiKey || '');
 
   if (!isOpen) return null;
 
@@ -38,8 +36,6 @@ export function SettingsModal({
       defaultRate,
       fontSize,
       sonioxVoice,
-      sonioxApiKey: sonioxApiKey.trim() || undefined,
-      groqApiKey: groqApiKey.trim() || undefined,
     });
     onClose();
   };
@@ -51,7 +47,7 @@ export function SettingsModal({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Sliders className="w-5 h-5 text-[#F2A33C]" />
-            <h2 className="font-serif font-medium text-xl text-[#F4F0E6]">Settings & Audio Engine</h2>
+            <h2 className="font-serif font-medium text-xl text-[#F4F0E6]">Settings & Preferences</h2>
           </div>
           <button
             onClick={onClose}
@@ -115,11 +111,11 @@ export function SettingsModal({
           </div>
         </div>
 
-        {/* 3. Soniox Neural Voice Selection */}
+        {/* 3. Built-In Neural Voice Selection */}
         <div className="flex flex-col gap-2">
           <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80 flex items-center gap-1.5">
             <Volume2 className="w-3.5 h-3.5 text-[#F2A33C]" />
-            <span>Neural Studio Voice</span>
+            <span>Narrator Voice</span>
           </label>
           <div className="grid grid-cols-2 gap-2">
             {SONIOX_VOICES.map((v) => (
@@ -142,35 +138,7 @@ export function SettingsModal({
           </div>
         </div>
 
-        {/* 4. Soniox API Key Configuration */}
-        <div className="flex flex-col gap-2 pt-1 border-t border-white/5">
-          <div className="flex items-center justify-between">
-            <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80 flex items-center gap-1.5">
-              <Key className="w-3.5 h-3.5 text-[#F2A33C]" />
-              <span>Soniox API Key</span>
-            </label>
-            <a
-              href="https://console.soniox.com"
-              target="_blank"
-              rel="noreferrer"
-              className="font-sans text-[10px] text-[#F2A33C] hover:underline"
-            >
-              Get Free Key →
-            </a>
-          </div>
-          <input
-            type="password"
-            placeholder="Paste your Soniox API Key (e.g. sk-...)"
-            value={sonioxApiKey}
-            onChange={(e) => setSonioxApiKey(e.target.value)}
-            className="w-full h-10 px-3.5 rounded-xl bg-white/5 border border-white/10 focus:border-[#F2A33C]/50 outline-none font-mono text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/25"
-          />
-          <p className="font-sans text-[10.5px] text-[#ECEAE4]/40 leading-tight">
-            Enables studio-quality Soniox v2 neural synthesis for any article. Saved locally on your device.
-          </p>
-        </div>
-
-        {/* 5. KinReader Pro Section */}
+        {/* 4. KinReader Pro Section */}
         <div className="rounded-2xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-[#F2A33C]/30 p-4 flex flex-col gap-2.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
