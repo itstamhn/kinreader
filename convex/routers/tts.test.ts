@@ -184,6 +184,11 @@ test('cache hit returns the stored audio, performs no provider fetch, and consum
   const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
   expect(tracks.length).toBe(1);
 
+  // One `articles` row for both requests combined -- the cache hit did not
+  // create (or need) a second one.
+  const articlesAfterHit = await t.run(async (ctx) => ctx.db.query('articles').collect());
+  expect(articlesAfterHit.length).toBe(1);
+
   // Neither limiter moved on the cache-hit request.
   const remainingAfter = await t.run(async (ctx) => {
     const client = new Ratelimit({
@@ -235,6 +240,19 @@ test('per-client rate-limit denial on a cache miss returns a client-usable brows
 
   const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
   expect(tracks.length).toBe(0);
+
+  // Regression test for the write-before-gate bug a reviewer caught: the
+  // article-stub write used to happen before the rate-limit check, so a
+  // denied request still grew the `articles` table for free. It must not.
+  //
+  // Verified this is load-bearing, not a tautology: temporarily moved the
+  // `getOrCreateArticleStub` call in convex/routers/tts.ts back above the
+  // `consumeTtsRateLimit` call (its original position), re-ran this file,
+  // watched this exact assertion fail (`articles.length` was 1, not 0 --
+  // the denied request had already written a row), then restored the
+  // reordered version and confirmed it passes again.
+  const articles = await t.run(async (ctx) => ctx.db.query('articles').collect());
+  expect(articles.length).toBe(0);
 });
 
 // Regression test for the bypass a reviewer caught: `clientId` is a plain
@@ -279,6 +297,12 @@ test('the global limiter denies a request carrying a brand-new, never-before-see
 
   const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
   expect(tracks.length).toBe(0);
+
+  // Same write-before-gate regression coverage as the per-client denial
+  // test above: a globally-denied request must not have written an
+  // `articles` row either.
+  const articles = await t.run(async (ctx) => ctx.db.query('articles').collect());
+  expect(articles.length).toBe(0);
 });
 
 test('a words array over 8192 entries is capped, not thrown', async () => {
@@ -312,7 +336,7 @@ test('a words array over 8192 entries is capped, not thrown', async () => {
   expect(tracks[0]?.words.length).toBe(8192);
 });
 
-test('text over the 4000 character cap is rejected before any provider or rate-limit check', async () => {
+test('text over the 4000 character cap is rejected before any provider, rate-limit check, or write', async () => {
   const t = convexTest(schema, modules);
   stubFetch(() => {
     throw new Error('oversized text must never reach a provider');
@@ -331,6 +355,11 @@ test('text over the 4000 character cap is rejected before any provider or rate-l
 
   expect(result.provider).toBe('browser');
   expect(fetchCalls).toEqual([]);
+
+  // The size check is pure input validation and must run before the
+  // article-stub write -- a rejected request must not grow `articles`.
+  const articles = await t.run(async (ctx) => ctx.db.query('articles').collect());
+  expect(articles.length).toBe(0);
 });
 
 test('no Soniox key anywhere (input or env) uses the free browser path without consuming a rate-limit token', async () => {

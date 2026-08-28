@@ -81,23 +81,38 @@ export const synthesize = action
     const voice = input.voice || 'Adrian';
     const speed = input.speed || 1.0;
 
-    // Find-or-create the article row this track is keyed against. This
-    // happens before the cache check because the cache lookup itself
-    // needs an articleId (schema's `by_article_voice_speed` index).
-    const articleId: Id<'articles'> = await ctx.runMutation(
-      internal.routers.ttsInternal.getOrCreateArticleStub,
-      {
-        url: input.url,
-        title: input.title,
-        author: input.author,
-        content: text,
-      }
-    );
+    // `synthesize` is public and unauthenticated -- there is no
+    // `ctx.auth` identity to gate on (no convex/auth.config.ts, no users
+    // keyed by auth subject; that is plan 008's job). Until then, EVERY
+    // gate below must run before the FIRST write (getOrCreateArticleStub,
+    // step 4) or an attacker can grow the `articles` table for free by
+    // looping with a fresh `url` per request, never reaching a provider
+    // and never tripping a limiter because the write already happened.
 
-    // 1. Cache hit: no rate limit consumed, no provider called.
+    // 1. Size check: pure input validation, no I/O, no write, no limiter
+    // spend. Same hard cap plan 005 put on the Worker route -- text over
+    // this length is rejected outright (not truncated-and-sent), so it
+    // never reaches Soniox, a limiter, or the article-stub write.
+    if (text.length > MAX_TTS_CHARS) {
+      const { words, duration } = linearWordTimings(text);
+      return {
+        words,
+        duration,
+        provider: 'browser' as const,
+        cached: false,
+        message: `Text exceeds the ${MAX_TTS_CHARS} character limit; using native speech engine.`,
+      };
+    }
+
+    // 2. Cache lookup BY URL -- read-only, and deliberately does NOT
+    // create the article row (see ttsInternal.ts's findCachedTrackByUrl).
+    // A hit must short-circuit here, before either rate limiter runs and
+    // before the write in step 4, or every cache hit would needlessly
+    // spend a token / a write would happen before we even know one is
+    // unnecessary.
     const cached: Doc<'audioTracks'> | null = await ctx.runQuery(
-      internal.routers.ttsInternal.findCachedTrack,
-      { articleId, voice, speed }
+      internal.routers.ttsInternal.findCachedTrackByUrl,
+      { url: input.url, voice, speed }
     );
     if (cached && cached.storageId) {
       const audioUrl: string | null = await ctx.storage.getUrl(cached.storageId);
@@ -114,25 +129,12 @@ export const synthesize = action
       // and treat this as a miss so it regenerates.
     }
 
-    // Same hard cap plan 005 put on the Worker route: text over this length
-    // is rejected outright (not truncated-and-sent), so it never reaches
-    // Soniox or the rate limiter.
-    if (text.length > MAX_TTS_CHARS) {
-      const { words, duration } = linearWordTimings(text);
-      return {
-        words,
-        duration,
-        provider: 'browser' as const,
-        cached: false,
-        message: `Text exceeds the ${MAX_TTS_CHARS} character limit; using native speech engine.`,
-      };
-    }
-
     const sonioxApiKey = input.sonioxApiKey || process.env.SONIOX_API_KEY;
     const groqApiKey = input.groqApiKey || process.env.GROQ_API_KEY;
 
     // No key anywhere -- this can never call a paid provider, so (matching
-    // the old `willCallPaidProvider` check) it is never rate limited.
+    // the old `willCallPaidProvider` check) it is never rate limited, and
+    // (matching every other non-write branch above) never writes.
     if (!sonioxApiKey) {
       const { words, duration } = linearWordTimings(text);
       return {
@@ -144,7 +146,8 @@ export const synthesize = action
       };
     }
 
-    // 2. About to call a paid provider -- consume a rate-limit token.
+    // 3. About to call a paid provider -- consume the global limiter, then
+    // the per-client one. Still before any write.
     const rateLimitKey = input.clientId || 'anonymous';
     const status: { ok: boolean } = await ctx.runMutation(internal.routers.ttsInternal.consumeTtsRateLimit, {
       key: rateLimitKey,
@@ -160,8 +163,19 @@ export const synthesize = action
       };
     }
 
+    // 4. First write, only now that every gate above has passed.
+    const articleId: Id<'articles'> = await ctx.runMutation(
+      internal.routers.ttsInternal.getOrCreateArticleStub,
+      {
+        url: input.url,
+        title: input.title,
+        author: input.author,
+        content: text,
+      }
+    );
+
     try {
-      // 3. Generate Soniox TTS v2 audio.
+      // 5. Generate Soniox TTS v2 audio.
       const sonioxRes = await fetch('https://tts-rt.soniox.com/tts', {
         method: 'POST',
         headers: {
@@ -193,7 +207,7 @@ export const synthesize = action
       // fallback -- otherwise a thrown error after a successful `store()`
       // orphans the file: no `audioTracks` row will ever reference it.
       try {
-        // 4. Word timings via Groq Whisper, falling back to linear
+        // 6. Word timings via Groq Whisper, falling back to linear
         // distribution exactly as the old handler did.
         let words: WordTiming[] = [];
 

@@ -64,17 +64,30 @@ export const getOrCreateArticleStub = internalMutation({
   },
 });
 
-export const findCachedTrack = internalQuery({
+// Cache lookup keyed on URL, not `articleId` -- deliberately does NOT
+// create the article row. `synthesize` is public and unauthenticated, so
+// resolving the cache by URL (via the existing `articles.by_url` index)
+// lets a cache hit stay entirely read-only: no article-stub write, no
+// rate-limit token spent. Returns null (a clean miss) when no article with
+// this URL exists yet, rather than creating one just to look something up
+// in it.
+export const findCachedTrackByUrl = internalQuery({
   args: {
-    articleId: v.id('articles'),
+    url: v.string(),
     voice: v.string(),
     speed: v.number(),
   },
   handler: async (ctx, args) => {
+    const article = await ctx.db
+      .query('articles')
+      .withIndex('by_url', (q) => q.eq('url', args.url))
+      .first();
+    if (!article) return null;
+
     return await ctx.db
       .query('audioTracks')
       .withIndex('by_article_voice_speed', (q) =>
-        q.eq('articleId', args.articleId).eq('voice', args.voice).eq('speed', args.speed)
+        q.eq('articleId', article._id).eq('voice', args.voice).eq('speed', args.speed)
       )
       .first();
   },
