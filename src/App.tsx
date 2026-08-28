@@ -325,7 +325,7 @@ export function App() {
       if (token && email) {
         const newUser: UserProfile = {
           email,
-          name: name ? decodeURIComponent(name) : email.split('@')[0],
+          name: name ? decodeURIComponent(name) : (email.split('@')[0] ?? email),
           avatar: avatar ? decodeURIComponent(avatar) : `https://unavatar.io/${encodeURIComponent(email)}`,
           tier: 'pro',
         };

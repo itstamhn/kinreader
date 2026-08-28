@@ -2,6 +2,20 @@ import { Spiceflow } from 'spiceflow';
 import { z } from 'zod';
 import { sendMagicLinkEmail } from './lib/autosend';
 
+interface MagicLinkBody { email?: string; autosendApiKey?: string }
+interface VerifyBody { email?: string; code?: string; token?: string }
+interface ExtractBody { url?: string; monidApiKey?: string }
+interface TtsBody {
+  text?: string;
+  provider?: string;
+  sonioxApiKey?: string;
+  groqApiKey?: string;
+  sonioxVoice?: string;
+  speed?: number;
+  apiKey?: string;
+  voiceId?: string;
+}
+
 // Ephemeral memory store for pending auth requests (15-min TTL)
 const authCodes = new Map<string, { code: string; token: string; expires: number }>();
 
@@ -15,7 +29,7 @@ export const app = new Spiceflow()
   // 0. AutoSend Magic Sign-In Email Endpoint
   .post('/api/auth/magic-link', async ({ request }) => {
     try {
-      const body = await request.json();
+      const body = (await request.json()) as MagicLinkBody;
       const email = body.email?.trim().toLowerCase();
 
       if (!email || !email.includes('@')) {
@@ -70,7 +84,7 @@ export const app = new Spiceflow()
   // 0.1 Verify Magic Link or Code
   .post('/api/auth/verify', async ({ request }) => {
     try {
-      const body = await request.json();
+      const body = (await request.json()) as VerifyBody;
       const email = body.email?.trim().toLowerCase();
       const code = body.code?.trim();
       const token = body.token?.trim();
@@ -101,7 +115,7 @@ export const app = new Spiceflow()
       // Clear used code
       authCodes.delete(email);
 
-      const username = email.split('@')[0];
+      const username = email.split('@')[0] ?? email;
       return {
         success: true,
         user: {
@@ -215,7 +229,7 @@ export const app = new Spiceflow()
   // 1. Article / X Post Extractor Endpoint
   .post('/api/extract', async ({ request }) => {
     try {
-      const body = await request.json();
+      const body = (await request.json()) as ExtractBody;
       const url = body.url?.trim();
 
       if (!url) {
@@ -344,14 +358,18 @@ export const app = new Spiceflow()
           // Extract OG Metadata
           const ogTitleMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i);
           const titleTagMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-          if (ogTitleMatch) title = ogTitleMatch[1].trim();
-          else if (titleTagMatch) title = titleTagMatch[1].trim();
+          const ogTitle = ogTitleMatch?.[1];
+          const pageTitle = titleTagMatch?.[1];
+          if (ogTitle) title = ogTitle.trim();
+          else if (pageTitle) title = pageTitle.trim();
 
           const ogImageMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["']([^"']+)["']/i);
-          if (ogImageMatch) image = ogImageMatch[1].trim();
+          const ogImage = ogImageMatch?.[1];
+          if (ogImage) image = ogImage.trim();
 
           const ogAuthorMatch = html.match(/<meta\s+(?:property|name)=["'](?:author|twitter:creator)["']\s+content=["']([^"']+)["']/i);
-          if (ogAuthorMatch) author = ogAuthorMatch[1].trim();
+          const ogAuthor = ogAuthorMatch?.[1];
+          if (ogAuthor) author = ogAuthor.trim();
 
           // Clean body content
           const cleanedBody = html
@@ -445,7 +463,7 @@ export const app = new Spiceflow()
   // 2. TTS Generation (Supports Soniox v2 + Groq Whisper, ElevenLabs, or Browser Fallback)
   .post('/api/tts', async ({ request }) => {
     try {
-      const body = await request.json();
+      const body = (await request.json()) as TtsBody;
       const text = body.text?.trim();
       const provider = body.provider || 'browser';
 
@@ -554,7 +572,8 @@ export const app = new Spiceflow()
             }));
           }
 
-          const totalDuration = words.length > 0 ? words[words.length - 1].end : 0;
+          const lastWord = words[words.length - 1];
+          const totalDuration = words.length > 0 && lastWord ? lastWord.end : 0;
 
           return {
             audioBase64: base64Audio,
@@ -640,7 +659,8 @@ export const app = new Spiceflow()
           words.push({ text: currentWord, start: round(wordStart, 3), end: round(lastEnd, 3) });
         }
 
-        const totalDuration = words.length > 0 ? words[words.length - 1].end : 0;
+        const lastWord = words[words.length - 1];
+        const totalDuration = words.length > 0 && lastWord ? lastWord.end : 0;
 
         return {
           audioBase64: data.audio_base64,
