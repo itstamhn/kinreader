@@ -1,9 +1,17 @@
-import { mutation, query } from '../_generated/server';
+// SECURITY: these functions are deliberately `internal*`, not public.
+// They derive the acting user from a `userId` ARGUMENT rather than from
+// `ctx.auth.getUserIdentity()`, so as public functions anyone holding the
+// deployment URL (which ships in the client bundle) could mint a session for
+// any email via upsertUser, or read and write any user's playlist by id.
+// Nothing calls them today. Plan 008 rewrites them around Convex identity and
+// restores whichever of them the app actually needs as public procedures.
+// Do NOT make these public again without deriving identity server-side.
+import { internalMutation, internalQuery } from '../_generated/server';
 import { v } from 'convex/values';
 import type { Id } from '../_generated/dataModel';
 
 // 1. Upsert User on Sign In (Magic Link / Google)
-export const upsertUser = mutation({
+export const upsertUser = internalMutation({
   args: {
     email: v.string(),
     name: v.string(),
@@ -63,7 +71,7 @@ export const upsertUser = mutation({
 });
 
 // 2. Get User's Cloud Playlist & Progress
-export const getUserPlaylist = query({
+export const getUserPlaylist = internalQuery({
   args: {
     userId: v.id('users'),
   },
@@ -95,7 +103,7 @@ export const getUserPlaylist = query({
 });
 
 // 3. Save / Update User Reading Progress
-export const saveUserProgress = mutation({
+export const saveUserProgress = internalMutation({
   args: {
     userId: v.id('users'),
     articleId: v.id('articles'),
