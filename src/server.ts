@@ -476,6 +476,29 @@ export const app = new Spiceflow()
 
       const env = ((request as any).env || (typeof process !== 'undefined' ? process.env : {})) || {};
 
+      const MAX_TTS_CHARS = 4000;
+      if (text.length > MAX_TTS_CHARS) {
+        return new Response(
+          JSON.stringify({ error: `Text exceeds the ${MAX_TTS_CHARS} character limit` }),
+          { status: 413, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const sonioxApiKeyPresent = Boolean(body.sonioxApiKey || env.SONIOX_API_KEY);
+      const willCallPaidProvider =
+        provider === 'elevenlabs' || ((provider === 'soniox' || provider === 'browser') && sonioxApiKeyPresent);
+
+      if (willCallPaidProvider) {
+        const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
+        const allowed = await checkRateLimit(env, `tts:${clientIp}`);
+        if (!allowed) {
+          return new Response(
+            JSON.stringify({ error: 'Rate limit exceeded. Please try again in a minute.' }),
+            { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '60' } }
+          );
+        }
+      }
+
       // --- A. SONIOX TTS v2 + GROQ WHISPER ALIGNMENT ---
       if (provider === 'soniox' || provider === 'browser') {
         const sonioxApiKey = body.sonioxApiKey || env.SONIOX_API_KEY;
@@ -866,6 +889,18 @@ function safeImageUrl(input: string): string {
     return escapeHtml(parsed.toString());
   } catch {
     return '';
+  }
+}
+
+async function checkRateLimit(env: any, key: string): Promise<boolean> {
+  // No binding (local `bun src/server.ts`, or tests) — allow.
+  if (!env?.TTS_RATE_LIMITER) return true;
+  try {
+    const { success } = await env.TTS_RATE_LIMITER.limit({ key });
+    return success;
+  } catch {
+    // Limiter unavailable — allow rather than break playback.
+    return true;
   }
 }
 

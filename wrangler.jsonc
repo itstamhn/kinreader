@@ -10,6 +10,14 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
+  "ratelimits": [
+    {
+      "name": "TTS_RATE_LIMITER",
+      "namespace_id": "1001",
+      // 20 synthesis requests per minute per client IP
+      "simple": { "limit": 20, "period": 60 }
+    }
+  ],
   "routes": [
     {
       "pattern": "kinreader.com",
