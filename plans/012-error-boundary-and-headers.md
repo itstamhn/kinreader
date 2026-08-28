@@ -86,6 +86,45 @@ directly. Scope the CSP to HTML responses, or exclude the `/api/og` path.
 browser console, the app renders, and audio playback still works. Then load
 `/api/og?title=Test` and confirm the SVG still renders.
 
+### Step 2b: The Worker never sees the page load — headers must also go in `public/_headers`
+
+**Discovered during execution and verified against live production.** Cloudflare Workers
+Static Assets serve any request matching a file in `dist/` **directly, bypassing the
+Worker script**, unless `assets.run_worker_first` is set — and it is not. Proof:
+
+```
+curl -D - https://kinreader.com/           -> no security headers at all
+curl -D - https://kinreader.com/api/health -> all four headers present
+```
+
+So the HSTS, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` headers in
+`src/worker.ts` have **never** applied to the actual HTML document — only to `/api/*` and
+`/r/:id`. A CSP added only to the Worker would be equally invisible. This is pre-existing,
+not caused by this plan.
+
+Fix: create `public/_headers`. Vite copies `public/` into `dist/` verbatim, so the file
+reaches Cloudflare's asset server and applies to the bypassed responses. Include all five
+headers — the CSP plus the four pre-existing ones. Cloudflare's `_headers` format is a
+path-pattern line (e.g. `/*`) followed by indented `Name: value` lines; check the format
+against current docs, because a malformed file fails **silently**.
+
+Keep the Worker header block as well — the two are complementary: `_headers` covers static
+assets, the Worker covers `/api/*` and `/r/:id`. Keep the `/api/og` CSP exclusion.
+
+Do **not** use `assets.run_worker_first` instead: it routes every asset request through the
+Worker, costing invocations for no benefit.
+
+**Verify**: `bun run build`, then `dist/_headers` exists and contains all five headers.
+Do not rely on `wrangler dev` — see the note below.
+
+**Note on local verification**: `wrangler.jsonc`'s custom-domain `routes` cause
+`wrangler dev` to rewrite `request.url` to `http://kinreader.com/...` regardless of the
+local address, which defeats the `hostname !== 'localhost'` exemption in the Worker's
+HTTP→HTTPS redirect and produces an infinite redirect loop on any Worker-handled path.
+Pre-existing and **dev-only** — production serves HTTPS, so `isHttp` is false there
+(confirmed: production `/api/health` returns 200, not a redirect). Verify structurally
+and confirm in production after deploy.
+
 ### Step 3: Pin Convex into kitcn's range
 
 ```bash
@@ -112,6 +151,7 @@ is not worth a broken build.
 - [ ] `grep -rc "componentDidCatch" src/` returns at least `1`
 - [ ] `bun run typecheck` exits 0; `bun test` passes including the boundary test
 - [ ] `grep -c "Content-Security-Policy" src/worker.ts` returns at least `1`
+- [ ] `public/_headers` exists with all five headers, and `dist/_headers` after a build
 - [ ] `bunx kitcn codegen` prints no convex version warning
 - [ ] `bun run build` exits 0
 - [ ] Manual check: app loads under `wrangler dev` with zero CSP console violations
