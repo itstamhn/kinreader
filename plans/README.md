@@ -88,6 +88,25 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   **Lesson applied to 007**: grep for every caller of an endpoint *before* planning its
   removal. Done for `/api/tts` — it has exactly one.
 
+## Deployment state (2026-08-28)
+
+- **Pushed**: `main` is on GitHub at `71e661c` (`2477929..71e661c`).
+- **Deployed**: Worker version `2318977f` is live on kinreader.com with plans 001-005.
+  Verified in production: the share page escapes `<script>` payloads, and a forged token
+  against `/api/auth/verify` returns 400. Bindings active: `AUTH_CODES` (KV) and
+  `TTS_RATE_LIMITER` (20 req/60s).
+- **Convex deployment env is fully configured.** `MONID_API_KEY`, `SONIOX_API_KEY` and
+  `GROQ_API_KEY` were injected from sigillo (`personal-tools` / `dev`) via
+  `sigillo run --command 'bunx convex env set ...'` — values never printed, never
+  committed, never read by an agent. `AUTOSEND_API_KEY`, `GOOGLE_CLIENT_ID` and
+  `GOOGLE_CLIENT_SECRET` were already present.
+- Consequence: **plan 006's Step 3 and plan 007's Step 1 are already satisfied.** A future
+  executor should skip them as done, not as blocked. Note these are set on the *dev*
+  Convex deployment (the one in `.env.local`); a production Convex deployment would need
+  them set separately.
+- To rotate or re-set any of them, follow the same no-exposure pattern:
+  `sigillo run -p <project> --env dev --command 'bunx convex env set NAME "$NAME"'`
+
 ## Architecture decision (operator, 2026-08-28)
 
 **Convex replaces the Spiceflow backend only.** Cloudflare Workers keeps serving the
