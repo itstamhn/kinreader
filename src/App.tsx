@@ -15,8 +15,7 @@ import {
   getSavedArticles,
   saveArticleToLibrary,
   deleteArticleFromLibrary,
-  getCachedArticleAudio,
-  cacheArticleAudio,
+  getOrCreateClientId,
 } from './lib/storage';
 import { useCRPC } from './lib/convex';
 import type { ArticleData, ReaderSettings, WordTiming } from './types';
@@ -34,6 +33,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
 export function App() {
   const crpc = useCRPC();
   const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
+  const synthesizeTtsMutation = useMutation(crpc.routers.tts.synthesize.mutationOptions());
 
   const [user, setUser] = useState<UserProfile | null>(() => {
     if (typeof window !== 'undefined') {
@@ -144,15 +144,6 @@ export function App() {
       return;
     }
 
-    const cached = getCachedArticleAudio(articleKey, currSettings.sonioxVoice || 'Adrian', 1.0);
-    if (cached && cached.audioBase64 && cached.words?.length > 0) {
-      setWords(cached.words);
-      setDuration(cached.duration);
-      engine.loadAudio(cached.audioBase64, cached.words, cached.duration);
-      setIsLoadingAudio(false);
-      return;
-    }
-
     // 1. Initial word timings for instant kinetic display (0ms UI latency)
     const wordsList = art.content.split(/\s+/).filter(Boolean);
     let curTime = 0;
@@ -168,38 +159,35 @@ export function App() {
     setDuration(Number(curTime.toFixed(3)));
     setIsLoadingAudio(true);
 
-    // 2. Fetch Soniox Studio Neural Voice v2
+    // 2. Synthesize via the Convex TTS action (Soniox v2 + Groq alignment,
+    // server-side cached by articleId+voice+speed -- see
+    // convex/routers/tts.ts). Bounded by the same ~9s budget the old
+    // fetch's AbortSignal.timeout used, so a slow/unreachable deployment
+    // still falls through to instant on-device speech below.
     try {
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(9000),
-        body: JSON.stringify({
-          provider: 'soniox',
+      const result = await Promise.race([
+        synthesizeTtsMutation.mutateAsync({
+          url: articleKey,
+          title: art.title,
+          author: art.author,
           text: art.content,
-          sonioxApiKey: currSettings.sonioxApiKey || undefined,
-          sonioxVoice: currSettings.sonioxVoice || 'Adrian',
+          voice: currSettings.sonioxVoice || 'Adrian',
           speed: 1.0,
+          sonioxApiKey: currSettings.sonioxApiKey || undefined,
+          groqApiKey: currSettings.groqApiKey || undefined,
+          clientId: getOrCreateClientId(),
         }),
-      });
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('TTS request timed out')), 9000);
+        }),
+      ]);
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data.audioBase64 && data.words && data.words.length > 0) {
-          setWords(data.words);
-          setDuration(data.duration || curTime);
-          engine.loadAudio(data.audioBase64, data.words, data.duration || curTime);
-          cacheArticleAudio(
-            articleKey,
-            data.audioBase64,
-            data.words,
-            data.duration || curTime,
-            currSettings.sonioxVoice || 'Adrian',
-            1.0
-          );
-          setIsLoadingAudio(false);
-          return;
-        }
+      if ('audioUrl' in result && result.audioUrl && result.words && result.words.length > 0) {
+        setWords(result.words);
+        setDuration(result.duration || curTime);
+        engine.loadAudioUrl(result.audioUrl, result.words, result.duration || curTime);
+        setIsLoadingAudio(false);
+        return;
       }
     } catch (err) {
       console.warn('Soniox neural synthesis fallback:', err);

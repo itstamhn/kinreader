@@ -1,17 +1,9 @@
-import type { ArticleData, WordTiming } from '../types';
+import type { ArticleData } from '../types';
 import type { SavedArticleItem } from '../components/LibraryDrawer';
-import { SAMPLE_ARTICLE, SAMPLE_TIMINGS, SAMPLE_DURATION } from '../data/sampleData';
+import { SAMPLE_ARTICLE } from '../data/sampleData';
 
 const ARTICLES_STORAGE_KEY = 'kinetic_saved_articles_v2';
-const AUDIO_CACHE_PREFIX = 'kinetic_audio_cache_';
-
-export interface CachedAudioData {
-  audioBase64: string;
-  words: WordTiming[];
-  duration: number;
-  voice: string;
-  speed: number;
-}
+const CLIENT_ID_KEY = 'kinreader_client_id';
 
 // 1. Get all saved articles
 export function getSavedArticles(): SavedArticleItem[] {
@@ -82,49 +74,28 @@ export function deleteArticleFromLibrary(id: string): SavedArticleItem[] {
   return next;
 }
 
-// 4. Cache generated audio & timestamps
-export function cacheArticleAudio(
-  articleId: string,
-  audioBase64: string,
-  words: WordTiming[],
-  duration: number,
-  voice: string = 'Adrian',
-  speed: number = 1.0
-) {
-  if (typeof window === 'undefined') return;
-  const cacheKey = `${AUDIO_CACHE_PREFIX}${articleId}_${voice}_${speed}`;
-  const data: CachedAudioData = {
-    audioBase64,
-    words,
-    duration,
-    voice,
-    speed,
-  };
-  try {
-    sessionStorage.setItem(cacheKey, JSON.stringify(data));
-  } catch (e) {
-    console.warn('SessionStorage cache full', e);
-  }
+// 4. Check if audio is cached. The sample article ships with a bundled
+// audio asset; every other article's audio is now cached server-side in
+// Convex (convex/routers/tts.ts, plan 007) rather than in sessionStorage,
+// so there is no client-side cache left to inspect here.
+export function hasCachedAudio(articleId: string): boolean {
+  return articleId === SAMPLE_ARTICLE.title || articleId === SAMPLE_ARTICLE.sourceUrl;
 }
 
-// 5. Retrieve cached audio
-export function getCachedArticleAudio(
-  articleId: string,
-  voice: string = 'Adrian',
-  speed: number = 1.0
-): CachedAudioData | null {
-  if (typeof window === 'undefined') return null;
-  const cacheKey = `${AUDIO_CACHE_PREFIX}${articleId}_${voice}_${speed}`;
+// 5. A stable per-browser id, persisted in localStorage. There is no
+// per-user identity until plan 008 lands auth, so this is the "stable
+// client identifier" the TTS action's rate limiter
+// (convex/lib/rateLimiter.ts) keys on until then.
+export function getOrCreateClientId(): string {
+  if (typeof window === 'undefined') return 'server';
   try {
-    const raw = sessionStorage.getItem(cacheKey);
-    return raw ? JSON.parse(raw) : null;
+    let id = localStorage.getItem(CLIENT_ID_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(CLIENT_ID_KEY, id);
+    }
+    return id;
   } catch {
-    return null;
+    return 'anonymous';
   }
-}
-
-// 6. Check if audio is cached
-export function hasCachedAudio(articleId: string, voice: string = 'Adrian', speed: number = 1.0): boolean {
-  if (articleId === SAMPLE_ARTICLE.title || articleId === SAMPLE_ARTICLE.sourceUrl) return true;
-  return Boolean(getCachedArticleAudio(articleId, voice, speed));
 }
