@@ -4,7 +4,33 @@ import { sendMagicLinkEmail } from './lib/autosend';
 
 interface MagicLinkBody { email?: string; autosendApiKey?: string }
 interface VerifyBody { email?: string; code?: string; token?: string }
-type AuthRecord = { code: string; token: string; expires: number; name?: string; avatar?: string };
+type AuthRecord = { code: string; token: string; expires: number; attempts: number; name?: string; avatar?: string };
+
+// Same error body for "unknown email", "wrong code", "expired record" and
+// "attempts exhausted" -- distinguishing them would give an attacker an
+// enumeration oracle.
+function invalidCodeResponse(): Response {
+  return new Response(JSON.stringify({ error: 'Invalid or expired verification code' }), {
+    status: 400,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+// Uniform random 6-digit code via crypto.getRandomValues with rejection
+// sampling, so no value is more likely than another (a plain `% 900000` on a
+// raw uint32 would bias toward low codes).
+export function secureSixDigitCode(): string {
+  const max = 900000;
+  // Largest multiple of `max` that fits in a uint32, so rejection is unbiased.
+  const limit = Math.floor(0xffffffff / max) * max;
+  const buf = new Uint32Array(1);
+  let n: number;
+  do {
+    crypto.getRandomValues(buf);
+    n = buf[0]!;
+  } while (n >= limit);
+  return (100000 + (n % max)).toString();
+}
 
 export const app = new Spiceflow()
   // Health Check
@@ -37,11 +63,11 @@ export const app = new Spiceflow()
       }
 
       // Generate 6-digit code + secure token
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const code = secureSixDigitCode();
       const token = crypto.randomUUID();
       const expires = Date.now() + 15 * 60 * 1000; // 15 minutes
 
-      await putAuthRecord(env, email, { code, token, expires });
+      await putAuthRecord(env, email, { code, token, expires, attempts: 0 });
 
       const urlObj = new URL(request.url);
       const magicUrl = `${urlObj.origin}/?auth_token=${token}&email=${encodeURIComponent(email)}`;
@@ -71,6 +97,19 @@ export const app = new Spiceflow()
   // 0.1 Verify Magic Link or Code
   .post('/api/auth/verify', async ({ request }) => {
     try {
+      const env = ((request as any).env || (typeof process !== 'undefined' ? process.env : {})) || {};
+
+      // Use cf-connecting-ip, never a client-settable forwarded-for style
+      // header -- that would let an attacker reset their own limiter key.
+      const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      const allowed = await checkRateLimit(env, `auth:${clientIp}`);
+      if (!allowed) {
+        return new Response(
+          JSON.stringify({ error: 'Rate limit exceeded. Please try again in a minute.' }),
+          { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '60' } }
+        );
+      }
+
       const body = (await request.json()) as VerifyBody;
       const email = body.email?.trim().toLowerCase();
       const code = body.code?.trim();
@@ -83,22 +122,28 @@ export const app = new Spiceflow()
         });
       }
 
-      const env = ((request as any).env || (typeof process !== 'undefined' ? process.env : {})) || {};
-
       const record = await getAuthRecord(env, email);
       if (!record || Date.now() > record.expires) {
-        return new Response(JSON.stringify({ error: 'Invalid or expired verification code' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return invalidCodeResponse();
       }
 
       const isValid = (code && record.code === code) || (token && record.token === token);
       if (!isValid) {
-        return new Response(JSON.stringify({ error: 'Incorrect verification code' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        const attempts = (record.attempts || 0) + 1;
+        if (attempts >= 5) {
+          // Burn the code: brute-forcing costs the attacker the code rather
+          // than letting them keep guessing indefinitely.
+          await deleteAuthRecord(env, email);
+        } else {
+          // Preserve the remaining TTL rather than resetting the 15-minute
+          // window on every wrong guess.
+          const remainingTtlSeconds = Math.max(
+            60,
+            Math.ceil((record.expires - Date.now()) / 1000)
+          );
+          await putAuthRecord(env, email, { ...record, attempts }, remainingTtlSeconds);
+        }
+        return invalidCodeResponse();
       }
 
       // Clear used code
@@ -200,6 +245,7 @@ export const app = new Spiceflow()
         code: 'GOOGLE_OAUTH',
         token,
         expires,
+        attempts: 0,
         name: googleUser.name || undefined,
         avatar: googleUser.picture || undefined,
       });
@@ -391,10 +437,28 @@ function safeImageUrl(input: string): string {
 
 const AUTH_TTL_SECONDS = 15 * 60;
 
-async function putAuthRecord(env: any, email: string, record: AuthRecord): Promise<void> {
+async function checkRateLimit(env: any, key: string): Promise<boolean> {
+  // No binding (local `bun src/server.ts`, or tests) -- allow.
+  if (!env?.AUTH_RATE_LIMITER) return true;
+  try {
+    const { success } = await env.AUTH_RATE_LIMITER.limit({ key });
+    return success;
+  } catch {
+    // Limiter unavailable -- allow rather than break login. The attempt
+    // counter in KV enforces the real defence independently of this limiter.
+    return true;
+  }
+}
+
+async function putAuthRecord(
+  env: any,
+  email: string,
+  record: AuthRecord,
+  ttlSeconds: number = AUTH_TTL_SECONDS
+): Promise<void> {
   if (!env.AUTH_CODES) throw new Error('AUTH_CODES KV namespace is not bound');
   await env.AUTH_CODES.put(`auth:${email}`, JSON.stringify(record), {
-    expirationTtl: AUTH_TTL_SECONDS,
+    expirationTtl: ttlSeconds,
   });
 }
 

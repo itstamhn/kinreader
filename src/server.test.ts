@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { app } from './server';
+import { app, secureSixDigitCode } from './server';
 
 test('GET /api/health returns 200 with status ok', async () => {
   const res = await app.handle(new Request('http://localhost/api/health'));
@@ -213,4 +213,113 @@ test('POST /api/auth/verify tokens are single-use: a second verify with the same
   expect(secondRes.status).toBe(400);
   const secondData = await secondRes.json();
   expect(secondData.user).toBeUndefined();
+});
+
+// --- Attempt limiting on /api/auth/verify (plan 010) ---
+
+test('POST /api/auth/verify a wrong code increments attempts without deleting the record, and a subsequent correct code still succeeds', async () => {
+  const kv = createKvStub();
+  const email = 'typo@example.com';
+  await kv.put(
+    `auth:${email}`,
+    JSON.stringify({ code: '654321', token: 'typo-token', expires: Date.now() + 60_000, attempts: 0 })
+  );
+  const env = { AUTH_CODES: kv };
+
+  const wrongRes = await app.handle(verifyRequest({ email, code: '000000' }, env));
+  expect(wrongRes.status).toBe(400);
+
+  const stored = JSON.parse(kv.store.get(`auth:${email}`)!);
+  expect(stored.attempts).toBe(1);
+
+  // A legitimate user mistyping once must still succeed on their next try.
+  const correctRes = await app.handle(verifyRequest({ email, code: '654321' }, env));
+  expect(correctRes.status).toBe(200);
+  const correctData = await correctRes.json();
+  expect(correctData.success).toBe(true);
+});
+
+test('POST /api/auth/verify five wrong attempts burn the code: a subsequent correct code then fails', async () => {
+  const kv = createKvStub();
+  const email = 'bruteforce@example.com';
+  const correctCode = '111222';
+  await kv.put(
+    `auth:${email}`,
+    JSON.stringify({ code: correctCode, token: 'bf-token', expires: Date.now() + 60_000, attempts: 0 })
+  );
+  const env = { AUTH_CODES: kv };
+
+  for (let i = 0; i < 5; i++) {
+    const res = await app.handle(verifyRequest({ email, code: '000000' }, env));
+    expect(res.status).toBe(400);
+  }
+
+  // The record must be gone after the 5th wrong attempt.
+  expect(kv.store.has(`auth:${email}`)).toBe(false);
+
+  // The correct code must now fail too -- the code was burned, not just the
+  // wrong guesses rejected.
+  const finalRes = await app.handle(verifyRequest({ email, code: correctCode }, env));
+  expect(finalRes.status).toBe(400);
+  const finalData = await finalRes.json();
+  expect(finalData.user).toBeUndefined();
+});
+
+test('POST /api/auth/verify error body is byte-identical for unknown email, wrong code, and expired record (no enumeration oracle)', async () => {
+  const kv = createKvStub();
+  const env = { AUTH_CODES: kv };
+
+  const unknownRes = await app.handle(
+    verifyRequest({ email: 'never-signed-up@example.com', code: '123456' }, env)
+  );
+  const unknownBody = await unknownRes.text();
+
+  const wrongEmail = 'wrong-code-oracle@example.com';
+  await kv.put(
+    `auth:${wrongEmail}`,
+    JSON.stringify({ code: '999999', token: 'tok', expires: Date.now() + 60_000, attempts: 0 })
+  );
+  const wrongRes = await app.handle(verifyRequest({ email: wrongEmail, code: '000000' }, env));
+  const wrongBody = await wrongRes.text();
+
+  const expiredEmail = 'expired-oracle@example.com';
+  await kv.put(
+    `auth:${expiredEmail}`,
+    JSON.stringify({ code: '999999', token: 'tok', expires: Date.now() - 1000, attempts: 0 })
+  );
+  const expiredRes = await app.handle(verifyRequest({ email: expiredEmail, code: '000000' }, env));
+  const expiredBody = await expiredRes.text();
+
+  expect(unknownRes.status).toBe(400);
+  expect(wrongRes.status).toBe(400);
+  expect(expiredRes.status).toBe(400);
+  expect(unknownBody).toBe(wrongBody);
+  expect(wrongBody).toBe(expiredBody);
+});
+
+test('POST /api/auth/verify a denied rate limiter returns 429 with Retry-After: 60', async () => {
+  const kv = createKvStub();
+  const env = {
+    AUTH_CODES: kv,
+    AUTH_RATE_LIMITER: { limit: async () => ({ success: false }) },
+  };
+
+  const res = await app.handle(verifyRequest({ email: 'anyone@example.com', code: '123456' }, env));
+
+  expect(res.status).toBe(429);
+  expect(res.headers.get('Retry-After')).toBe('60');
+});
+
+test('secureSixDigitCode: 10,000 codes are all in range and mostly distinct', () => {
+  const codes = new Set<string>();
+  for (let i = 0; i < 10_000; i++) {
+    const code = secureSixDigitCode();
+    expect(code.length).toBe(6);
+    const num = Number(code);
+    expect(num).toBeGreaterThanOrEqual(100000);
+    expect(num).toBeLessThanOrEqual(999999);
+    codes.add(code);
+  }
+
+  expect(codes.size).toBeGreaterThanOrEqual(9000);
 });

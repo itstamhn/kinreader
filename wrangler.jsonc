@@ -13,6 +13,14 @@
   "kv_namespaces": [
     { "binding": "AUTH_CODES", "id": "7348870b7ec3415ea3c4e751a860022c" }
   ],
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "1002",
+      // 10 verify attempts per minute per client IP
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
   "routes": [
     {
       "pattern": "kinreader.com",
