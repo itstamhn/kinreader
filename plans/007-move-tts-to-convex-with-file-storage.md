@@ -129,10 +129,23 @@ Order of operations inside the action, and this order is load-bearing:
 
 **Verify**: `bun run typecheck` exits 0; `bunx convex dev --once` deploys.
 
-### Step 4: Teach the speech engine to load from a URL
+### Step 4: Use the URL loader the engine already has
 
-Change `SpeechEngine.loadAudio` to accept a URL alongside (or instead of) base64. Keep
-`loadBrowserText` untouched — it is the fallback path and must keep working.
+**Verified at plan-revision time: `SpeechEngine.loadAudioUrl(url, words, duration)`
+already exists at `src/utils/speechEngine.ts:141`** and is already used for the sample
+article (`src/App.tsx:119` and `:142`). Do **not** add a new method or change
+`loadAudio`'s signature — switch the call site at `src/App.tsx:191` from `loadAudio(...)`
+to `loadAudioUrl(...)` with the signed Convex storage URL.
+
+Keep `loadBrowserText` untouched — it is the fallback path and must keep working.
+
+**Verified call sites** (checked before this plan was dispatched — `/api/tts` has exactly
+one client caller, unlike `/api/extract` which had three):
+- `src/App.tsx:173` — the only `fetch('/api/tts')` in the codebase.
+- `src/App.tsx:147` and `:192` — `getCachedArticleAudio` / `cacheArticleAudio`, the
+  sessionStorage cache this plan retires.
+- `src/App.tsx:151` and `:191` — the two `loadAudio(base64, ...)` calls. Line 151 is the
+  sessionStorage-cache path, which goes away with the cache.
 
 **Verify**: `bun test` passes, including a new engine test.
 
@@ -164,6 +177,11 @@ uses them.
 - Rate-limit denial on a cache miss still returns a client-usable result.
 - A `words` array over 8192 entries is capped, not thrown.
 - No live network calls anywhere in the suite.
+- **Import `api` from `convex/shared/api.ts`, not `convex/_generated/api`.** Learned in
+  plan 006: Convex's own generated `api` type filters kitcn procedures out entirely,
+  because `FilterApi` does not recognise kitcn's wrapped `Procedure` as a
+  `RegisteredAction`. The function deploys and runs fine; only the generated *type*
+  omits it.
 
 ## Done criteria
 

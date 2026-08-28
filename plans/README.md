@@ -15,7 +15,7 @@ the table when done.
 | 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | DONE |
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
-| 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | TODO |
+| 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | DONE |
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | TODO |
 | 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
@@ -72,6 +72,21 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   expired → 400; and **no KV binding at all → 400, fails closed**. Executor also proved
   the regression test is load-bearing by stashing the fix and watching both App tests
   fail. Superseded later by plan 008.
+
+- **006 — DONE**, merged to `main` as `ab09847`, after **one revision round**. 36 tests
+  pass. The kitcn mystery resolved: codegen imports every `.ts` under `convex/` and looks
+  for a `_crpcMeta` marker set by the crpc builders — no root router or config needed.
+  `procedureNames` was empty simply because nothing had ever used those builders.
+  **Why it needed revision**: the plan's scope list named only `src/App.tsx`, but
+  `/api/extract` had *three* callers — `UrlInputModal.tsx:63` and
+  `ClipboardDetectSheet.tsx:34` too. Removing the route broke the primary "paste a URL"
+  flow, and no test caught it because neither modal had coverage. Plan defect, not
+  executor error; the executor flagged it rather than silently widening scope. Revision
+  migrated both, added tests for each, and added a guard test that fails if any file
+  under `src/` references the removed endpoint. Reviewer confirmed the guard is
+  load-bearing by planting a violating file and watching it fail.
+  **Lesson applied to 007**: grep for every caller of an endpoint *before* planning its
+  removal. Done for `/api/tts` — it has exactly one.
 
 ## Architecture decision (operator, 2026-08-28)
 

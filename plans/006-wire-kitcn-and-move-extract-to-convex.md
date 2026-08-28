@@ -110,7 +110,9 @@ is Step 1, and it is a STOP condition if you cannot.
 - `convex/routers/articles.ts` (rewrite as cRPC procedures)
 - `convex/` new files as needed (e.g. a root router, `convex/http.ts`)
 - `src/main.tsx` (add providers)
-- `src/App.tsx` (switch the extract call only)
+- `src/App.tsx` (switch the extract call)
+- `src/components/UrlInputModal.tsx` (switch its extract call — line ~63)
+- `src/components/ClipboardDetectSheet.tsx` (switch its extract call — line ~34)
 - `src/server.ts` (remove the `/api/extract` route **only** — see Step 6)
 - `src/server.test.ts` (update the extract test)
 - new Convex tests
@@ -197,7 +199,19 @@ In `src/App.tsx`, replace the `fetch('/api/extract', ...)` call with the kitcn/C
 call. Keep the surrounding loading and error handling behaviour identical — the user
 should see no change.
 
-**Verify**: `bun test` → all pass. `grep -c "api/extract" src/App.tsx` → `0`.
+`/api/extract` has **three** callers, not one. Migrate all three or the route removal
+in Step 6 breaks the primary "paste a URL" flow:
+
+- `src/App.tsx` — the library drawer's quick-extract
+- `src/components/UrlInputModal.tsx:63` — the main URL input modal
+- `src/components/ClipboardDetectSheet.tsx:34` — the clipboard-paste sheet
+
+Each uses the same `useCRPC()` / `useMutation` pattern. Both modal components need test
+coverage, because neither has any today — which is why a broken migration here would not
+show up in `bun test`.
+
+**Verify**: `bun test` → all pass. `grep -rc "api/extract" src/ --include=*.tsx` → `0`
+across every file (the only permitted match is the 404 assertion in `src/server.test.ts`).
 
 ### Step 6: Remove the Spiceflow extract route
 
