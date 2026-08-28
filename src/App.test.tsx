@@ -1,6 +1,15 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { render, cleanup, waitFor } from '@testing-library/react';
 import { App } from './App';
+import { ConvexAppProvider } from './lib/convex';
+
+function renderApp() {
+  return render(
+    <ConvexAppProvider>
+      <App />
+    </ConvexAppProvider>
+  );
+}
 
 const originalFetch = global.fetch;
 
@@ -34,7 +43,7 @@ test('a forged auth_token in the URL never signs the user in when verification f
     throw new Error(`Unexpected fetch in test: ${url}`);
   }) as any;
 
-  const { container } = render(<App />);
+  const { container } = renderApp();
 
   // Give the verify effect's fetch + microtasks a chance to settle. There is
   // no "it stayed signed out" condition to poll for with waitFor here, so
@@ -71,7 +80,7 @@ test('a successful verify signs the user in using the response body, ignoring th
     throw new Error(`Unexpected fetch in test: ${url}`);
   }) as any;
 
-  render(<App />);
+  renderApp();
 
   await waitFor(() => {
     expect(localStorage.getItem('kinreader_user')).not.toBeNull();

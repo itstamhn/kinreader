@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
 import { Controls } from './components/Controls';
@@ -17,6 +18,7 @@ import {
   getCachedArticleAudio,
   cacheArticleAudio,
 } from './lib/storage';
+import { useCRPC } from './lib/convex';
 import type { ArticleData, ReaderSettings, WordTiming } from './types';
 
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -30,6 +32,9 @@ const DEFAULT_SETTINGS: ReaderSettings = {
 };
 
 export function App() {
+  const crpc = useCRPC();
+  const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
+
   const [user, setUser] = useState<UserProfile | null>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -444,16 +449,15 @@ export function App() {
         onSelectArticle={handleLoadNewArticle}
         onDeleteArticle={handleDeleteArticle}
         onQuickExtract={(urlToExtract) => {
-          fetch('/api/extract', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: urlToExtract }),
-          })
-            .then((r) => r.json())
-            .then((data) => {
-              if (data.title) handleLoadNewArticle(data);
-            })
-            .catch(() => {});
+          extractArticleMutation.mutate(
+            { url: urlToExtract },
+            {
+              onSuccess: (data) => {
+                if (data.title) handleLoadNewArticle(data);
+              },
+              onError: () => {},
+            }
+          );
         }}
         onOpenSettings={() => setIsSettingsOpen(true)}
         user={user}
