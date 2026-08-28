@@ -98,6 +98,86 @@ test('extract returns a handled fallback (not a throw) when every fetch fails', 
   expect(result.truncated).toBe(false);
 });
 
+const rejectedUrls = [
+  'http://localhost:3008/admin',
+  'http://127.0.0.1/',
+  'http://169.254.169.254/latest/meta-data/',
+  'http://10.0.0.5/',
+  'http://192.168.1.1/',
+  'http://172.16.0.1/',
+  'file:///etc/passwd',
+  'javascript:alert(1)',
+  'not-a-url',
+];
+
+for (const url of rejectedUrls) {
+  test(`extract rejects ${url} without ever calling fetch`, async () => {
+    let fetchCalled = false;
+    stubFetch(() => {
+      fetchCalled = true;
+      return new Response('unused', { status: 200 });
+    });
+
+    const t = convexTest(schema, modules);
+
+    await expect(t.action(api.routers.articles.extract, { url })).rejects.toThrow();
+    expect(fetchCalled).toBe(false);
+  });
+}
+
+test('extract accepts a normal https URL and still calls fetch (regression guard)', async () => {
+  let fetchCalled = false;
+  stubFetch((url) => {
+    fetchCalled = true;
+    if (url === 'https://example.com/article') {
+      return htmlResponse(`
+        <html>
+          <head><title>Regular Article</title></head>
+          <body><p>${'Some normal article body text. '.repeat(10)}</p></body>
+        </html>
+      `);
+    }
+    return new Response('not found', { status: 404 });
+  });
+
+  const t = convexTest(schema, modules);
+  const result = await t.action(api.routers.articles.extract, {
+    url: 'https://example.com/article',
+  });
+
+  expect(fetchCalled).toBe(true);
+  expect(result.sourceUrl).toBe('https://example.com/article');
+  expect(result.content).toContain('Some normal article body text');
+});
+
+test('extract accepts an x.com status URL (X extraction path still works)', async () => {
+  let fetchCalled = false;
+  stubFetch((url) => {
+    fetchCalled = true;
+    if (url.includes('api.fxtwitter.com')) {
+      return new Response(
+        JSON.stringify({
+          tweet: {
+            author: { name: 'Jane', screen_name: 'jane', avatar_url: 'https://example.com/avatar.png' },
+            text: 'Hello world from X',
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response('not found', { status: 404 });
+  });
+
+  const t = convexTest(schema, modules);
+  const result = await t.action(api.routers.articles.extract, {
+    url: 'https://x.com/user/status/123',
+  });
+
+  expect(fetchCalled).toBe(true);
+  expect(result.sourceType).toBe('x');
+  expect(result.content).toBe('Hello world from X');
+});
+
 test('extract truncates content over the 1MB guard and sets truncated: true', async () => {
   const hugeParagraph = `<p>${'word '.repeat(400_000)}</p>`; // ~2,000,000 chars of body text
   stubFetch((url) => {
