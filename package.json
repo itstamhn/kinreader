@@ -3,7 +3,7 @@
   "module": "index.ts",
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",
-    "convex": "^1.45.0",
+    "convex": "1.44.0",
     "kitcn": "^0.32.1",
     "lucide-react": "^1.34.0",
     "react": "^19.2.8",
