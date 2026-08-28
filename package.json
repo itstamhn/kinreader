@@ -1,0 +1,38 @@
+{
+  "name": "kinetic-reader",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n \"api,web\" -c \"magenta,cyan\" \"bun --watch src/server.ts\" \"vite\"",
+    "dev:api": "bun --watch src/server.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "bun src/server.ts"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/bun": "latest",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2",
+    "wrangler": "^4.127.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.102.8",
+    "convex": "^1.45.0",
+    "kitcn": "^0.32.1",
+    "lucide-react": "^1.34.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "spiceflow": "^1.18.0",
+    "zod": "^4.4.3"
+  }
+}

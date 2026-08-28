@@ -1,0 +1,38 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# dotenv & wrangler environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+.dev.vars
+.dev.vars.*
+.wrangler
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ / VSCode / IDEs
+.idea
+.vscode
+
+# Finder (MacOS) folder config
+.DS_Store

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <radialGradient id="bgGrad" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#191A23"/>
+      <stop offset="60%" stop-color="#111218"/>
+      <stop offset="100%" stop-color="#0B0C10"/>
+    </radialGradient>
+    <linearGradient id="amberRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFBE5C" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#F2A33C" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#E8930C" stop-opacity="0.15"/>
+    </linearGradient>
+    <filter id="amberGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="url(#bgGrad)"/>
+  <rect x="8" y="8" width="496" height="496" rx="112" stroke="url(#amberRim)" stroke-width="4"/>
+  <path d="M168 136V376M168 266L288 136M224 236L348 376" stroke="#FFF7EA" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="388" cy="376" r="22" fill="#F2A33C" filter="url(#amberGlow)"/>
+  <circle cx="388" cy="376" r="18" fill="#FFF7EA"/>
+</svg>

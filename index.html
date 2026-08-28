@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      if (location.protocol === 'http:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        location.replace('https://' + location.host + location.pathname + location.search + location.hash);
+      }
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Kinreader — Made to Listen</title>
+    <meta name="description" content="The 60 FPS Kinetic Audio Reader for X Articles, Newsletters & Longform Essays. Listen with synchronized typography at 0.8x to 3.5x speed." />
+    
+    <!-- OpenGraph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://kinreader.com/" />
+    <meta property="og:title" content="Kinreader — Made to Listen" />
+    <meta property="og:description" content="The 60 FPS Kinetic Audio Reader for X Articles, Newsletters & Longform Essays." />
+    <meta property="og:image" content="https://kinreader.com/api/og?title=Kinreader%20—%20Made%20to%20Listen&author=Kinreader&tag=AUDIO%20READER" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@KinreaderFM" />
+    <meta name="twitter:creator" content="@KinreaderFM" />
+    <meta name="twitter:title" content="Kinreader — Made to Listen" />
+    <meta name="twitter:description" content="The 60 FPS Kinetic Audio Reader for X Articles, Newsletters & Longform Essays." />
+    <meta name="twitter:image" content="https://kinreader.com/api/og?title=Kinreader%20—%20Made%20to%20Listen&author=Kinreader&tag=AUDIO%20READER" />
+
+    <!-- iOS Web App Meta Tags for Add to Home Screen -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Kinreader" />
+    <meta name="theme-color" content="#0B0C10" />
+    
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico?v=2" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=2" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=2" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2" />
+    <link rel="shortcut icon" href="/favicon.ico?v=2" />
+
+    <!-- Google Instrument Sans, Newsreader & Spline Sans Mono for Kinreader Editorial Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&family=Spline+Sans+Mono:ital,wght@0,300..700;1,300..700&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-[#0B0C10] text-[#ECEAE4] min-h-screen overscroll-none select-none antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
