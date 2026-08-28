@@ -24,7 +24,11 @@ test('POST /api/tts with an empty body returns 400', async () => {
   expect(data.error).toBe('Text is required');
 });
 
-test('POST /api/extract with no url returns 400', async () => {
+// Extraction moved to a Convex action (convex/routers/articles.ts, plan 006).
+// The route is gone from this Spiceflow app entirely -- see
+// convex/routers/articles.test.ts for the "missing url" coverage that used
+// to live here.
+test('POST /api/extract no longer exists on the Spiceflow app (404, not 400)', async () => {
   const res = await app.handle(
     new Request('http://localhost/api/extract', {
       method: 'POST',
@@ -33,9 +37,7 @@ test('POST /api/extract with no url returns 400', async () => {
     })
   );
 
-  expect(res.status).toBe(400);
-  const data = await res.json();
-  expect(data.error).toBe('URL is required');
+  expect(res.status).toBe(404);
 });
 
 test('GET /r/:id escapes a </title><script> payload in the t param', async () => {

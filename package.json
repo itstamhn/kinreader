@@ -22,6 +22,7 @@
     "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "convex-test": "^0.0.56",
     "happy-dom": "^20.11.12",
     "tailwindcss": "^4.3.3",
     "typescript": "^5",
