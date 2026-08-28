@@ -1,6 +1,6 @@
 import { test, expect, afterEach } from 'bun:test';
 import { convexTest } from 'convex-test';
-import { MINUTE } from 'kitcn/ratelimit';
+import { MINUTE, Ratelimit } from 'kitcn/ratelimit';
 // kitcn's generated `api` surface is the type-complete one for cRPC
 // procedures -- Convex's own `_generated/api.d.ts` type filters kitcn's
 // wrapped `Procedure` out of `api.routers` entirely (see
@@ -8,6 +8,7 @@ import { MINUTE } from 'kitcn/ratelimit';
 import { api } from '../shared/api';
 import { internal } from '../_generated/api';
 import schema from '../schema';
+import { TTS_GLOBAL_KEY } from '../lib/rateLimiter';
 
 // See the comment in convex/routers/articles.test.ts for why this map is
 // built by hand instead of `import.meta.glob` (unsupported under `bun
@@ -21,8 +22,6 @@ const modules: Record<string, () => Promise<unknown>> = {
   './routers/ttsInternal.ts': () => import('./ttsInternal'),
   './lib/rateLimiter.ts': () => import('../lib/rateLimiter'),
 };
-
-const TTS_RATE_LIMIT_NAME = 'tts';
 
 const originalFetch = global.fetch;
 let fetchCalls: string[] = [];
@@ -61,20 +60,32 @@ function defaultProviderStub(words: Array<{ word: string; start: number; end: nu
   });
 }
 
-// Drains a client's rate-limit budget directly against the plain
-// `ratelimitState` table, the same one convex/lib/rateLimiter.ts's
-// `Ratelimit` instance reads and writes -- this exercises the exact
-// production limiter (sliding window, 20/min, prefixed "tts"), just
-// pre-loaded instead of hammered with 20 real calls.
-async function drainRateLimit(t: ReturnType<typeof convexTest>, clientId: string) {
+// Drains the PER-CLIENT bucket for one clientId, directly against the same
+// `ratelimitState` table convex/lib/rateLimiter.ts's `ttsClientRateLimiter`
+// reads and writes -- exercises the real limiter (sliding window, 20/min,
+// prefixed "tts-client"), just pre-loaded instead of hammered with 20 real
+// calls.
+async function drainClientRateLimit(t: ReturnType<typeof convexTest>, clientId: string) {
   await t.run(async (ctx) => {
-    const { Ratelimit } = await import('kitcn/ratelimit');
     const limiter = new Ratelimit({
       db: ctx.db as any,
       limiter: Ratelimit.slidingWindow(20, MINUTE),
-      prefix: TTS_RATE_LIMIT_NAME,
+      prefix: 'tts-client',
     });
     await limiter.limit(clientId, { count: 20 });
+  });
+}
+
+// Drains the GLOBAL bucket (fixed key, prefix "tts-global", 200/min) --
+// this is the bucket a forged/rotating clientId cannot touch.
+async function drainGlobalRateLimit(t: ReturnType<typeof convexTest>) {
+  await t.run(async (ctx) => {
+    const limiter = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(200, MINUTE),
+      prefix: 'tts-global',
+    });
+    await limiter.limit(TTS_GLOBAL_KEY, { count: 200 });
   });
 }
 
@@ -108,7 +119,7 @@ test('cache miss stores exactly one file and inserts exactly one audioTracks row
   expect(tracks.length).toBe(1);
 });
 
-test('cache hit returns the stored audio and performs no provider fetch at all', async () => {
+test('cache hit returns the stored audio, performs no provider fetch, and consumes neither rate limiter', async () => {
   const t = convexTest(schema, modules);
   defaultProviderStub([{ word: 'hi', start: 0, end: 0.2 }]);
 
@@ -124,6 +135,25 @@ test('cache hit returns the stored audio and performs no provider fetch at all',
   });
   expect(first.cached).toBe(false);
   expect(fetchCalls.length).toBe(2);
+
+  // Snapshot both limiters' remaining budget after the (single) cache-miss
+  // request has already consumed one token from each.
+  const remainingBefore = await t.run(async (ctx) => {
+    const client = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(20, MINUTE),
+      prefix: 'tts-client',
+    });
+    const global = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(200, MINUTE),
+      prefix: 'tts-global',
+    });
+    return {
+      client: (await client.getRemaining('client-b')).remaining,
+      global: (await global.getRemaining(TTS_GLOBAL_KEY)).remaining,
+    };
+  });
 
   // Reset the call log, then repeat the identical request. This is the
   // assertion the plan calls out explicitly: a cache hit must not merely
@@ -153,14 +183,34 @@ test('cache hit returns the stored audio and performs no provider fetch at all',
   // One stored file / one row for both requests combined, not two.
   const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
   expect(tracks.length).toBe(1);
+
+  // Neither limiter moved on the cache-hit request.
+  const remainingAfter = await t.run(async (ctx) => {
+    const client = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(20, MINUTE),
+      prefix: 'tts-client',
+    });
+    const global = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(200, MINUTE),
+      prefix: 'tts-global',
+    });
+    return {
+      client: (await client.getRemaining('client-b')).remaining,
+      global: (await global.getRemaining(TTS_GLOBAL_KEY)).remaining,
+    };
+  });
+  expect(remainingAfter.client).toBe(remainingBefore.client);
+  expect(remainingAfter.global).toBe(remainingBefore.global);
 });
 
-test('rate-limit denial on a cache miss returns a client-usable browser-fallback result, not an error', async () => {
+test('per-client rate-limit denial on a cache miss returns a client-usable browser-fallback result, not an error', async () => {
   const t = convexTest(schema, modules);
-  // Drain the bucket for this client in one shot instead of looping 20
-  // real calls -- this leaves zero tokens for the very next `.limit()`
-  // call the action makes.
-  await drainRateLimit(t, 'client-drained');
+  // Drain the bucket for this client only (global bucket left untouched) --
+  // this is the "honest client looping" case, not the forged-clientId
+  // bypass (see the dedicated global-limiter test below).
+  await drainClientRateLimit(t, 'client-drained');
 
   stubFetch(() => {
     throw new Error('a rate-limited request must never reach a provider');
@@ -175,6 +225,50 @@ test('rate-limit denial on a cache miss returns a client-usable browser-fallback
     sonioxApiKey: 'fake-soniox-key',
     groqApiKey: 'fake-groq-key',
     clientId: 'client-drained',
+  });
+
+  expect(result.provider).toBe('browser');
+  expect(result.cached).toBe(false);
+  expect('warning' in result ? result.warning : undefined).toContain('Rate limit');
+  expect(result.words.length).toBeGreaterThan(0);
+  expect(fetchCalls).toEqual([]);
+
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks.length).toBe(0);
+});
+
+// Regression test for the bypass a reviewer caught: `clientId` is a plain
+// procedure argument the caller controls (src/lib/storage.ts's
+// getOrCreateClientId, a crypto.randomUUID() in localStorage). An attacker
+// who mints a FRESH id on every request never touches the per-client
+// bucket above -- only the global, caller-uninfluenced bucket can catch
+// that. This test drains the global bucket and confirms a request with a
+// clientId that has NEVER been used before is still denied.
+//
+// Verified this is a real regression test, not a tautology: temporarily
+// removed the `ttsGlobalRateLimiter` call from
+// convex/routers/ttsInternal.ts's consumeTtsRateLimit, re-ran this file,
+// watched this test fail (the forged-id request went through to the
+// provider stub instead of being denied), then restored the global check
+// and confirmed it passes again.
+test('the global limiter denies a request carrying a brand-new, never-before-seen clientId', async () => {
+  const t = convexTest(schema, modules);
+  await drainGlobalRateLimit(t);
+
+  stubFetch(() => {
+    throw new Error('a globally-rate-limited request must never reach a provider');
+  });
+
+  const freshClientId = `never-seen-before-${crypto.randomUUID()}`;
+  const result = await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/global-limit',
+    title: 'Global Limit Article',
+    text: 'this request should be denied by the global bucket',
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    groqApiKey: 'fake-groq-key',
+    clientId: freshClientId,
   });
 
   expect(result.provider).toBe('browser');
@@ -259,8 +353,8 @@ test('no Soniox key anywhere (input or env) uses the free browser path without c
 
   // Confirm no token was spent: draining the same client's budget to zero
   // and re-running the identical (keyless) request still succeeds via the
-  // free path, because it never touches the limiter at all.
-  await drainRateLimit(t, 'client-e');
+  // free path, because it never touches either limiter at all.
+  await drainClientRateLimit(t, 'client-e');
   const second = await t.action(api.routers.tts.synthesize, {
     url: 'https://example.com/no-key',
     title: 'No Key Article',

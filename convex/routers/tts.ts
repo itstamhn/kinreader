@@ -187,87 +187,97 @@ export const synthesize = action
       const audioBuffer = await sonioxRes.arrayBuffer();
       const storageId = await ctx.storage.store(new Blob([audioBuffer], { type: 'audio/mpeg' }));
 
-      // 4. Word timings via Groq Whisper, falling back to linear
-      // distribution exactly as the old handler did.
-      let words: WordTiming[] = [];
+      // Everything past this point is wrapped separately so that a failure
+      // here (Groq, the insert, or resolving the URL) deletes the blob we
+      // just stored before falling through to the outer catch's browser
+      // fallback -- otherwise a thrown error after a successful `store()`
+      // orphans the file: no `audioTracks` row will ever reference it.
+      try {
+        // 4. Word timings via Groq Whisper, falling back to linear
+        // distribution exactly as the old handler did.
+        let words: WordTiming[] = [];
 
-      if (groqApiKey) {
-        try {
-          const formData = new FormData();
-          formData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
-          formData.append('model', 'whisper-large-v3-turbo');
-          formData.append('response_format', 'verbose_json');
-          formData.append('timestamp_granularities[]', 'word');
+        if (groqApiKey) {
+          try {
+            const formData = new FormData();
+            formData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
+            formData.append('model', 'whisper-large-v3-turbo');
+            formData.append('response_format', 'verbose_json');
+            formData.append('timestamp_granularities[]', 'word');
 
-          const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${groqApiKey}` },
-            signal: AbortSignal.timeout(5000),
-            body: formData,
-          });
+            const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${groqApiKey}` },
+              signal: AbortSignal.timeout(5000),
+              body: formData,
+            });
 
-          if (groqRes.ok) {
-            const groqData = (await groqRes.json()) as any;
-            if (Array.isArray(groqData.words)) {
-              words = groqData.words
-                .map((w: any) => ({
-                  text: String(w.word).trim(),
-                  start: round(w.start, 3),
-                  end: round(w.end, 3),
-                }))
-                .filter((w: WordTiming) => Boolean(w.text));
+            if (groqRes.ok) {
+              const groqData = (await groqRes.json()) as any;
+              if (Array.isArray(groqData.words)) {
+                words = groqData.words
+                  .map((w: any) => ({
+                    text: String(w.word).trim(),
+                    start: round(w.start, 3),
+                    end: round(w.end, 3),
+                  }))
+                  .filter((w: WordTiming) => Boolean(w.text));
+              }
             }
+          } catch {
+            // Groq unavailable -- fall through to linear distribution.
           }
-        } catch {
-          // Groq unavailable -- fall through to linear distribution.
         }
+
+        if (words.length === 0) {
+          const rawWords = text.split(/\s+/).filter(Boolean);
+          const estimatedTotalDuration = Math.max(1, rawWords.length * (0.28 / speed));
+          const timePerWord = estimatedTotalDuration / rawWords.length;
+          words = rawWords.map((w, idx) => ({
+            text: w,
+            start: round(idx * timePerWord, 3),
+            end: round((idx + 1) * timePerWord, 3),
+          }));
+        }
+
+        let wordsTruncated = false;
+        if (words.length > MAX_WORDS) {
+          words = words.slice(0, MAX_WORDS);
+          wordsTruncated = true;
+          console.warn(
+            `TTS words array truncated to ${MAX_WORDS} entries for article ${articleId} (voice ${voice}, speed ${speed})`
+          );
+        }
+
+        const lastWord = words[words.length - 1];
+        const duration = words.length > 0 && lastWord ? lastWord.end : 0;
+
+        await ctx.runMutation(internal.routers.ttsInternal.insertAudioTrack, {
+          articleId,
+          voice,
+          speed,
+          storageId,
+          duration,
+          words,
+        });
+
+        const audioUrl: string | null = await ctx.storage.getUrl(storageId);
+        if (!audioUrl) {
+          throw new Error('Failed to resolve a URL for the stored audio file');
+        }
+
+        return {
+          audioUrl,
+          words,
+          duration,
+          provider: 'soniox' as const,
+          cached: false,
+          wordsTruncated,
+        };
+      } catch (postStoreErr) {
+        await ctx.storage.delete(storageId).catch(() => {});
+        throw postStoreErr;
       }
-
-      if (words.length === 0) {
-        const rawWords = text.split(/\s+/).filter(Boolean);
-        const estimatedTotalDuration = Math.max(1, rawWords.length * (0.28 / speed));
-        const timePerWord = estimatedTotalDuration / rawWords.length;
-        words = rawWords.map((w, idx) => ({
-          text: w,
-          start: round(idx * timePerWord, 3),
-          end: round((idx + 1) * timePerWord, 3),
-        }));
-      }
-
-      let wordsTruncated = false;
-      if (words.length > MAX_WORDS) {
-        words = words.slice(0, MAX_WORDS);
-        wordsTruncated = true;
-        console.warn(
-          `TTS words array truncated to ${MAX_WORDS} entries for article ${articleId} (voice ${voice}, speed ${speed})`
-        );
-      }
-
-      const lastWord = words[words.length - 1];
-      const duration = words.length > 0 && lastWord ? lastWord.end : 0;
-
-      await ctx.runMutation(internal.routers.ttsInternal.insertAudioTrack, {
-        articleId,
-        voice,
-        speed,
-        storageId,
-        duration,
-        words,
-      });
-
-      const audioUrl: string | null = await ctx.storage.getUrl(storageId);
-      if (!audioUrl) {
-        throw new Error('Failed to resolve a URL for the stored audio file');
-      }
-
-      return {
-        audioUrl,
-        words,
-        duration,
-        provider: 'soniox' as const,
-        cached: false,
-        wordsTruncated,
-      };
     } catch (err) {
       console.warn('Soniox neural synthesis fallback:', err);
       const { words, duration } = linearWordTimings(text);

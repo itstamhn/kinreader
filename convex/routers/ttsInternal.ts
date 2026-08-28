@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { internalMutation, internalQuery } from '../_generated/server';
-import { ttsRateLimiter } from '../lib/rateLimiter';
+import { TTS_GLOBAL_KEY, ttsClientRateLimiter, ttsGlobalRateLimiter } from '../lib/rateLimiter';
 
 // Plain (non-cRPC) internal functions backing convex/routers/tts.ts's
 // action. Actions cannot touch `ctx.db` directly -- these are the
@@ -9,12 +9,21 @@ import { ttsRateLimiter } from '../lib/rateLimiter';
 // kitcn/ratelimit's `Ratelimit.limit()` writes state (schema.ts's
 // `ratelimitState` table), so -- like every other write here -- it has to
 // run inside a mutation, not the calling action.
+//
+// Consumes TWO limiters (see convex/lib/rateLimiter.ts for why both exist):
+// the global one first, since it is the real security boundary and denying
+// there should not also burn a token from the (bypassable) per-client
+// bucket. Both are cache-miss-only -- the caller only reaches this after a
+// cache lookup has already missed.
 export const consumeTtsRateLimit = internalMutation({
   args: { key: v.string() },
   returns: v.object({ ok: v.boolean() }),
   handler: async (ctx, args) => {
-    const result = await ttsRateLimiter(ctx).limit(args.key);
-    return { ok: result.success };
+    const global = await ttsGlobalRateLimiter(ctx).limit(TTS_GLOBAL_KEY);
+    if (!global.success) return { ok: false };
+
+    const client = await ttsClientRateLimiter(ctx).limit(args.key);
+    return { ok: client.success };
   },
 });
 
