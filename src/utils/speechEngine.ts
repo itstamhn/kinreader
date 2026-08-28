@@ -157,7 +157,8 @@ export class SpeechEngine {
     this.mode = 'browser';
     this.fullText = text;
     this.words = words;
-    this.duration = words.length > 0 ? words[words.length - 1].end : 0;
+    const lastWord = words[words.length - 1];
+    this.duration = words.length > 0 && lastWord ? lastWord.end : 0;
     this.currentWordIdx = 0;
   }
 
