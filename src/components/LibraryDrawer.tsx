@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Play, Clock, Sparkles, Trash2, ArrowRight, Link as LinkIcon, Compass, Archive, History, Settings, ExternalLink } from 'lucide-react';
+import { X, Play, Pause, Clock, Sparkles, Trash2, ArrowRight, Link as LinkIcon, Compass, Archive, History, Settings, ExternalLink } from 'lucide-react';
 import type { ArticleData } from '../types';
 import type { UserProfile } from './AuthModal';
 
