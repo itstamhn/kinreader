@@ -5,6 +5,65 @@ import { action } from '../crpc';
 // title/author fields, etc. never push the response over the limit.
 const MAX_CONTENT_CHARS = 900_000;
 
+// Guards against SSRF: rejects anything that isn't a plain http(s) URL
+// pointing at a public host, before any fetch in the extraction chain runs
+// (including the Jina Reader fallback, which also receives the raw URL as a
+// path segment). This is a hostname deny-list, not a full SSRF defence -- see
+// the maintenance notes in plans/011-validate-extract-urls.md for its known
+// limitations (no DNS resolution check, redirects not re-validated).
+function assertPublicHttpUrl(raw: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('Invalid URL');
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http and https URLs are supported');
+  }
+
+  const host = parsed.hostname.toLowerCase();
+
+  // Reject obvious local / private / link-local targets by name.
+  if (
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal')
+  ) {
+    throw new Error('URL host is not permitted');
+  }
+
+  // Reject literal IPs in private, loopback, and link-local ranges.
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) {
+      throw new Error('URL host is not permitted');
+    }
+  }
+
+  // IPv6 loopback / unique-local / link-local, including v4-mapped forms.
+  if (host.includes(':')) {
+    const h = host.replace(/^\[|\]$/g, '');
+    if (h === '::1' || h === '::' || /^f[cd]/i.test(h) || /^fe80:/i.test(h) || h.includes('127.0.0.1')) {
+      throw new Error('URL host is not permitted');
+    }
+  }
+
+  return parsed;
+}
+
 interface FxTwitterTweet {
   author?: { name?: string; screen_name?: string; avatar_url?: string };
   text?: string;
@@ -24,7 +83,7 @@ interface FxTwitterTweet {
 export const extract = action
   .input(z.object({ url: z.string().min(1) }))
   .action(async ({ input }) => {
-    const url = input.url.trim();
+    const url = assertPublicHttpUrl(input.url.trim()).toString();
 
     const isTwitter = /twitter\.com|x\.com|fxtwitter\.com|fixupx\.com/i.test(url);
 
