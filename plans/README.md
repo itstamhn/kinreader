@@ -14,7 +14,7 @@ the table when done.
 | 002 | Establish a verification baseline — `typecheck` and `test` that pass | P1 | M | 001 | DONE |
 | 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | TODO |
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
-| 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | TODO |
+| 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -50,6 +50,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   data: URL, mixed-case `JaVaScRiPt:`, ampersand double-escape regression) — all
   neutralised, zero real findings. Three initial regex hits were false positives on
   escaped inert text, confirmed by inspecting the raw response bytes.
+
+- **005 — DONE**, merged to `main` as `c22d960`. Cloudflare rate-limiter binding
+  (20/min per `cf-connecting-ip`) plus a 4000-char cap, applied only to the paid
+  branches. 21 tests pass (7 new). Reviewer independently verified all five behaviours
+  with stubbed limiters: paid+denied → 429; free path+denied → 200 with usable word
+  timings (never limited); 4001 chars → 413; 4000 → not 413; limiter throwing → fails
+  open. Executor also confirmed `wrangler dev` accepts the config and proved the
+  free-path test is load-bearing by temporarily inverting the guard.
 
 ## Dependency notes
 
