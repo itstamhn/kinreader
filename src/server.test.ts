@@ -40,6 +40,27 @@ test('POST /api/extract no longer exists on the Spiceflow app (404, not 400)', a
   expect(res.status).toBe(404);
 });
 
+// Guard against plan 006's exact bug class recurring: /api/extract was
+// removed from src/server.ts (above), but the client still had three fetch
+// call sites and only one got migrated -- the other two silently 404'd
+// because nothing checked for stragglers. This scans every .ts/.tsx file
+// under src/ and fails if any of them still mentions the dead route, aside
+// from this file's own assertion above.
+test('no file under src/ references api/extract except this file\'s own 404 assertion', async () => {
+  const glob = new Bun.Glob('**/*.{ts,tsx}');
+  const offenders: string[] = [];
+
+  for await (const relPath of glob.scan({ cwd: import.meta.dir })) {
+    if (relPath === 'server.test.ts') continue; // this file -- permitted, see above
+    const text = await Bun.file(`${import.meta.dir}/${relPath}`).text();
+    if (text.includes('api/extract')) {
+      offenders.push(relPath);
+    }
+  }
+
+  expect(offenders).toEqual([]);
+});
+
 test('GET /r/:id escapes a </title><script> payload in the t param', async () => {
   const res = await app.handle(
     new Request('http://localhost/r/x?t=%3C/title%3E%3Cscript%3Ealert(1)%3C/script%3E')

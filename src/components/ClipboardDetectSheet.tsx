@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { Clipboard, Play, Loader2, X } from 'lucide-react';
+import { useCRPC } from '../lib/convex';
 import type { ArticleData } from '../types';
 
 interface ClipboardDetectSheetProps {
@@ -17,6 +19,9 @@ export function ClipboardDetectSheet({
   onNarrateNow,
   onAddToQueue,
 }: ClipboardDetectSheetProps) {
+  const crpc = useCRPC();
+  const extractMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,18 +36,7 @@ export function ClipboardDetectSheet({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: detectedUrl }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to extract article');
-      }
-
-      const data: ArticleData = await res.json();
+      const data = await extractMutation.mutateAsync({ url: detectedUrl });
       if (toQueue) {
         onAddToQueue(data);
       } else {
