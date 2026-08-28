@@ -192,3 +192,95 @@ test('POST /api/tts proceeds (not 429) when no TTS_RATE_LIMITER binding is prese
 
   expect(res.status).not.toBe(429);
 });
+
+// --- Server-side token verification against KV-backed auth store (plan 003) ---
+
+function createKvStub() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    get: async (key: string) => (store.has(key) ? store.get(key)! : null),
+    put: async (key: string, value: string) => {
+      store.set(key, value);
+    },
+    delete: async (key: string) => {
+      store.delete(key);
+    },
+  };
+}
+
+function verifyRequest(body: Record<string, unknown>, env: any): Request {
+  const request = new Request('http://localhost/api/auth/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  (request as any).env = env;
+  return request;
+}
+
+test('POST /api/auth/verify with a token that was never issued returns 400 and no user', async () => {
+  const kv = createKvStub();
+  const env = { AUTH_CODES: kv };
+
+  const res = await app.handle(
+    verifyRequest({ email: 'nobody@example.com', token: 'forged' }, env)
+  );
+
+  expect(res.status).toBe(400);
+  const data = await res.json();
+  expect(data.user).toBeUndefined();
+});
+
+test('POST /api/auth/verify with an expired record returns 400', async () => {
+  const kv = createKvStub();
+  const email = 'expired@example.com';
+  await kv.put(
+    `auth:${email}`,
+    JSON.stringify({ code: '123456', token: 'expired-token', expires: Date.now() - 1000 })
+  );
+  const env = { AUTH_CODES: kv };
+
+  const res = await app.handle(verifyRequest({ email, token: 'expired-token' }, env));
+
+  expect(res.status).toBe(400);
+  const data = await res.json();
+  expect(data.user).toBeUndefined();
+});
+
+test('POST /api/auth/verify with the correct token returns 200 and success: true', async () => {
+  const kv = createKvStub();
+  const email = 'valid@example.com';
+  await kv.put(
+    `auth:${email}`,
+    JSON.stringify({ code: '123456', token: 'correct-token', expires: Date.now() + 60_000 })
+  );
+  const env = { AUTH_CODES: kv };
+
+  const res = await app.handle(verifyRequest({ email, token: 'correct-token' }, env));
+
+  expect(res.status).toBe(200);
+  const data = await res.json();
+  expect(data.success).toBe(true);
+  expect(data.user.email).toBe(email);
+});
+
+test('POST /api/auth/verify tokens are single-use: a second verify with the same token returns 400', async () => {
+  const kv = createKvStub();
+  const email = 'single-use@example.com';
+  await kv.put(
+    `auth:${email}`,
+    JSON.stringify({ code: '123456', token: 'one-shot-token', expires: Date.now() + 60_000 })
+  );
+  const env = { AUTH_CODES: kv };
+
+  const firstRes = await app.handle(verifyRequest({ email, token: 'one-shot-token' }, env));
+  expect(firstRes.status).toBe(200);
+  const firstData = await firstRes.json();
+  expect(firstData.success).toBe(true);
+
+  const secondRes = await app.handle(verifyRequest({ email, token: 'one-shot-token' }, env));
+  expect(secondRes.status).toBe(400);
+  const secondData = await secondRes.json();
+  expect(secondData.user).toBeUndefined();
+});
