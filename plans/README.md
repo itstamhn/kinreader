@@ -19,6 +19,9 @@ the table when done.
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | TODO |
 | 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
+| 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | TODO |
+| 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | TODO |
+| 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -106,6 +109,54 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   them set separately.
 - To rotate or re-set any of them, follow the same no-exposure pattern:
   `sigillo run -p <project> --env dev --command 'bunx convex env set NAME "$NAME"'`
+
+## Best-practice sweep (2026-08-28)
+
+Answering "is everything on best practices yet?" — it was not. What was found, and what
+was done about it:
+
+**Fixed immediately (not planned — live issues):**
+
+- **Three Convex functions were deployed PUBLIC and unauthenticated.**
+  `convex function-spec` confirmed `routers/users.js:upsertUser`, `getUserPlaylist` and
+  `saveUserProgress` all had `visibility: public`. `upsertUser` mints a 30-day session
+  token for any email with no verification, and `VITE_CONVEX_URL` ships in the client
+  bundle, so the endpoint was public knowledge. Scoped to `internalMutation`/
+  `internalQuery` and redeployed (`9e08fa5`); `function-spec` now shows only
+  `routers/articles:extract` as public. **This is a stopgap** — they still take `userId`
+  as an argument. Plan 008 is the real fix.
+- **No CI.** `typecheck`/`test` existed but nothing ran them, which is how the plan-001
+  crash reached production. Added `.github/workflows/ci.yml` running typecheck, test and
+  build on push and PR (`7e478c5`). All three verified passing locally first.
+
+**Planned (010-012):** CSPRNG + attempt limiting for magic-link codes; SSRF validation on
+the extract action; error boundary + CSP + Convex version pin.
+
+## kitcn optimisation findings (2026-08-28)
+
+kitcn ships far more than the cRPC layer, and this project uses almost none of it. Docs
+are bundled locally at `node_modules/kitcn/skills/kitcn/` — richer than the website, and
+version-matched. Worth reading before any further Convex work.
+
+- **`kitcn/ratelimit` exists.** A full limiter with `fixedWindow`/`slidingWindow`/
+  `tokenBucket`, sharding, and a `ratelimit.middleware()` that composes with the cRPC
+  builders. The API mirrors Upstash Ratelimit. **Plan 007 was mid-flight told to use
+  `@convex-dev/rate-limiter`; corrected to prefer this instead** — no extra component, one
+  config surface. Also the natural home for plan 010's auth limiting once auth moves to
+  Convex in 008.
+- **`kitcn/orm` enforces constraints that `ctx.db` cannot.** Unique, foreign-key and check
+  constraints are enforced by ORM mutations only — "`ctx.db` bypasses them". Today
+  `convex/schema.ts` is raw Convex and `upsertUser` hand-rolls email uniqueness with a
+  query-then-insert, which is race-prone. Migrating the schema to the kitcn ORM would make
+  `users.email` genuinely unique. Natural companion to plan 008.
+- **`kitcn/auth`** — Better Auth, already scaffolded but disabled. This is plan 008.
+- **Unused features worth knowing about**: `aggregates` (counts without full scans),
+  `scheduling` (a home for `audioTracks` cache eviction), `migrations` — note
+  `convex/generated/migrations.gen.ts` is already scaffolded — plus `auth-organizations`,
+  `auth-admin`, `auth-polar` (billing), and `http`.
+- **Testing**: kitcn documents its own harness (`convexTest` + `runCtx` from
+  `setup.testing`) in `references/features/testing.md`. Its example uses vitest while this
+  repo standardises on `bun test` per `CLAUDE.md`, so adopt the patterns, not the runner.
 
 ## Architecture decision (operator, 2026-08-28)
 
