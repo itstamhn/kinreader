@@ -99,3 +99,96 @@ test('GET /api/og allows a legitimate https image URL through as an href', async
   const body = await res.text();
   expect(body).toContain('href="https://example.com/a.png"');
 });
+
+// --- Rate limiting / size cap on POST /api/tts (plan 005) ---
+
+function ttsRequest(body: Record<string, unknown>, env?: any, headers?: Record<string, string>): Request {
+  const request = new Request('http://localhost/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  if (env !== undefined) {
+    (request as any).env = env;
+  }
+  return request;
+}
+
+test('POST /api/tts with text over 4000 chars returns 413', async () => {
+  const res = await app.handle(ttsRequest({ text: 'a'.repeat(5000) }));
+
+  expect(res.status).toBe(413);
+  const data = await res.json();
+  expect(typeof data.error).toBe('string');
+});
+
+test('POST /api/tts with text at exactly 4000 chars is not rejected as oversized', async () => {
+  const res = await app.handle(ttsRequest({ text: 'a'.repeat(4000) }));
+
+  expect(res.status).not.toBe(413);
+});
+
+test('POST /api/tts returns 429 with Retry-After when the limiter denies a paid request', async () => {
+  const env = {
+    SONIOX_API_KEY: 'fake-soniox-key',
+    TTS_RATE_LIMITER: { limit: async () => ({ success: false }) },
+  };
+  const res = await app.handle(
+    ttsRequest({ text: 'hello world', provider: 'soniox' }, env, { 'cf-connecting-ip': '1.2.3.4' })
+  );
+
+  expect(res.status).toBe(429);
+  expect(res.headers.get('Retry-After')).toBe('60');
+  const data = await res.json();
+  expect(typeof data.error).toBe('string');
+});
+
+test('POST /api/tts proceeds (not 429) when the limiter allows a paid request', async () => {
+  const env = {
+    TTS_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  };
+  const res = await app.handle(
+    ttsRequest({ text: 'hello world', provider: 'elevenlabs' }, env, { 'cf-connecting-ip': '1.2.3.4' })
+  );
+
+  expect(res.status).not.toBe(429);
+});
+
+test('POST /api/tts free browser path is never limited', async () => {
+  const env = {
+    // No SONIOX_API_KEY anywhere, so this request cannot spend money — it must
+    // never be subject to the limiter, even if the limiter would deny it.
+    TTS_RATE_LIMITER: { limit: async () => ({ success: false }) },
+  };
+  const res = await app.handle(
+    ttsRequest({ text: 'hello world', provider: 'browser' }, env, { 'cf-connecting-ip': '1.2.3.4' })
+  );
+
+  expect(res.status).toBe(200);
+  const data = await res.json();
+  expect(data.provider).toBe('browser');
+});
+
+test('POST /api/tts fails open (proceeds, not 429) when the limiter throws', async () => {
+  const env = {
+    TTS_RATE_LIMITER: {
+      limit: async () => {
+        throw new Error('limiter unavailable');
+      },
+    },
+  };
+  const res = await app.handle(
+    ttsRequest({ text: 'hello world', provider: 'elevenlabs' }, env, { 'cf-connecting-ip': '1.2.3.4' })
+  );
+
+  expect(res.status).not.toBe(429);
+});
+
+test('POST /api/tts proceeds (not 429) when no TTS_RATE_LIMITER binding is present', async () => {
+  const env = {};
+  const res = await app.handle(
+    ttsRequest({ text: 'hello world', provider: 'elevenlabs' }, env, { 'cf-connecting-ip': '1.2.3.4' })
+  );
+
+  expect(res.status).not.toBe(429);
+});
