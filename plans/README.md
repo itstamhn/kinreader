@@ -21,7 +21,7 @@ the table when done.
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
-| 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | TODO |
+| 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -131,6 +131,20 @@ was done about it:
 
 **Planned (010-012):** CSPRNG + attempt limiting for magic-link codes; SSRF validation on
 the extract action; error boundary + CSP + Convex version pin.
+
+## Open follow-ups worth planning
+
+- **`wrangler dev` is unusable for Worker routes.** `wrangler.jsonc`'s custom-domain
+  `routes` make `wrangler dev` rewrite `request.url` to `http://kinreader.com/...` even
+  when reached via `127.0.0.1`, which defeats the `hostname !== 'localhost'` exemption in
+  the Worker's HTTP→HTTPS redirect and produces an infinite 301 loop on `/api/*`, `/r/:id`
+  and SPA fallback paths. Confirmed pre-existing on unmodified `c44ff8e`. **Production is
+  not affected** — it serves HTTPS, so `isHttp` is false there, and `/api/health` returns
+  200 rather than a redirect. Local-testing DX gap only, but a real one.
+- **The CSP inline-script hash is brittle** — see plan 012's entry above.
+- **`audioTracks` has no eviction.** Cached audio and its stored blobs accumulate with no
+  TTL. kitcn's `scheduling` feature is the natural home.
+- **SSRF: DNS rebinding and redirect-following remain open** by design — see plan 011.
 
 ## kitcn optimisation findings (2026-08-28)
 
@@ -248,6 +262,30 @@ action, which cannot be internalized — it is the app's front door):
   `ttlSeconds` clamped to Cloudflare's 60s floor. The record's own `expires` field still
   enforces the true 15-minute cutoff — verified unchanged after a failed attempt.
   Superseded by plan 008 along with the rest of the hand-rolled auth surface.
+
+- **012 — DONE**, merged as `ac7dbc9`, with a follow-up CSP fix in `0d60df3`. 55 tests.
+  Error boundary added (proved load-bearing by swapping in a passthrough and watching the
+  test fail); Convex pinned to exact `1.44.0`, which silences kitcn's version warning.
+  **The important finding — security headers never reached the page.** Cloudflare serves
+  files matching `dist/` directly and never invokes `src/worker.ts`, so the HSTS,
+  `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` headers set there had
+  applied only to `/api/*` and `/r/:id` since the first commit. Verified against live
+  production before and after. The executor found this by distrusting its own clean
+  result — "zero violations" being suspiciously easy — and refused to mark the step done
+  because that "would misrepresent the security posture achieved". Fixed with
+  `public/_headers`, which Vite copies into `dist/` so it applies to bypassed asset
+  responses. The Worker keeps its own copy for the routes it does handle.
+  **Incident: the first CSP broke production for about five minutes.** The policy I wrote
+  blocked the Google Fonts stylesheet, the inline HTTPS-redirect script in `index.html`,
+  and Cloudflare's analytics beacon. It passed typecheck, tests and build; only a real
+  browser against the deployed site revealed it. Fixed by allowing
+  `https://fonts.googleapis.com` (style-src), `https://fonts.gstatic.com` (font-src),
+  `https://static.cloudflareinsights.com` (script-src), and the inline script by **sha256
+  hash** rather than `'unsafe-inline'` — so script injection stays blocked.
+  **Standing hazard**: that hash is of the inline script in `index.html`. Editing that
+  script by one character silently stops the HTTPS redirect from running. `public/_headers`
+  documents how to recompute it. Moving the script to an external file would remove the
+  hazard and is worth its own plan.
 
 ## Architecture decision (operator, 2026-08-28)
 
