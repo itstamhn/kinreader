@@ -5,16 +5,6 @@ import { sendMagicLinkEmail } from './lib/autosend';
 interface MagicLinkBody { email?: string; autosendApiKey?: string }
 interface VerifyBody { email?: string; code?: string; token?: string }
 type AuthRecord = { code: string; token: string; expires: number; name?: string; avatar?: string };
-interface TtsBody {
-  text?: string;
-  provider?: string;
-  sonioxApiKey?: string;
-  groqApiKey?: string;
-  sonioxVoice?: string;
-  speed?: number;
-  apiKey?: string;
-  voiceId?: string;
-}
 
 export const app = new Spiceflow()
   // Health Check
@@ -229,264 +219,6 @@ export const app = new Spiceflow()
     }
   })
 
-  // 2. TTS Generation (Supports Soniox v2 + Groq Whisper, ElevenLabs, or Browser Fallback)
-  .post('/api/tts', async ({ request }) => {
-    try {
-      const body = (await request.json()) as TtsBody;
-      const text = body.text?.trim();
-      const provider = body.provider || 'browser';
-
-      if (!text) {
-        return new Response(JSON.stringify({ error: 'Text is required' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      const env = ((request as any).env || (typeof process !== 'undefined' ? process.env : {})) || {};
-
-      const MAX_TTS_CHARS = 4000;
-      if (text.length > MAX_TTS_CHARS) {
-        return new Response(
-          JSON.stringify({ error: `Text exceeds the ${MAX_TTS_CHARS} character limit` }),
-          { status: 413, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const sonioxApiKeyPresent = Boolean(body.sonioxApiKey || env.SONIOX_API_KEY);
-      const willCallPaidProvider =
-        provider === 'elevenlabs' || ((provider === 'soniox' || provider === 'browser') && sonioxApiKeyPresent);
-
-      if (willCallPaidProvider) {
-        const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
-        const allowed = await checkRateLimit(env, `tts:${clientIp}`);
-        if (!allowed) {
-          return new Response(
-            JSON.stringify({ error: 'Rate limit exceeded. Please try again in a minute.' }),
-            { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '60' } }
-          );
-        }
-      }
-
-      // --- A. SONIOX TTS v2 + GROQ WHISPER ALIGNMENT ---
-      if (provider === 'soniox' || provider === 'browser') {
-        const sonioxApiKey = body.sonioxApiKey || env.SONIOX_API_KEY;
-        const groqApiKey = body.groqApiKey || env.GROQ_API_KEY;
-        const voice = body.sonioxVoice || 'Adrian';
-        const speed = body.speed || 1.0;
-
-        if (!sonioxApiKey) {
-          const rawWords = text.split(/\s+/).filter(Boolean);
-          let curTime = 0;
-          const wordTimings = rawWords.map((w: string) => {
-            const start = curTime;
-            const duration = Math.max(0.18, Math.min(0.55, w.length * 0.048));
-            const end = start + duration;
-            curTime = end;
-            return { text: w, start: round(start, 3), end: round(end, 3) };
-          });
-
-          return {
-            words: wordTimings,
-            duration: round(curTime, 3),
-            provider: 'browser',
-            message: 'Using native speech engine.',
-          };
-        }
-
-        try {
-          // 1. Generate Soniox TTS audio with 7s timeout
-          const sonioxRes = await fetch('https://tts-rt.soniox.com/tts', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${sonioxApiKey}`,
-              'Content-Type': 'application/json',
-            },
-            signal: AbortSignal.timeout(7000),
-            body: JSON.stringify({
-              text: text.slice(0, 4000),
-              model: 'tts-rt-v2',
-              language: 'en',
-              voice,
-              audio_format: 'mp3',
-              speed,
-              reduce_silence: false,
-            }),
-          });
-
-          if (!sonioxRes.ok) {
-            throw new Error(`Soniox returned ${sonioxRes.status}`);
-          }
-
-          const audioBuffer = await sonioxRes.arrayBuffer();
-          const base64Audio = arrayBufferToBase64(audioBuffer);
-
-          // 2. Word Timings via Groq Whisper or Linear Distribution
-          let words: Array<{ text: string; start: number; end: number }> = [];
-
-          if (groqApiKey) {
-            try {
-              const formData = new FormData();
-              const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
-              formData.append('file', audioBlob, 'audio.mp3');
-              formData.append('model', 'whisper-large-v3-turbo');
-              formData.append('response_format', 'verbose_json');
-              formData.append('timestamp_granularities[]', 'word');
-
-              const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${groqApiKey}` },
-                signal: AbortSignal.timeout(5000),
-                body: formData,
-              });
-
-              if (groqRes.ok) {
-                const groqData = await groqRes.json();
-                if (groqData.words && Array.isArray(groqData.words)) {
-                  words = groqData.words.map((w: any) => ({
-                    text: w.word.trim(),
-                    start: round(w.start, 3),
-                    end: round(w.end, 3),
-                  })).filter((w: any) => Boolean(w.text));
-                }
-              }
-            } catch {}
-          }
-
-          if (words.length === 0) {
-            const rawWords = text.split(/\s+/).filter(Boolean);
-            const estimatedTotalDuration = Math.max(1, rawWords.length * (0.28 / speed));
-            const timePerWord = estimatedTotalDuration / rawWords.length;
-            words = rawWords.map((w: string, idx: number) => ({
-              text: w,
-              start: round(idx * timePerWord, 3),
-              end: round((idx + 1) * timePerWord, 3),
-            }));
-          }
-
-          const lastWord = words[words.length - 1];
-          const totalDuration = words.length > 0 && lastWord ? lastWord.end : 0;
-
-          return {
-            audioBase64: base64Audio,
-            words,
-            duration: totalDuration,
-            provider: 'soniox',
-          };
-        } catch (err) {
-          // Fallback to instant browser speech
-          const rawWords = text.split(/\s+/).filter(Boolean);
-          let curTime = 0;
-          const wordTimings = rawWords.map((w: string) => {
-            const start = curTime;
-            const duration = Math.max(0.18, Math.min(0.55, w.length * 0.048));
-            const end = start + duration;
-            curTime = end;
-            return { text: w, start: round(start, 3), end: round(end, 3) };
-          });
-
-          return {
-            words: wordTimings,
-            duration: round(curTime, 3),
-            provider: 'browser',
-            warning: 'Speech synthesis fallback active.',
-          };
-        }
-      }
-
-      // --- B. ELEVENLABS WITH TIMESTAMPS ---
-      if (provider === 'elevenlabs') {
-        const apiKey = body.apiKey || process.env.ELEVENLABS_API_KEY;
-        const voiceId = body.voiceId || '21m00Tcm4TlvDq8ikWAM';
-
-        if (!apiKey) {
-          return new Response(JSON.stringify({ error: 'ElevenLabs API Key required' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/with-timestamps`, {
-          method: 'POST',
-          headers: {
-            'xi-api-key': apiKey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: text.slice(0, 5000),
-            model_id: 'eleven_turbo_v2_5',
-            voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-          }),
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`ElevenLabs API error: ${errText}`);
-        }
-
-        const data = await res.json();
-        const alignment = data.alignment;
-
-        const words: Array<{ text: string; start: number; end: number }> = [];
-        let currentWord = '';
-        let wordStart = 0;
-
-        for (let i = 0; i < alignment.characters.length; i++) {
-          const char = alignment.characters[i];
-          const start = alignment.character_start_times_seconds[i];
-          const end = alignment.character_end_times_seconds[i];
-
-          if (/\s/.test(char)) {
-            if (currentWord) {
-              words.push({ text: currentWord, start: round(wordStart, 3), end: round(end, 3) });
-              currentWord = '';
-            }
-          } else {
-            if (!currentWord) wordStart = start;
-            currentWord += char;
-          }
-        }
-        if (currentWord) {
-          const lastEnd = alignment.character_end_times_seconds.slice(-1)[0] || wordStart + 0.3;
-          words.push({ text: currentWord, start: round(wordStart, 3), end: round(lastEnd, 3) });
-        }
-
-        const lastWord = words[words.length - 1];
-        const totalDuration = words.length > 0 && lastWord ? lastWord.end : 0;
-
-        return {
-          audioBase64: data.audio_base64,
-          words,
-          duration: totalDuration,
-          provider: 'elevenlabs',
-        };
-      }
-
-      // --- C. FREE ON-DEVICE BROWSER SPEECH FALLBACK ---
-      const words = text.split(/\s+/).filter(Boolean);
-      let curTime = 0;
-      const wordTimings = words.map((w: string) => {
-        const start = curTime;
-        const duration = Math.max(0.18, Math.min(0.6, w.length * 0.05));
-        const end = start + duration;
-        curTime = end;
-        return { text: w, start: round(start, 3), end: round(end, 3) };
-      });
-
-      return {
-        words: wordTimings,
-        duration: round(curTime, 3),
-        provider: 'browser',
-      };
-    } catch (err: any) {
-      console.error('TTS error:', err);
-      return new Response(JSON.stringify({ error: err.message || 'TTS generation failed' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-  })
-
   // 3. Dynamic OpenGraph Image Generator (1200x630 Announcr-style Player Card)
   .get('/api/og', ({ request }) => {
     const urlObj = new URL(request.url);
@@ -638,10 +370,6 @@ export const app = new Spiceflow()
     });
   });
 
-function round(num: number, decimals: number = 3) {
-  return Number(Math.round(Number(num + 'e' + decimals)) + 'e-' + decimals);
-}
-
 function escapeHtml(input: string): string {
   return input
     .replace(/&/g, '&amp;')
@@ -658,18 +386,6 @@ function safeImageUrl(input: string): string {
     return escapeHtml(parsed.toString());
   } catch {
     return '';
-  }
-}
-
-async function checkRateLimit(env: any, key: string): Promise<boolean> {
-  // No binding (local `bun src/server.ts`, or tests) — allow.
-  if (!env?.TTS_RATE_LIMITER) return true;
-  try {
-    const { success } = await env.TTS_RATE_LIMITER.limit({ key });
-    return success;
-  } catch {
-    // Limiter unavailable — allow rather than break playback.
-    return true;
   }
 }
 
@@ -691,17 +407,6 @@ async function getAuthRecord(env: any, email: string): Promise<AuthRecord | null
 async function deleteAuthRecord(env: any, email: string): Promise<void> {
   if (!env.AUTH_CODES) return;
   await env.AUTH_CODES.delete(`auth:${email}`);
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode.apply(null, chunk as any);
-  }
-  return btoa(binary);
 }
 
 // Start Spiceflow standalone if executed directly

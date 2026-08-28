@@ -11,6 +11,9 @@ export const api = {
     articles: {
       extract: createApiLeaf<"action", typeof import("../routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../routers/articles").extract>("routers/articles:extract"), { type: "action" }),
     },
+    tts: {
+      synthesize: createApiLeaf<"action", typeof import("../routers/tts").synthesize>(createGeneratedFunctionReference<"action", "public", typeof import("../routers/tts").synthesize>("routers/tts:synthesize"), { type: "action" }),
+    },
   },
   _http: {
   },

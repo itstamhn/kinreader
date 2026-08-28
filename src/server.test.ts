@@ -10,20 +10,6 @@ test('GET /api/health returns 200 with status ok', async () => {
   expect(typeof data.timestamp).toBe('string');
 });
 
-test('POST /api/tts with an empty body returns 400', async () => {
-  const res = await app.handle(
-    new Request('http://localhost/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    })
-  );
-
-  expect(res.status).toBe(400);
-  const data = await res.json();
-  expect(data.error).toBe('Text is required');
-});
-
 // Extraction moved to a Convex action (convex/routers/articles.ts, plan 006).
 // The route is gone from this Spiceflow app entirely -- see
 // convex/routers/articles.test.ts for the "missing url" coverage that used
@@ -40,20 +26,34 @@ test('POST /api/extract no longer exists on the Spiceflow app (404, not 400)', a
   expect(res.status).toBe(404);
 });
 
-// Guard against plan 006's exact bug class recurring: /api/extract was
-// removed from src/server.ts (above), but the client still had three fetch
-// call sites and only one got migrated -- the other two silently 404'd
-// because nothing checked for stragglers. This scans every .ts/.tsx file
-// under src/ and fails if any of them still mentions the dead route, aside
-// from this file's own assertion above.
-test('no file under src/ references api/extract except this file\'s own 404 assertion', async () => {
+// TTS generation moved to a Convex action (convex/routers/tts.ts, plan 007),
+// including the rate limiting and 4000-char cap that used to live here --
+// see convex/routers/tts.test.ts for that coverage.
+test('POST /api/tts no longer exists on the Spiceflow app (404, not 400)', async () => {
+  const res = await app.handle(
+    new Request('http://localhost/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+  );
+
+  expect(res.status).toBe(404);
+});
+
+// Guard against plan 006's exact bug class recurring: a route was removed
+// from src/server.ts (above), but a client call site was missed and
+// silently 404'd because nothing checked for stragglers. This scans every
+// .ts/.tsx file under src/ and fails if any of them still mentions a dead
+// route, aside from this file's own assertions above.
+test('no file under src/ references api/extract or api/tts except this file\'s own 404 assertions', async () => {
   const glob = new Bun.Glob('**/*.{ts,tsx}');
   const offenders: string[] = [];
 
   for await (const relPath of glob.scan({ cwd: import.meta.dir })) {
     if (relPath === 'server.test.ts') continue; // this file -- permitted, see above
     const text = await Bun.file(`${import.meta.dir}/${relPath}`).text();
-    if (text.includes('api/extract')) {
+    if (text.includes('api/extract') || text.includes('api/tts')) {
       offenders.push(relPath);
     }
   }
@@ -121,99 +121,6 @@ test('GET /api/og allows a legitimate https image URL through as an href', async
 
   const body = await res.text();
   expect(body).toContain('href="https://example.com/a.png"');
-});
-
-// --- Rate limiting / size cap on POST /api/tts (plan 005) ---
-
-function ttsRequest(body: Record<string, unknown>, env?: any, headers?: Record<string, string>): Request {
-  const request = new Request('http://localhost/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-  });
-  if (env !== undefined) {
-    (request as any).env = env;
-  }
-  return request;
-}
-
-test('POST /api/tts with text over 4000 chars returns 413', async () => {
-  const res = await app.handle(ttsRequest({ text: 'a'.repeat(5000) }));
-
-  expect(res.status).toBe(413);
-  const data = await res.json();
-  expect(typeof data.error).toBe('string');
-});
-
-test('POST /api/tts with text at exactly 4000 chars is not rejected as oversized', async () => {
-  const res = await app.handle(ttsRequest({ text: 'a'.repeat(4000) }));
-
-  expect(res.status).not.toBe(413);
-});
-
-test('POST /api/tts returns 429 with Retry-After when the limiter denies a paid request', async () => {
-  const env = {
-    SONIOX_API_KEY: 'fake-soniox-key',
-    TTS_RATE_LIMITER: { limit: async () => ({ success: false }) },
-  };
-  const res = await app.handle(
-    ttsRequest({ text: 'hello world', provider: 'soniox' }, env, { 'cf-connecting-ip': '1.2.3.4' })
-  );
-
-  expect(res.status).toBe(429);
-  expect(res.headers.get('Retry-After')).toBe('60');
-  const data = await res.json();
-  expect(typeof data.error).toBe('string');
-});
-
-test('POST /api/tts proceeds (not 429) when the limiter allows a paid request', async () => {
-  const env = {
-    TTS_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  };
-  const res = await app.handle(
-    ttsRequest({ text: 'hello world', provider: 'elevenlabs' }, env, { 'cf-connecting-ip': '1.2.3.4' })
-  );
-
-  expect(res.status).not.toBe(429);
-});
-
-test('POST /api/tts free browser path is never limited', async () => {
-  const env = {
-    // No SONIOX_API_KEY anywhere, so this request cannot spend money — it must
-    // never be subject to the limiter, even if the limiter would deny it.
-    TTS_RATE_LIMITER: { limit: async () => ({ success: false }) },
-  };
-  const res = await app.handle(
-    ttsRequest({ text: 'hello world', provider: 'browser' }, env, { 'cf-connecting-ip': '1.2.3.4' })
-  );
-
-  expect(res.status).toBe(200);
-  const data = await res.json();
-  expect(data.provider).toBe('browser');
-});
-
-test('POST /api/tts fails open (proceeds, not 429) when the limiter throws', async () => {
-  const env = {
-    TTS_RATE_LIMITER: {
-      limit: async () => {
-        throw new Error('limiter unavailable');
-      },
-    },
-  };
-  const res = await app.handle(
-    ttsRequest({ text: 'hello world', provider: 'elevenlabs' }, env, { 'cf-connecting-ip': '1.2.3.4' })
-  );
-
-  expect(res.status).not.toBe(429);
-});
-
-test('POST /api/tts proceeds (not 429) when no TTS_RATE_LIMITER binding is present', async () => {
-  const env = {};
-  const res = await app.handle(
-    ttsRequest({ text: 'hello world', provider: 'elevenlabs' }, env, { 'cf-connecting-ip': '1.2.3.4' })
-  );
-
-  expect(res.status).not.toBe(429);
 });
 
 // --- Server-side token verification against KV-backed auth store (plan 003) ---
