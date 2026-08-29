@@ -25,6 +25,9 @@ the table when done.
 | 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | DONE |
 | 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | DONE |
 | 015 | Align the backend with kitcn's expected project layout | P2 | M | 013 | DONE |
+| 016 | Make `/r/:id` a real share feature, backed by a store not a query string | P3 | M | 015 | TODO |
+| 017 | `apps/mobile` — the Expo app, and the shared core it forces out | P3 | XL | 015, 008 | TODO |
+| 018 | Stop mirroring the speech engine into React (two live bugs) | P2 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -546,3 +549,52 @@ are not re-audited from scratch next session.
   silently skips** — Workers Static Assets rejects absolute URLs in that file ("Only
   relative URLs are allowed"). It has been removed. www serves the same site with a
   canonical link to the apex; a real 301 needs a Cloudflare Redirect Rule in the dashboard.
+
+- **008 — reviewed after the fact, and the authorization fix is real.** That was the whole
+  point of the plan, so it was checked rather than assumed. `getCurrentUser`,
+  `getUserPlaylist`, `saveUserProgress` and `deleteUserArticle` accept no user identifier at
+  all — the first two are literally `z.object({})` — and resolve identity through
+  `ctx.auth.getUserIdentity()`. Writes are scoped to the resolved id (`q.eq('userId',
+  user._id)` on lookup, `userId: user._id` on insert), so a caller cannot reach another
+  user's container. `upsertUser`, which minted a 30-day session token for any email with no
+  verification, is gone. `users.test.ts` carries the negative case the plan demanded:
+  *cross-user isolation: Bob cannot view or modify Alice playlist*.
+
+  Web tests dropping 49 → 29 is correct, not a regression: 009 deleted `server.test.ts`
+  along with `server.ts`, and that file held the entire magic-link and OAuth suite.
+
+  **One follow-up, not a blocker.** `users.ts` uses `ctx.db` in all eight data accesses and
+  `ctx.orm` in none. kitcn's own skill is explicit that `ctx.orm` enforces constraints and
+  RLS while `ctx.db` bypasses them, so authorization here is correct *by hand* in each
+  procedure rather than by construction — its safety depends on every future procedure
+  remembering to call `resolveAuthUser`. Related: `resolveAuthUser` types both `ctx.db` and
+  its index callbacks as `any`, which erodes type safety in the one function every
+  authorization decision passes through.
+
+- **018 — DONE.** Executed by a subagent against an older base, reviewed, and transplanted
+  onto `main` once 008/009 had landed — both of its bugs were still live there
+  (`}, [isRampEnabled]` on the engine-construction effect, and `currentTime` in the keyboard
+  effect's deps). One conflict during the transplant, in `App.tsx`: the 018 branch still
+  carried the `localStorage` auth handlers that 008 deleted. Resolved in main's favour on
+  auth, 018's on playback.
+
+  Seven mirrored `useState`s are gone, `engine.rate` is written in exactly one place, and
+  playback is read through `useSyncExternalStore`. **The guard test was verified rather than
+  trusted** — sabotaging `getSnapshot` to allocate per call fails it, which matters because
+  that bug presents as an infinite render loop rather than an error. A failed TTS synthesis
+  now says so in the controls instead of silently changing the voice.
+
+  Three plan inaccuracies the executor found, all worth avoiding next time: a verify command
+  that errors as written (`grep -c` on a directory without `-r`); a Step 3 snippet that
+  passed `engine.subscribe` to a hook at render time while the plan's own "Current state"
+  described the engine being built inside an effect (resolved with lazy ref initialization);
+  and no guidance on where the initial rate assignment goes once the engine leaves that
+  effect.
+
+  Known and accepted: `PlaybackStatus`'s `'error'` member is unreachable — no path in
+  `loadArticleContent` produces "nothing playable", since the on-device fallback always
+  succeeds.
+
+- **A process note worth keeping: 015 was implemented twice**, once on a branch and once on
+  `main`. Main's is canonical and the branch copy was abandoned. Cheap lesson, easy to
+  repeat: agree who holds a plan before work starts on it.
