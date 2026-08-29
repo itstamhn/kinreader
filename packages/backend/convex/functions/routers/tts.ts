@@ -3,6 +3,7 @@ import { action } from '../crpc';
 import { internal } from '../_generated/api';
 import { env } from '../_generated/server';
 import type { Doc, Id } from '../_generated/dataModel';
+import { splitTextIntoSonioxChunks } from '../../shared/soniox';
 
 // Ported from src/server.ts's `POST /api/tts` handler (plan 005's guards
 // included). The route is removed from Spiceflow in the same change that
@@ -14,6 +15,7 @@ import type { Doc, Id } from '../_generated/dataModel';
 // capped below rather than letting the insert throw.
 const MAX_TTS_CHARS = 50000;
 const MAX_WORDS = 8192;
+const MAX_SONIOX_REST_SYNTH_CHARS = 900;
 
 type WordTiming = { text: string; start: number; end: number };
 
@@ -68,59 +70,26 @@ function linearWordTimings(text: string, speed = 1.0): { words: WordTiming[]; du
   return { words, duration: round(curTime) };
 }
 
-const MAX_SONIOX_CHUNK_CHARS = 450;
-const MAX_SONIOX_SYNTH_CHARS = 900;
-
-function splitTextIntoSonioxChunks(fullText: string, maxChunkSize = MAX_SONIOX_CHUNK_CHARS): string[] {
-  let textToSynthesize = fullText.trim();
-  if (textToSynthesize.length > MAX_SONIOX_SYNTH_CHARS) {
-    const rawSlice = textToSynthesize.slice(0, MAX_SONIOX_SYNTH_CHARS);
-    const lastBoundary = Math.max(
-      rawSlice.lastIndexOf('. '),
-      rawSlice.lastIndexOf('! '),
-      rawSlice.lastIndexOf('? '),
-      rawSlice.lastIndexOf('.\n'),
-      rawSlice.lastIndexOf('\n')
-    );
-    textToSynthesize = lastBoundary > 300 ? rawSlice.slice(0, lastBoundary + 1).trim() : rawSlice.trim();
+// The WebSocket transport streams the complete accepted article. The legacy
+// REST fallback remains intentionally capped until its compatibility path can
+// be retired, so it cannot accidentally regain the browser transport's cost
+// profile.
+function splitTextIntoRestSonioxChunks(fullText: string): string[] {
+  const trimmed = fullText.trim();
+  if (trimmed.length <= MAX_SONIOX_REST_SYNTH_CHARS) {
+    return splitTextIntoSonioxChunks(trimmed);
   }
 
-  if (textToSynthesize.length <= maxChunkSize) {
-    return [textToSynthesize];
-  }
-
-  const chunks: string[] = [];
-  const sentences = textToSynthesize.match(/[^.!?\n]+[.!?\n]+(?:\s+|$)|[^.!?\n]+$/g) || [textToSynthesize];
-  let curChunk = '';
-
-  for (const rawSent of sentences) {
-    const sent = rawSent.trim();
-    if (!sent) continue;
-
-    if ((curChunk + ' ' + sent).trim().length <= maxChunkSize) {
-      curChunk = curChunk ? curChunk + ' ' + sent : sent;
-    } else {
-      if (curChunk) {
-        chunks.push(curChunk.trim());
-        curChunk = '';
-      }
-      if (sent.length <= maxChunkSize) {
-        curChunk = sent;
-      } else {
-        const words = sent.split(/\s+/);
-        for (const w of words) {
-          if ((curChunk + ' ' + w).trim().length <= maxChunkSize) {
-            curChunk = curChunk ? curChunk + ' ' + w : w;
-          } else {
-            if (curChunk) chunks.push(curChunk.trim());
-            curChunk = w;
-          }
-        }
-      }
-    }
-  }
-  if (curChunk) chunks.push(curChunk.trim());
-  return chunks.filter(Boolean);
+  const rawSlice = trimmed.slice(0, MAX_SONIOX_REST_SYNTH_CHARS);
+  const lastBoundary = Math.max(
+    rawSlice.lastIndexOf('. '),
+    rawSlice.lastIndexOf('! '),
+    rawSlice.lastIndexOf('? '),
+    rawSlice.lastIndexOf('.\n'),
+    rawSlice.lastIndexOf('\n')
+  );
+  const cappedText = lastBoundary > 300 ? rawSlice.slice(0, lastBoundary + 1).trim() : rawSlice.trim();
+  return splitTextIntoSonioxChunks(cappedText);
 }
 
 type TemporaryKeyResult = { apiKey: string; expiresAt: string };
@@ -328,7 +297,7 @@ export const synthesize = action
       // Split text into natural chunks (~450 chars) and synthesize sequentially
       // to respect Soniox single-session concurrency limit, then concatenate into
       // a single continuous MP3 audio buffer.
-      const textChunks = splitTextIntoSonioxChunks(text, 450);
+      const textChunks = splitTextIntoRestSonioxChunks(text);
       const chunkBuffers: ArrayBuffer[] = [];
 
       for (const chunk of textChunks) {

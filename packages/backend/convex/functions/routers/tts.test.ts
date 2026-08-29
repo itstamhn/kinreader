@@ -119,6 +119,31 @@ test('cache miss stores exactly one file and inserts exactly one audioTracks row
   expect(tracks.length).toBe(1);
 });
 
+test('REST synthesis keeps its legacy 900-character fallback cap while WebSocket chunking stays uncapped', async () => {
+  const t = convexTest(schema, modules);
+  const sonioxTexts: string[] = [];
+  stubFetch((url, init) => {
+    if (url === 'https://tts-rt.soniox.com/tts') {
+      sonioxTexts.push(JSON.parse(String(init?.body)).text);
+      return fakeSonioxResponse();
+    }
+    throw new Error(`Unexpected live network call in test: ${url}`);
+  });
+
+  const text = 'x '.repeat(500).trim();
+  await t.action(api.routers.tts.synthesize, {
+    url: 'https://example.com/rest-fallback-cap',
+    title: 'REST fallback cap',
+    text,
+    voice: 'Adrian',
+    speed: 1,
+    sonioxApiKey: 'fake-soniox-key',
+    clientId: 'client-rest-cap',
+  });
+
+  expect(sonioxTexts.join(' ').length).toBeLessThanOrEqual(900);
+});
+
 test('cache hit returns the stored audio, performs no provider fetch, and consumes neither rate limiter', async () => {
   const t = convexTest(schema, modules);
   defaultProviderStub([{ word: 'hi', start: 0, end: 0.2 }]);
