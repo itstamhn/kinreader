@@ -192,3 +192,30 @@ Existing non-failing React `act(...)`, intentional network-fallback, and SourceB
 - Missing, wrong, expired, and reused grants leave article/track counts unchanged from their pre-call state.
 - Replacement deletes the previous object only after the track row points at the new object and an indexed read proves no remaining reference exists.
 - Persistence remains best-effort after the completed WebSocket Blob is playable, and REST/browser fallbacks remain intact.
+
+## Round 2 review fix — abandoned grant cleanup
+
+### RED
+
+Added a real Convex issuance regression with 35 expired grants and two live grants. The expected behavior was a bounded cleanup of 32 expired rows, preservation of both live rows, and successful creation/allocation of the new grant.
+
+```sh
+cd packages/backend
+bun test convex/functions/routers/tts.test.ts --test-name-pattern 'successful issuance removes at most 32 expired grants'
+```
+
+Result before implementation: **0 passed, 1 failed**. The assertion expected 3 expired grants to remain but observed all 35, proving the indexed expiry field was unused and abandoned grants accumulated.
+
+### GREEN
+
+- `issueTrackUploadGrant` now runs an indexed `by_expires_at` range query with `expiresAt <= now`, takes at most 32 rows, and deletes only that bounded batch.
+- Cleanup runs after both existing limiter checks and before inserting the new grant. The public upload allocation still runs only after successful issuance, so the existing allocation-call spy remains load-bearing.
+- Live grants are outside the index range and remain untouched. Repeated successful issuances drain a larger expired backlog in bounded batches.
+
+Verification:
+
+- Focused cleanup regression: **1 passed, 0 failed, 5 assertions**.
+- Full TTS backend file: **25 passed, 0 failed, 107 assertions**.
+- Backend `bun run typecheck`: passed with zero errors.
+- `npx convex dev --once --typecheck=disable --codegen=disable`: local-anonymous deployment accepted the functions (`Convex functions ready!`).
+- `git diff --check`: passed.

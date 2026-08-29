@@ -52,6 +52,7 @@ export const consumeTtsRateLimit = internalMutation({
 });
 
 const TRACK_UPLOAD_GRANT_TTL_MS = 10 * 60 * 1000;
+const MAX_EXPIRED_GRANTS_CLEANED_PER_ISSUANCE = 32;
 
 export const issueTrackUploadGrant = internalMutation({
   args: {
@@ -81,6 +82,14 @@ export const issueTrackUploadGrant = internalMutation({
     if (duplicate) throw new Error('Duplicate track upload grant');
 
     if (!(await consumeTtsRateLimits(ctx, args.key, 'trackUpload'))) return { ok: false as const };
+
+    const expiredGrants = await ctx.db
+      .query('ttsUploadGrants')
+      .withIndex('by_expires_at', (q) => q.lte('expiresAt', now))
+      .take(MAX_EXPIRED_GRANTS_CLEANED_PER_ISSUANCE);
+    for (const expiredGrant of expiredGrants) {
+      await ctx.db.delete(expiredGrant._id);
+    }
 
     await ctx.db.insert('ttsUploadGrants', {
       token: args.token,

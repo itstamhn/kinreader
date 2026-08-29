@@ -238,6 +238,43 @@ test('track upload issuance returns distinct 256-bit capabilities with bounded e
   expect(grants.map((grant) => grant.token).sort()).toEqual([first.grant, second.grant].sort());
 });
 
+test('successful issuance removes at most 32 expired grants and preserves every live grant', async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 35; index += 1) {
+      await ctx.db.insert('ttsUploadGrants', {
+        token: `expired-grant-${index}`,
+        expiresAt: now - 1,
+        createdAt: now - 60_000,
+      });
+    }
+    await ctx.db.insert('ttsUploadGrants', {
+      token: 'live-grant-a',
+      expiresAt: now + 60_000,
+      createdAt: now,
+    });
+    await ctx.db.insert('ttsUploadGrants', {
+      token: 'live-grant-b',
+      expiresAt: now + 120_000,
+      createdAt: now,
+    });
+  });
+
+  const issued = await issueTrackUploadGrant(t, 'cleanup-issuer');
+  const grants = await t.run(async (ctx) => ctx.db.query('ttsUploadGrants').collect());
+  const expired = grants.filter((grant) => grant.expiresAt <= now);
+  const liveTokens = grants
+    .filter((grant) => grant.expiresAt > now)
+    .map((grant) => grant.token);
+
+  expect(expired).toHaveLength(3);
+  expect(liveTokens).toContain('live-grant-a');
+  expect(liveTokens).toContain('live-grant-b');
+  expect(liveTokens).toContain(issued.grant);
+  expect(issued.uploadUrl).toStartWith('https://some-deployment.convex.cloud/api/storage/');
+});
+
 test('track upload allocation is unreachable when capability issuance is rate denied', async () => {
   const ttsModule = await import('./tts');
   let allocationCalls = 0;
