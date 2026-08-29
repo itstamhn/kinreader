@@ -23,13 +23,19 @@ the table when done.
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
 | 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | TODO |
+| 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
 
-**Note on 009**: re-plan it after the Astro marketing app exists. Its two remaining routes
-(`/r/:id`, `/api/og`) are a share page and an OG card built as escaped HTML strings —
-static-site-generator work, not Worker work. See plan 013, "What this sets up".
+**Note on 009**: plan 014 takes over most of it — `/r/:id` and `/api/og` move to the Astro
+app on the apex, because the domain split forces it. What remains of 009 after 014 is
+"delete Spiceflow and `src/server.ts`", which needs plan 008 (auth to Convex) first.
+
+**Two follow-ups owed by 014**, both currently invisible failures: the OG card is an SVG,
+which X and Facebook do not render, so social cards almost certainly do not appear at all;
+and `/r/:id` is half-built — nothing generates those links and nothing handles the
+`?read=` it redirects to.
 
 ## Execution log
 
