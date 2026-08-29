@@ -110,7 +110,7 @@ For more information, read the Bun API docs in `node_modules/bun-types/docs/**.m
 This project uses [Convex](https://convex.dev) as its backend.
 
 When working on Convex code, **always read
-`convex/_generated/ai/guidelines.md` first** for important guidelines on
+`packages/backend/convex/_generated/ai/guidelines.md` first** for important guidelines on
 how to correctly use Convex APIs and patterns. The file contains rules that
 override what you may have learned about Convex from training data.
 
@@ -118,3 +118,22 @@ Convex agent skills for common tasks can be installed by running
 `npx convex ai-files install`.
 
 <!-- convex-ai-end -->
+
+## Repo layout
+
+A Bun workspace. Run commands from the directory that owns the config:
+
+| Path | Package | What it is | Commands |
+|------|---------|-----------|----------|
+| `apps/web` | `@kinreader/web` | The Vite SPA and the Cloudflare Worker (auth, share routes) | `bun run dev`, `vite build`, `bunx wrangler deploy` |
+| `packages/backend` | `@kinreader/backend` | Convex functions — the shared API for every client | `bunx convex dev`, `bunx kitcn codegen` |
+
+From the repo root, `bun run typecheck`, `bun run test` and `bun run build` fan out to
+every package via `bun run --filter`. **`bun test` at the root does not work** — the
+happy-dom preload lives in `apps/web/bunfig.toml`, so run `bun run test` instead, or
+`bun test` from inside a package.
+
+The web app imports the backend as `@kinreader/backend/api`, never by relative path.
+
+Planned but not yet present: `apps/marketing` (Astro) and `apps/mobile` (Expo). See
+`plans/013` and `plans/014`.

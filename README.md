@@ -22,52 +22,66 @@ A personal audio-visual speed-reader web app inspired by **Announcr.fm** and mod
 
 ## Quick Start
 
-### 1. Run in Development
-From the project folder (`/Users/tambot/Projects/kinetic-reader`):
-
 ```bash
-bun run dev
+bun install          # from the repo root — this is a Bun workspace
+bun run dev          # Vite on :3000, the Spiceflow API on :3008
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3000](http://localhost:3000).
+
+Convex runs from its own package:
+
+```bash
+cd packages/backend && bunx convex dev
+```
 
 ---
 
 ## How to Install on iPhone (Full Screen App)
 
-1. Run the dev server on your local network (`bun run dev -- --host`) or deploy to Cloudflare Workers / Vercel.
+1. Run the dev server on your local network (`cd apps/web && bun run dev:web -- --host`)
+   or deploy to Cloudflare Workers.
 2. Open the URL in **Safari on your iPhone**.
 3. Tap the **Share button** (square with an arrow pointing up).
 4. Select **"Add to Home Screen"**.
-5. The app will launch with a custom app icon in standalone full-screen mode without browser bars.
+5. The app launches with a custom icon in standalone full-screen mode without browser bars.
 
 ---
 
 ## Project Structure
 
+A Bun workspace. Each package owns its own config and is deployed on its own.
+
 ```
-kinetic-reader/
-├── src/
-│   ├── server.ts                 # Spiceflow API backend (Extract & TTS endpoints)
-│   ├── App.tsx                   # Main reader state & layout container
-│   ├── types.ts                  # TypeScript interfaces
-│   ├── index.css                 # Tailwind CSS 4 styles & glow effects
-│   ├── main.tsx                  # React entry point
-│   ├── components/
-│   │   ├── Header.tsx            # Author metadata, branding, and modals
-│   │   ├── MediaCard.tsx         # Infographic/diagram viewer with lightbox
-│   │   ├── KineticDisplay.tsx    # 60fps word-by-word synchronized RSVP reader
-│   │   ├── Controls.tsx          # Play/pause, speed toggle, scrubber, & ETA
-│   │   ├── UrlInputModal.tsx     # URL extractor & quick-demo loader
-│   │   └── SettingsModal.tsx     # Voice engine & ElevenLabs API key settings
-│   └── utils/
-│       └── speechEngine.ts       # Audio synchronization & speech boundary manager
-├── public/
-│   ├── manifest.json             # PWA manifest
-│   └── icon.svg                  # Vector app icon
-├── vite.config.ts                # Vite & Spiceflow proxy config
-└── package.json
+kinreader/
+├── apps/
+│   └── web/                        # @kinreader/web — the reader
+│       ├── index.html
+│       ├── vite.config.ts          # Vite + the /api proxy to :3008
+│       ├── wrangler.jsonc          # Cloudflare Worker + static assets
+│       ├── bunfig.toml             # happy-dom preload for the web tests
+│       ├── public/
+│       │   ├── manifest.json       # PWA manifest
+│       │   └── _headers            # CSP + security headers for static assets
+│       └── src/
+│           ├── worker.ts           # Cloudflare entry: HTTPS redirect, headers, routing
+│           ├── server.ts           # Spiceflow: /api/auth/*, /api/og, /r/:id
+│           ├── App.tsx             # reader state & layout
+│           ├── types.ts
+│           ├── components/         # Header, KineticDisplay, Controls, modals, drawer
+│           ├── lib/                # convex client, storage, autosend
+│           └── utils/speechEngine.ts
+├── packages/
+│   └── backend/                    # @kinreader/backend — the shared API
+│       └── convex/                 # articles + tts routers, schema, kitcn cRPC
+├── plans/                          # implementation plans and their execution log
+├── tsconfig.base.json
+└── package.json                    # workspace root
 ```
+
+Root scripts fan out with `bun run --filter`: `bun run typecheck`, `bun run test`,
+`bun run build`. Note that a bare `bun test` at the root does **not** pick up
+`apps/web/bunfig.toml` — use `bun run test`.
 
 ---
 
@@ -76,7 +90,8 @@ kinetic-reader/
 Spiceflow is built from the ground up for edge runtimes:
 
 ```bash
-bunx wrangler deploy
+cd apps/web && bunx wrangler deploy          # the reader + its Worker
+cd packages/backend && bunx convex deploy    # the backend
 ```
 
 ---

@@ -7,7 +7,7 @@ import {
   getConvexQueryClientSingleton,
   getQueryClientSingleton,
 } from 'kitcn/react';
-import { api } from '../../convex/shared/api';
+import { api } from '@kinreader/backend/api';
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL!);
 

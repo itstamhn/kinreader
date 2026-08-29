@@ -22,7 +22,7 @@ the table when done.
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
-| 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | TODO |
+| 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | DONE |
 | 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
@@ -414,3 +414,16 @@ are not re-audited from scratch next session.
 - **Share links are cosmetic.** `/r/:id` renders a rich card, but `id` only becomes
   `?read=` and nothing resolves it — a recipient cannot actually open the shared
   article.
+
+- **013 — DONE**. Every move recorded as a rename; test count conserved exactly
+  (79 = 56 web + 23 backend), typecheck and build green. Two things worth knowing:
+  1. Bun links workspace packages into the *consuming* package's `node_modules`
+     (`apps/web/node_modules/@kinreader/backend`), not the root's. `ls node_modules` at
+     the root shows nothing — that is normal, not a broken install.
+  2. The web CSS bundle shrank 50181 → 49845 bytes. Investigated by building the previous
+     commit in a worktree and diffing selector sets: the only classes lost are `.block`,
+     `.contents`, `.grow`, `.invisible`, `.isolate`, `.outline`, `.table` and `.visible` —
+     bare utilities Tailwind had been generating because it scanned the whole repo root,
+     including the prose in `plans/*.md`. No source file uses any of them (the real
+     usages are `outline-none`, `overflow-visible` and `sm:block`, all still present).
+     Scoping Tailwind to `apps/web` removed junk, it did not drop a style.

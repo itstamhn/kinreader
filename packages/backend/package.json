@@ -1,0 +1,26 @@
+{
+  "name": "@kinreader/backend",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": "./convex/shared/api.ts",
+    "./dataModel": "./convex/_generated/dataModel.d.ts"
+  },
+  "scripts": {
+    "dev": "convex dev",
+    "deploy": "convex deploy",
+    "codegen": "kitcn codegen",
+    "typecheck": "tsc --noEmit -p convex/tsconfig.json",
+    "test": "bun test convex/"
+  },
+  "dependencies": {
+    "convex": "1.44.0",
+    "kitcn": "^0.32.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "convex-test": "^0.0.56",
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

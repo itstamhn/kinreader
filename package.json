@@ -1,43 +1,14 @@
 {
-  "name": "kinetic-reader",
-  "module": "index.ts",
-  "dependencies": {
-    "@tanstack/react-query": "^5.102.8",
-    "convex": "1.44.0",
-    "kitcn": "^0.32.1",
-    "lucide-react": "^1.34.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "spiceflow": "^1.18.0",
-    "zod": "^4.4.3"
+  "name": "kinreader",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter '@kinreader/web' dev",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun run --filter '*' test",
+    "build": "bun run --filter '*' build"
   },
   "devDependencies": {
-    "@happy-dom/global-registrator": "^20.11.12",
-    "@tailwindcss/vite": "^4.3.3",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/react": "^16.3.3",
-    "@types/bun": "latest",
-    "@types/node": "^26.4.0",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
-    "@vitejs/plugin-react": "^6.1.1",
-    "concurrently": "^10.0.5",
-    "convex-test": "^0.0.56",
-    "happy-dom": "^20.11.12",
-    "tailwindcss": "^4.3.3",
-    "typescript": "^5",
-    "vite": "^8.2.2",
-    "wrangler": "^4.127.0"
-  },
-  "private": true,
-  "scripts": {
-    "dev": "concurrently -n \"api,web\" -c \"magenta,cyan\" \"bun --watch src/server.ts\" \"vite\"",
-    "dev:api": "bun --watch src/server.ts",
-    "dev:web": "vite",
-    "build": "vite build",
-    "start": "bun src/server.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test"
-  },
-  "type": "module"
+    "typescript": "^5"
+  }
 }
