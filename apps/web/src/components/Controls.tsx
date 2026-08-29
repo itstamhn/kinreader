@@ -9,6 +9,7 @@ import {
   Volume2,
   Sparkles,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
 
 interface ControlsProps {
@@ -25,7 +26,10 @@ interface ControlsProps {
   sourceType?: 'x' | 'article' | 'text';
   viewMode?: 'kinetic' | 'full';
   onToggleViewMode?: () => void;
-  isLoadingAudio?: boolean;
+  isSynthesizing?: boolean;
+  // Neural synthesis failed and playback fell back to the on-device voice.
+  // Surfaced explicitly rather than silently -- see plan 018, Step 4.
+  isDegraded?: boolean;
 }
 
 const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.2, 2.5, 3.0, 3.5];
@@ -44,7 +48,8 @@ export function Controls({
   sourceType,
   viewMode = 'kinetic',
   onToggleViewMode,
-  isLoadingAudio = false,
+  isSynthesizing = false,
+  isDegraded = false,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -100,6 +105,12 @@ export function Controls({
 
   return (
     <div className="w-full pb-safe pt-2 select-none border-t border-white/5 bg-[#0B0C10]/90 backdrop-blur-lg z-20">
+      {isDegraded && (
+        <div className="flex items-center justify-center gap-1.5 px-4 pb-1.5 text-[10.5px] font-sans text-[#ECEAE4]/45">
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          <span>Neural voice unavailable — using your device&apos;s voice instead</span>
+        </div>
+      )}
       {/* ── MOBILE CONTROLS (Design 3a: Thumb Zone) ── */}
       <div className="flex sm:hidden flex-col gap-3 px-4 pb-2">
         {/* Row 1: Timestamps & Waveform Seeker */}
@@ -141,7 +152,7 @@ export function Controls({
           </button>
 
           {/* 62px Amber Glow Play/Pause Circle */}
-          {isLoadingAudio ? (
+          {isSynthesizing ? (
             <div className="w-[62px] h-[62px] rounded-full glow-amber-btn flex items-center justify-center animate-pulse">
               <Loader2 className="w-6 h-6 animate-spin text-[#16130B]" />
             </div>
@@ -216,7 +227,7 @@ export function Controls({
             <span className="absolute text-[7px] font-mono font-bold pt-0.5">15</span>
           </button>
 
-          {isLoadingAudio ? (
+          {isSynthesizing ? (
             <div className="w-12 h-12 rounded-full glow-amber-btn flex items-center justify-center animate-pulse">
               <Loader2 className="w-5 h-5 animate-spin text-[#16130B]" />
             </div>
