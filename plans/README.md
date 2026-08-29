@@ -598,3 +598,15 @@ are not re-audited from scratch next session.
 - **A process note worth keeping: 015 was implemented twice**, once on a branch and once on
   `main`. Main's is canonical and the branch copy was abandoned. Cheap lesson, easy to
   repeat: agree who holds a plan before work starts on it.
+
+- **009's plan file was stale on `main` until now.** It still described moving `/api/og`
+  and `/r/:id` *into* the Worker — work that never happened, because plan 014 moved them to
+  the Astro app on the apex instead. Replaced with the rewritten version, so the record
+  matches what was actually built.
+
+  For the record, the rewrite put a real choice to the executor and it was answered:
+  Step 3 asked whether to keep a minimal Worker for the HTTP→HTTPS redirect or drop the
+  script entirely and let `_headers` plus Cloudflare's Always Use HTTPS carry it. **Option
+  (a) was taken** — `apps/web/src/worker.ts` survives, doing the redirect and nothing else,
+  with `worker.test.ts` covering it. That keeps the behaviour in code rather than in
+  dashboard configuration, which is the trade-off the plan named.

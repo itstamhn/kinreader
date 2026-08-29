@@ -1,142 +1,168 @@
-# Plan 009: Retire Spiceflow — move the two markup routes into the Worker and delete `src/server.ts`
+# Plan 009: Delete Spiceflow — every backend route lives on Convex
 
-> **Executor instructions**: Follow this plan step by step. Run every verification
-> command and confirm the expected result before moving on. If anything in the "STOP
-> conditions" section occurs, stop and report — do not improvise.
+> **Executor instructions**: Follow step by step. Run every verification command and
+> confirm the expected result before moving on. If a STOP condition occurs, stop and
+> report — do not improvise.
 >
-> **Drift check (run first)**: `git diff --stat fa9ed02..HEAD -- src/server.ts src/worker.ts package.json`
+> **Revised 2026-08-29 at commit `f5e5210`.** The original was written when `src/server.ts`
+> still held `/api/og` and `/r/:id` and planned to keep them in the Worker. Plan 014 moved
+> both to the Astro app on the apex, so this plan is now smaller and its goal is absolute:
+> **no application backend outside Convex.**
+>
+> **Drift check (run first)**: `git diff --stat f5e5210..HEAD -- apps/web/src/server.ts apps/web/src/worker.ts apps/web/wrangler.jsonc`
 
 ## Status
 
 - **Priority**: P3
-- **Effort**: M
-- **Risk**: MED
-- **Depends on**: 006, 007, 008 (all three)
+- **Effort**: S (it is a deletion — the work is in 008)
+- **Risk**: MED (removes the last hand-rolled auth surface; nothing may still call it)
+- **Depends on**: `plans/008` — this cannot start until auth is on Convex
 - **Category**: tech-debt
-- **Planned at**: commit `fa9ed02`, 2026-08-28
+- **Planned at**: commit `fa9ed02`, revised at `f5e5210`
 
 ## Why this matters
 
-This is the last step of "Convex replaces the Spiceflow backend". After 006, 007 and 008,
-`src/server.ts` holds exactly two routes — `GET /api/og` (an SVG card) and `GET /r/:id`
-(a share page) — and Spiceflow is a whole HTTP framework carried for two handlers that
-return static markup.
+The backend is spread across two runtimes for no remaining reason. Convex already owns
+article extraction (006) and TTS (007). Astro owns the two markup routes (014). What is
+left in Spiceflow is auth and a health check:
 
-These two must **not** move to Convex. They are tied to `kinreader.com`: `/r/:id` is the
-URL people paste into X and Slack, and `/api/og` is what those crawlers fetch to render
-the card. Convex HTTP actions serve from `<deployment>.convex.site`, and putting them on
-the apex domain would need a **Convex Pro plan** for custom domains. Cloudflare already
-serves that domain for free, and the operator's scope decision was explicit: Convex
-replaces the Spiceflow backend, not the hosting.
+```
+apps/web/src/server.ts
+  GET  /api/health                    ← a liveness probe for a Worker that will not exist
+  POST /api/auth/magic-link           ─┐
+  POST /api/auth/verify                │  plan 008 moves all four
+  GET  /api/auth/google                │  to Convex + Better Auth
+  GET  /api/auth/google/callback      ─┘
+```
 
-So the endgame is not "move everything to Convex" — it is: **data endpoints on Convex,
-two presentation routes as plain handlers in the Worker, no HTTP framework at all.**
+Once 008 lands, `server.ts` is an HTTP framework, a KV binding and a rate limiter carried
+for one health check. Deleting it is the point where "Convex is the API for every client"
+stops being an aspiration and becomes true — which is also what unblocks the mobile app
+(017) from having anything web-shaped to work around.
 
-## Current state (as it will be when this plan runs)
+## Current state
 
-- `src/worker.ts` — the Cloudflare entry point. Line 36 routes `/api` and `/r/` prefixes
-  into `app.handle(request)`; everything else is served from `env.ASSETS`. It already
-  does HTTPS redirection and sets HSTS, `nosniff`, `X-Frame-Options` and `Referrer-Policy`.
-- `src/server.ts` — after 006/007/008, only `/api/og` (currently at line 679) and
-  `/r/:id` (line 780) remain, plus the helpers `round`, `escapeHtml`, `safeImageUrl` and
-  `arrayBufferToBase64`.
-- `escapeHtml` and `safeImageUrl` are load-bearing security code from plan 004. They move
-  with the routes. **Their tests move too, and must keep passing.**
-- `arrayBufferToBase64` was only used by the TTS route; after 007 it is probably dead.
-- `spiceflow` is a runtime dependency in `package.json`.
+- `apps/web/src/server.ts` — the five routes above, plus the KV auth-record helpers, the
+  OAuth state-cookie helpers, `canonicalOrigin`, and the rate-limit wrapper.
+- `apps/web/src/worker.ts` — four jobs: the HTTP→HTTPS redirect, routing `/api` into
+  Spiceflow, serving static assets, and attaching security headers.
+- `apps/web/wrangler.jsonc` — `AUTH_CODES` KV namespace, `AUTH_RATE_LIMITER`, and
+  `APP_ORIGIN`, all of which exist only for auth.
+- `apps/web/src/lib/autosend.ts` — sends the magic-link email; called only from
+  `server.ts`.
+- `package.json` — `spiceflow` and `zod` as dependencies of `@kinreader/web`.
 
 ## Scope
 
-**In scope**: `src/worker.ts`, `src/server.ts` (delete), `src/server.test.ts` (retarget at
-the Worker), `package.json` (drop `spiceflow`), `vite.config.ts` (the `/api` dev proxy may
-no longer be needed).
+**In scope**: deleting `server.ts`, the Spiceflow dependency, the auth-only bindings, and
+whatever in `worker.ts` becomes dead.
 
-**Out of scope**: any behavioural change to the two routes. The HTML and SVG output must
-be byte-identical for identical input — this is a plumbing change. Also out of scope: the
-security headers in `src/worker.ts`, and any Convex work.
+**Out of scope**:
+
+- Moving auth. That is plan 008 and it must be finished and verified first.
+- The Astro app's routes. They are not Spiceflow and not affected.
+- Changing what the security headers say. Where they are set may change (see Step 3);
+  what they contain does not.
 
 ## Steps
 
-### Step 1: Reimplement the two routes as plain handlers
-
-Add a small router to `src/worker.ts` — a `URL` parse plus two branches is enough; do not
-introduce another framework. Move `escapeHtml`, `safeImageUrl` and `round` across
-unchanged. Preserve the exact response headers, including
-`Content-Type: image/svg+xml` and `Cache-Control: public, max-age=86400` on `/api/og`,
-and `text/html; charset=utf-8` on `/r/:id`.
-
-`/r/:id` currently gets its `id` from Spiceflow's `params`. Parse it from the pathname
-instead, and keep the existing `encodeURIComponent(id)` on the way into the refresh URL.
-
-**Verify**: `bun run typecheck` → exit 0.
-
-### Step 2: Retarget the tests at the Worker
-
-`src/server.test.ts` drives `app.handle(...)`. Point the surviving tests at the Worker's
-`fetch` export. **Every plan 004 XSS test must survive this move and still pass** — they
-are the regression suite for a real vulnerability.
-
-**Verify**: `bun test` → all pass, with the XSS cases present and passing.
-
-### Step 3: Delete `src/server.ts` and drop the dependency
+### Step 1: Confirm nothing still calls it
 
 ```bash
-rm src/server.ts
-bun remove spiceflow
+grep -rn "/api/auth" apps/ packages/          # expect: nothing outside tests
+grep -rn "/api/health" apps/ packages/        # expect: only server.ts + its test
 ```
 
-Check whether `vite.config.ts`'s `/api` → `localhost:3008` proxy and the `dev:api` /
-`start` scripts in `package.json` still make sense; the standalone Bun server at the
-bottom of `src/server.ts` disappears with the file.
+If anything in `apps/web/src` still calls `/api/auth/*`, **008 is not actually finished** —
+stop and go back to it. This grep is the gate, not a formality: a missed call site becomes
+a 404 in production and nowhere else, which is the exact failure plan 006 hit.
 
-**Verify**: `grep -rc "spiceflow" src/ package.json` → `0`. `bun run typecheck` → exit 0.
-`bun test` → all pass. `bun run build` → exit 0.
+### Step 2: Delete
 
-### Step 4: Confirm the deployed shape
+- `apps/web/src/server.ts` and `apps/web/src/server.test.ts`
+- `apps/web/src/lib/autosend.ts`, unless 008 kept it for Better Auth's mailer — check
+  before deleting
+- `spiceflow` from `apps/web/package.json` (keep `zod` if anything else uses it — grep)
+- `AUTH_CODES`, `AUTH_RATE_LIMITER` and `APP_ORIGIN` from `wrangler.jsonc`
 
-Run `bunx wrangler dev` and check by hand:
-- `/` serves the SPA.
-- `/api/og?title=Hello` returns SVG with `Content-Type: image/svg+xml`.
-- `/r/x?t=Hello` returns the share HTML.
-- `/api/og?title=<script>alert(1)</script>` is still escaped.
+`/api/health` goes with the file. It reports on a Worker that is about to stop having a
+backend; Convex has its own health surface.
 
-**Verify**: all four hold, and the escaping check shows no raw `<script>`.
+**Verify**: `bun run typecheck` exits 0. `bun run test` passes — with a smaller count, and
+the drop should equal exactly the tests in `server.test.ts`.
+
+### Step 3: Decide what the Worker is still for
+
+With `/api` gone, `worker.ts` has one job left that the platform does not already do:
+the HTTP→HTTPS redirect. Everything else is already handled elsewhere —
+
+- **Security headers**: `public/_headers` sets them, and plan 012 established that
+  Cloudflare serves matching assets **without invoking the Worker at all**, so the
+  Worker's copy has never applied to the page load.
+- **Asset serving**: `assets.directory` does it.
+
+So there are two honest options, and this plan does not pre-judge which:
+
+**(a) Keep a minimal Worker** for the HTTPS redirect and any future edge logic. Smallest
+diff, one file that does one thing.
+
+**(b) Drop the Worker script entirely** — assets-only, with `_headers` carrying the
+headers and Cloudflare's Always Use HTTPS setting doing the redirect. Fewer moving parts
+and no Worker invocations to pay for, but it moves one behaviour from code into dashboard
+configuration, where it is invisible to this repo.
+
+Pick one, write down which and why. **If (b): verify the redirect works from a real
+`http://` request before removing the Worker**, not after.
+
+**Verify**: `bunx wrangler deploy --dry-run` exits 0. `curl -sI http://app.kinreader.com/`
+still redirects to HTTPS.
+
+### Step 4: Prune the docs
+
+`CLAUDE.md`, `README.md` and `plans/README.md` all describe `apps/web` as "the Vite SPA and
+the Cloudflare Worker (auth, share routes)". After this it is the SPA, plus at most a
+redirect shim. Say so, and say where the backend is instead.
+
+**Verify**: `grep -rn "Spiceflow" --include=*.md .` finds only historical references in
+`plans/` — which stay, because the log is a record of what happened.
 
 ## Test plan
 
-- All plan 004 XSS cases, retargeted and passing — the non-negotiable part.
-- `/` returns the SPA shell (asset path still works).
-- A request to a removed route (`/api/extract`, `/api/tts`, `/api/auth/verify`) returns
-  404 rather than 500, confirming clean removal.
-- No live network calls.
+Nothing new to test; the suite shrinks. What matters is that the shrink is *exactly* the
+`server.test.ts` cases and nothing else went quiet. Note the count before and after and
+check the difference.
+
+Keep the straggler guard in whatever form survives — the test that no file under
+`apps/web/src` references a route that has moved away. It has already caught two real
+mistakes in this repo (plans 006 and 014).
 
 ## Done criteria
 
-- [ ] `src/server.ts` no longer exists
-- [ ] `grep -rc "spiceflow" src/ package.json` returns `0`
-- [ ] `bun run typecheck` exits 0; `bun test` passes with the XSS suite intact
-- [ ] `bun run build` exits 0
-- [ ] `wrangler dev` serves SPA, `/api/og` and `/r/:id` correctly
+- [ ] `grep -rn "spiceflow" apps/ packages/` returns nothing outside `plans/`
+- [ ] `apps/web/src/server.ts` is gone
+- [ ] No auth-only bindings remain in `wrangler.jsonc`
+- [ ] The Worker decision from Step 3 is written down in this file's log entry
+- [ ] `bun run typecheck`, `bun run test`, `bun run build` clean
+- [ ] `bunx wrangler deploy --dry-run` exits 0
+- [ ] HTTP still redirects to HTTPS in production
 
 ## STOP conditions
 
-Stop and report if:
-
-- Any plan 004 XSS test cannot be made to pass against the Worker. **Do not delete or
-  weaken a security test to finish this plan** — a plumbing change is never worth losing
-  regression coverage for a real vulnerability.
-- Removing Spiceflow changes the response bytes for identical input.
-- `src/server.ts` still contains routes other than `/api/og` and `/r/:id` — that means
-  006, 007 or 008 has not fully landed. Report which routes remain and stop.
-- Static asset serving breaks under `wrangler dev`.
+- Step 1's grep finds a live caller. Go finish 008.
+- Deleting `AUTH_CODES` would destroy data someone still needs. It holds short-lived
+  magic-link records with a 15-minute TTL, so this should be nothing — **confirm the
+  namespace is empty rather than assuming it.**
+- Option (b) is chosen and the HTTPS redirect cannot be verified before the Worker is
+  removed. Ship (a) instead; a redirect that silently stops working is worse than a Worker
+  that does almost nothing.
 
 ## Maintenance notes
 
-- End state: Cloudflare owns the domain, the static SPA, and two presentation routes;
-  Convex owns all data, auth and provider calls. One HTTP framework fewer, and no
-  Convex Pro plan required.
-- If the share page ever needs real article data (today `/r/:id` renders only query-string
-  values and cannot actually resolve a shared article — a known product gap), that Worker
-  handler can call Convex server-side. That is a feature, not part of this cleanup.
-- Revisit whether `dev:api` and `start` still belong in `package.json` once the standalone
-  Bun server is gone.
+- After this, **every application backend concern is a Convex function.** The Worker, if it
+  survives, serves bytes and redirects protocols. That invariant is what makes a second and
+  third client cheap (017), so a future "just one small endpoint in the Worker" is the
+  thing to push back on.
+- The magic-link flow, the OAuth state cookie and the KV-backed token store were built over
+  plans 003, 010 and the mobile-sign-in fix, and all of it is deleted here. That work was
+  not wasted — it kept sign-in working for the months before Convex owned auth — but none
+  of it should be resurrected. Better Auth owns this now.
