@@ -16,6 +16,7 @@ export interface PlaybackSnapshot {
   mode: 'browser' | 'audio';
   isStreaming: boolean;
   progressivePlaybackAvailable: boolean;
+  playbackReady: boolean;
   authoritativeTimings: boolean;
 }
 
@@ -35,11 +36,13 @@ export class SpeechEngine {
   private ownedObjectUrl: string | null = null;
   private sourceOpenHandler: (() => void) | null = null;
   private sourceUpdateEndHandler: (() => void) | null = null;
+  private sourceErrorHandler: (() => void) | null = null;
   private streamFinishRequested: boolean = false;
   private completedBlobPlaybackInstalled: boolean = false;
   private streamGeneration: number = 0;
   public isStreaming: boolean = false;
   public progressivePlaybackAvailable: boolean = false;
+  public playbackReady: boolean = false;
   public authoritativeTimings: boolean = false;
 
   // Playback position/progress, updated at every point the old code used to
@@ -185,6 +188,7 @@ export class SpeechEngine {
       mode: this.mode,
       isStreaming: this.isStreaming,
       progressivePlaybackAvailable: this.progressivePlaybackAvailable,
+      playbackReady: this.playbackReady,
       authoritativeTimings: this.authoritativeTimings,
     };
   }
@@ -205,6 +209,7 @@ export class SpeechEngine {
   public loadAudio(base64: string, words: WordTiming[], duration: number) {
     this.stop();
     this.mode = 'audio';
+    this.playbackReady = true;
     this.words = words;
     this.duration = duration;
 
@@ -221,6 +226,7 @@ export class SpeechEngine {
     this.stop();
     this.audioErrorHandler = onError ?? null;
     this.mode = 'audio';
+    this.playbackReady = true;
     this.words = words;
     this.duration = duration;
 
@@ -241,6 +247,7 @@ export class SpeechEngine {
     this.mode = 'audio';
     this.isStreaming = true;
     this.progressivePlaybackAvailable = false;
+    this.playbackReady = false;
     this.authoritativeTimings = false;
     this.streamFinishRequested = false;
     this.words = initialWords;
@@ -263,6 +270,7 @@ export class SpeechEngine {
           const mediaSource = new SourceConstructor() as MediaSource;
           this.mediaSource = mediaSource;
           this.progressivePlaybackAvailable = true;
+          this.playbackReady = true;
           if (this.audio) {
             this.ownedObjectUrl = URL.createObjectURL(mediaSource);
             this.audio.src = this.ownedObjectUrl;
@@ -281,21 +289,22 @@ export class SpeechEngine {
               this.sourceUpdateEndHandler = () => {
                 this.flushPendingChunks();
               };
+              this.sourceErrorHandler = () => {
+                this.handleProgressiveSourceFailure(
+                  new Error('SourceBuffer reported a non-transient append error')
+                );
+              };
               this.sourceBuffer.addEventListener('updateend', this.sourceUpdateEndHandler);
+              this.sourceBuffer.addEventListener('error', this.sourceErrorHandler);
               this.flushPendingChunks();
             } catch (err) {
-              this.progressivePlaybackAvailable = false;
-              this.cleanupStreamingSource();
-              if (this.streamFinishRequested) {
-                this.installCompletedBlobPlayback();
-              }
-              this.notify();
-              console.warn('Failed to addSourceBuffer:', err);
+              this.handleProgressiveSourceFailure(err);
             }
           };
           mediaSource.addEventListener('sourceopen', this.sourceOpenHandler);
         } catch (err) {
           this.progressivePlaybackAvailable = false;
+          this.playbackReady = false;
           this.cleanupStreamingSource();
           console.warn('MediaSource creation error:', err);
         }
@@ -314,8 +323,7 @@ export class SpeechEngine {
       try {
         this.sourceBuffer.appendBuffer(chunk as any);
       } catch (err) {
-        this.pendingAudioChunks.unshift(chunk);
-        console.warn('Error appending chunk to SourceBuffer:', err);
+        this.handleProgressiveSourceFailure(err);
       }
       return;
     }
@@ -330,8 +338,10 @@ export class SpeechEngine {
   public appendAudioChunk(chunk: Uint8Array) {
     if (!this.isStreaming) return;
     this.allAudioChunks.push(chunk);
-    this.pendingAudioChunks.push(chunk);
-    this.flushPendingChunks();
+    if (this.mediaSource) {
+      this.pendingAudioChunks.push(chunk);
+      this.flushPendingChunks();
+    }
   }
 
   public appendWordTimings(
@@ -375,6 +385,22 @@ export class SpeechEngine {
     this.audio.playbackRate = this._rate;
     this.audio.defaultPlaybackRate = this._rate;
     this.completedBlobPlaybackInstalled = true;
+    this.playbackReady = true;
+  }
+
+  private handleProgressiveSourceFailure(error: unknown) {
+    if (!this.mediaSource && !this.sourceBuffer) return;
+    this.progressivePlaybackAvailable = false;
+    this.playbackReady = false;
+    this.pendingAudioChunks = [];
+    if (this.audio && !this.audio.paused) this.audio.pause();
+    this.isPlaying = false;
+    this.stopSyncLoop();
+    this.cleanupStreamingSource();
+    if (this.audio && !this.streamFinishRequested) this.audio.src = '';
+    if (this.streamFinishRequested) this.installCompletedBlobPlayback();
+    this.notify();
+    console.warn('Progressive audio source failed; retaining bytes for Blob playback:', error);
   }
 
   public isSpeechSynthesisSupported(): boolean {
@@ -390,8 +416,9 @@ export class SpeechEngine {
     const lastWord = words[words.length - 1];
     this.duration = words.length > 0 && lastWord ? lastWord.end : 0;
     this.currentWordIdx = 0;
+    this.playbackReady = this.isSpeechSynthesisSupported();
     this.notify();
-    return this.isSpeechSynthesisSupported();
+    return this.playbackReady;
   }
 
   // Update the word list/duration for instant display (e.g. the 0ms-latency
@@ -445,7 +472,7 @@ export class SpeechEngine {
   }
 
   public play() {
-    if (this.isPlaying) return;
+    if (this.isPlaying || !this.playbackReady) return;
 
     if (this.mode === 'audio' && this.audio) {
       this.audio.playbackRate = this._rate;
@@ -489,6 +516,7 @@ export class SpeechEngine {
     this.allAudioChunks = [];
     this.isStreaming = false;
     this.progressivePlaybackAvailable = false;
+    this.playbackReady = false;
     this.authoritativeTimings = false;
     this.streamFinishRequested = false;
     this.completedBlobPlaybackInstalled = false;
@@ -512,6 +540,11 @@ export class SpeechEngine {
         this.sourceBuffer.removeEventListener('updateend', this.sourceUpdateEndHandler);
       } catch {}
     }
+    if (this.sourceBuffer && this.sourceErrorHandler) {
+      try {
+        this.sourceBuffer.removeEventListener('error', this.sourceErrorHandler);
+      } catch {}
+    }
     if (this.sourceBuffer && this.mediaSource?.readyState === 'open') {
       try {
         this.sourceBuffer.abort();
@@ -531,6 +564,7 @@ export class SpeechEngine {
     this.sourceBuffer = null;
     this.sourceOpenHandler = null;
     this.sourceUpdateEndHandler = null;
+    this.sourceErrorHandler = null;
     this.revokeOwnedObjectUrl();
   }
 

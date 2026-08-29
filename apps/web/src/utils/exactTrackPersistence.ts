@@ -1,6 +1,8 @@
 import type { WordTiming } from '../types';
+import { articleContentDigest } from './articleCacheKey';
 
 const MAX_CONVEX_WORDS = 8192;
+const MAX_EXACT_TRACK_BYTES = 25 * 1024 * 1024;
 
 export type ExactTrackCacheEntry = {
   audioUrl: string;
@@ -10,7 +12,6 @@ export type ExactTrackCacheEntry = {
 };
 
 export type PersistExactTrackInput = {
-  clientId: string;
   url: string;
   title?: string;
   author?: string;
@@ -21,7 +22,7 @@ export type PersistExactTrackInput = {
   words: WordTiming[];
 };
 
-type FinalizeTrackInput = Omit<PersistExactTrackInput, 'clientId' | 'blob'> & {
+type FinalizeTrackInput = Omit<PersistExactTrackInput, 'blob'> & {
   storageId: string;
   grant: string;
 };
@@ -29,7 +30,11 @@ type FinalizeTrackInput = Omit<PersistExactTrackInput, 'clientId' | 'blob'> & {
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type ExactTrackPersistenceDependencies = {
-  requestUploadUrl(clientId: string): Promise<{
+  requestUploadUrl(input: {
+    cacheKey: string;
+    contentDigest: string;
+    voice: string;
+  }): Promise<{
     uploadUrl: string;
     grant: string;
     expiresAt: number;
@@ -52,12 +57,20 @@ export async function uploadAndFinalizeExactTrack(
     throw new Error(`Exact track persistence supports at most ${MAX_CONVEX_WORDS} words`);
   }
   if (input.blob.size === 0) throw new Error('Cannot persist an empty audio track');
+  if (input.blob.size > MAX_EXACT_TRACK_BYTES) {
+    throw new Error(`Exact track persistence supports at most ${MAX_EXACT_TRACK_BYTES} audio bytes`);
+  }
 
-  const { uploadUrl, grant } = await dependencies.requestUploadUrl(input.clientId);
+  const contentDigest = await articleContentDigest(input.text);
+  const { uploadUrl, grant } = await dependencies.requestUploadUrl({
+    cacheKey: input.url,
+    contentDigest,
+    voice: input.voice,
+  });
   const fetcher: Fetcher = dependencies.fetcher ?? fetch;
   const uploadResponse = await fetcher(uploadUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'audio/mpeg' },
+    headers: { 'Content-Type': `audio/mpeg; kinreader-grant=${grant}` },
     body: input.blob,
   });
   if (!uploadResponse.ok) {
@@ -73,7 +86,7 @@ export async function uploadAndFinalizeExactTrack(
   const storageId = uploadedStorageId(uploadResult);
   if (!storageId) throw new Error('Exact track upload returned no storageId');
 
-  await dependencies.finalizeTrack({
+  const result = await dependencies.finalizeTrack({
     url: input.url,
     ...(input.title ? { title: input.title } : {}),
     ...(input.author ? { author: input.author } : {}),
@@ -84,4 +97,12 @@ export async function uploadAndFinalizeExactTrack(
     duration: input.duration,
     words: input.words,
   });
+  if (
+    result &&
+    typeof result === 'object' &&
+    (result as Record<string, unknown>).ok === false
+  ) {
+    const message = (result as Record<string, unknown>).error;
+    throw new Error(typeof message === 'string' ? message : 'Exact track finalization failed');
+  }
 }

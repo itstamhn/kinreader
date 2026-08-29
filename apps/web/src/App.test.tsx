@@ -19,7 +19,6 @@ type TestAppProps = {
     timingsSource: 'soniox';
   } | null>;
   persistExactTrack?: (input: {
-    clientId: string;
     url: string;
     title?: string;
     author?: string;
@@ -29,6 +28,7 @@ type TestAppProps = {
     duration: number;
     words: Array<{ text: string; start: number; end: number }>;
   }) => Promise<void>;
+  serverExactCacheEnabled?: boolean;
 };
 
 function renderApp(props: TestAppProps = {}) {
@@ -42,6 +42,7 @@ function renderApp(props: TestAppProps = {}) {
         }
         loadExactTrack={props.loadExactTrack ?? (() => Promise.resolve(null))}
         persistExactTrack={props.persistExactTrack ?? (() => Promise.resolve())}
+        serverExactCacheEnabled={props.serverExactCacheEnabled ?? true}
       />
     </ConvexAppProvider>
   );
@@ -351,6 +352,100 @@ function fakeStreamingTransport() {
   };
 }
 
+test('progressive WebSocket playback is enabled immediately and Space uses the same guard', async () => {
+  const transport = fakeStreamingTransport();
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalPlay = SpeechEngine.prototype.play;
+  let playCalls = 0;
+
+  class ProgressiveMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+
+  (window as any).MediaSource = ProgressiveMediaSource;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = () => 'blob:progressive-source';
+  SpeechEngine.prototype.play = function () {
+    playCalls += 1;
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: 'soon' }),
+    });
+    await narrateRawText(container, 'Progressive playback');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+
+    const playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
+    expect(playButton.disabled).toBe(false);
+    expect(container.textContent).not.toContain('Neural voice unavailable');
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(playCalls).toBe(1);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    SpeechEngine.prototype.play = originalPlay;
+  }
+});
+
+test('Blob-only WebSocket playback buffers normally, blocks Space, then enables play at audio_end', async () => {
+  const transport = fakeStreamingTransport();
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalPlay = SpeechEngine.prototype.play;
+  let playCalls = 0;
+
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = () => 'blob:completed-source';
+  SpeechEngine.prototype.play = function () {
+    playCalls += 1;
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: 'soon' }),
+    });
+    await narrateRawText(container, 'Blob playback');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+
+    let playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
+    expect(playButton.disabled).toBe(true);
+    expect(container.textContent).not.toContain('Neural voice unavailable');
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(playCalls).toBe(0);
+
+    act(() => {
+      transport.streams[0]!.options.handlers.onAudio(new Uint8Array([1, 2, 3]));
+      transport.streams[0]!.options.handlers.onTimestamps(timestampBatch('Blob playback'));
+      transport.streams[0]!.options.handlers.onDone();
+    });
+
+    await waitFor(() => {
+      playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
+      expect(playButton.disabled).toBe(false);
+    });
+    expect(container.textContent).not.toContain('Neural voice unavailable');
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(playCalls).toBe(1);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    SpeechEngine.prototype.play = originalPlay;
+  }
+});
+
 test('exact timestamp batches replace the estimated prefix and reach the engine authoritatively', async () => {
   const transport = fakeStreamingTransport();
   const originalAppend = SpeechEngine.prototype.appendWordTimings;
@@ -561,6 +656,40 @@ test('an exact cache hit loads stored audio before minting a key or opening a so
   }
 });
 
+test('anonymous narration skips server exact-cache reads and persistence but keeps WebSocket timing', async () => {
+  const transport = fakeStreamingTransport();
+  let cacheReads = 0;
+  let persistenceCalls = 0;
+
+  const { container } = renderApp({
+    serverExactCacheEnabled: false,
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'anonymous-temporary-key', expiresAt: 'soon' }),
+    loadExactTrack: async () => {
+      cacheReads += 1;
+      return null;
+    },
+    persistExactTrack: async () => {
+      persistenceCalls += 1;
+    },
+  });
+
+  await narrateRawText(container, 'Anonymous exact timing');
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+  act(() => {
+    transport.streams[0]!.options.handlers.onAudio(new Uint8Array([1, 2, 3]));
+    transport.streams[0]!.options.handlers.onTimestamps(timestampBatch('Anonymous exact timing'));
+    transport.streams[0]!.options.handlers.onDone();
+    transport.streams[0]!.options.handlers.onTerminated?.();
+  });
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(cacheReads).toBe(0);
+  expect(persistenceCalls).toBe(0);
+});
+
 test('pasted notes share exact audio only when their content is identical', async () => {
   const transport = fakeStreamingTransport();
   const cacheRequests: Array<{ url: string; voice: string }> = [];
@@ -647,7 +776,6 @@ test('exact-track persistence failure does not replace completed WebSocket playb
     await waitFor(() => expect(persistenceInputs).toHaveLength(1));
     expect(await persistenceInputs[0]!.blob.arrayBuffer()).toEqual(new Uint8Array([4, 5, 6]).buffer);
     expect(persistenceInputs[0]).toMatchObject({
-      clientId: expect.any(String),
       url: 'content-sha256:b2d0149d4df84e1408ed3208160aa121666399f06ebc62f7636aaeac1d329fb6',
       text: 'Exact timing',
       voice: 'Adrian',

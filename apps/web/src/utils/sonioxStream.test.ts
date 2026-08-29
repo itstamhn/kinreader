@@ -4,6 +4,7 @@ import {
   SonioxProtocolError,
   SonioxTemporaryKeyExpiredError,
 } from './sonioxStream';
+import { createWordTimingAccumulator } from './wordTimings';
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -192,6 +193,80 @@ test('reports socket errors and close-before-done as failures', () => {
   closingSocket.closeFromServer();
   expect(onEarlyClose.values.errors).toHaveLength(1);
   expect(onEarlyClose.values.errors[0]).toBeInstanceOf(SonioxProtocolError);
+});
+
+test('audio_end followed by socket close is a failure until explicit termination arrives', () => {
+  const received = handlers();
+  openSonioxStream({ apiKey: 'key', text: 'Hi', voice: 'Adrian', handlers: received.handlers });
+  const socket = FakeWebSocket.instances[0]!;
+  socket.open();
+
+  socket.receive({ audio_end: true });
+  socket.closeFromServer();
+
+  expect(received.values.done).toBe(1);
+  expect(received.values.terminated).toBe(0);
+  expect(received.values.errors).toHaveLength(1);
+  expect(received.values.errors[0]?.message).toMatch(/terminat/i);
+});
+
+test('contains an exception from the error handler and reports a close failure only once', () => {
+  let errorCalls = 0;
+  openSonioxStream({
+    apiKey: 'key',
+    text: 'Hi',
+    voice: 'Adrian',
+    handlers: {
+      onAudio() {},
+      onTimestamps() {},
+      onDone() {},
+      onError() {
+        errorCalls += 1;
+        throw new Error('consumer error handler failed');
+      },
+    },
+  });
+  const socket = FakeWebSocket.instances[0]!;
+  socket.open();
+
+  expect(() => socket.closeFromServer()).not.toThrow();
+  expect(() => socket.fail()).not.toThrow();
+  expect(errorCalls).toBe(1);
+});
+
+test('turns a complete-stream character mismatch into one WebSocket failure', () => {
+  const accumulator = createWordTimingAccumulator('Exact timing');
+  const received = handlers();
+  openSonioxStream({
+    apiKey: 'key',
+    text: 'Exact timing',
+    voice: 'Adrian',
+    handlers: {
+      ...received.handlers,
+      onTimestamps: (batch) => {
+        accumulator.append(batch);
+      },
+      onTerminated: () => {
+        accumulator.flush();
+      },
+    },
+  });
+  const socket = FakeWebSocket.instances[0]!;
+  socket.open();
+  const characters = [...'Exact txming'];
+  socket.receive({
+    timestamps: {
+      characters,
+      character_start_times_seconds: characters.map((_, index) => index * 0.1),
+      character_end_times_seconds: characters.map((_, index) => index * 0.1 + 0.05),
+    },
+  });
+  socket.receive({ audio_end: true });
+  socket.receive({ terminated: true });
+
+  expect(received.values.terminated).toBe(0);
+  expect(received.values.errors).toHaveLength(1);
+  expect(received.values.errors[0]?.message).toMatch(/character stream/i);
 });
 
 test('cancel closes the socket and suppresses all later events', () => {

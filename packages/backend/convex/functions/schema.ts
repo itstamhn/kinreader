@@ -106,12 +106,11 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index('by_article_voice_speed', ['articleId', 'voice', 'speed'])
-    .index('by_article', ['articleId'])
-    .index('by_storage_id', ['storageId']),
+    .index('by_article', ['articleId']),
 
-  // Short-lived capabilities issued alongside browser upload URLs. A grant
-  // is consumed in the same transaction that creates its exact-track row,
-  // binding each successful finalization to one rate-limited issuance.
+  // Legacy pre-owner capabilities. Retain this table during staged rollout
+  // so any deployed rows remain schema-compatible; no current function reads
+  // or writes it.
   ttsUploadGrants: defineTable({
     token: v.string(),
     expiresAt: v.number(),
@@ -119,6 +118,34 @@ export default defineSchema({
   })
     .index('by_token', ['token'])
     .index('by_expires_at', ['expiresAt']),
+
+  // Owner-bound exact-track capabilities. This is intentionally a new table:
+  // adding required ownership fields to the already-deployed legacy grant
+  // table would make schema validation depend on whether an old grant exists.
+  ttsExactUploadGrants: defineTable({
+    token: v.string(),
+    ownerKey: v.string(),
+    cacheKey: v.string(),
+    contentDigest: v.string(),
+    voice: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index('by_token', ['token'])
+    .index('by_expires_at', ['expiresAt']),
+
+  // Unique storage ownership for tracks created after this feature. Using a
+  // new empty table avoids a blocking index backfill on populated audioTracks.
+  ttsTrackStorageClaims: defineTable({
+    storageId: v.id('_storage'),
+    trackId: v.id('audioTracks'),
+    kind: v.union(v.literal('exact'), v.literal('rest')),
+    ownerKey: v.optional(v.string()),
+    grantToken: v.optional(v.string()),
+    claimedAt: v.number(),
+  })
+    .index('by_storage_id', ['storageId'])
+    .index('by_track_id', ['trackId']),
 
   // 8. User Reading Playlists & Cross-Device Progress
   userArticles: defineTable({

@@ -28,7 +28,7 @@ export declare const api: {
       generateTrackUploadUrl: FunctionReference<
         "mutation",
         "public",
-        { clientId?: string },
+        { cacheKey: string; contentDigest: string; voice: string },
         { expiresAt: number; grant: string; uploadUrl: string }
       >;
       getExactTrack: FunctionReference<
@@ -56,7 +56,8 @@ export declare const api: {
           voice: string;
           words: Array<{ end: number; start: number; text: string }>;
         },
-        { articleId: string; trackId: string }
+        | { articleId: string; ok: true; trackId: string }
+        | { error: string; ok: false }
       >;
       synthesize: FunctionReference<
         "action",
@@ -298,6 +299,12 @@ export declare const internal: {
       >;
     };
     ttsInternal: {
+      cleanupAbandonedTrackUploads: FunctionReference<
+        "mutation",
+        "internal",
+        { cursor: string | null; now?: number },
+        { continueCursor: string | null; deleted: number; scanned: number }
+      >;
       consumeTtsRateLimit: FunctionReference<
         "mutation",
         "internal",
@@ -312,12 +319,13 @@ export declare const internal: {
         "internal",
         {
           author?: string;
+          cacheKey: string;
           content: string;
           duration: number;
           grant: string;
+          ownerKey: string;
           storageId: Id<"_storage">;
           title?: string;
-          url: string;
           voice: string;
           words: Array<{ end: number; start: number; text: string }>;
         },
@@ -344,7 +352,7 @@ export declare const internal: {
       findExactCachedTrackByUrl: FunctionReference<
         "query",
         "internal",
-        { url: string; voice: string },
+        { cacheKey: string; ownerKey: string; voice: string },
         null | {
           _creationTime: number;
           _id: Id<"audioTracks">;
@@ -388,8 +396,28 @@ export declare const internal: {
       issueTrackUploadGrant: FunctionReference<
         "mutation",
         "internal",
-        { expiresAt: number; key: string; token: string },
+        {
+          cacheKey: string;
+          contentDigest: string;
+          expiresAt: number;
+          ownerKey: string;
+          token: string;
+          voice: string;
+        },
         { ok: false } | { expiresAt: number; grant: string; ok: true }
+      >;
+      rejectExactTrackUpload: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          cacheKey: string;
+          content: string;
+          grant: string;
+          ownerKey: string;
+          storageId: Id<"_storage">;
+          voice: string;
+        },
+        { deleted: boolean }
       >;
     };
     users: {

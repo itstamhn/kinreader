@@ -7,6 +7,7 @@ import { MINUTE, Ratelimit } from 'kitcn/ratelimit';
 // convex/routers/articles.test.ts for the full explanation).
 import { api } from '../../shared/api';
 import { internal } from '../_generated/api';
+import type { Id } from '../_generated/dataModel';
 import schema from '../schema';
 import { TTS_GLOBAL_KEY } from '../../lib/rateLimiter';
 
@@ -105,6 +106,26 @@ const exactWords = [
   { text: 'timing', start: 0.4, end: 0.7 },
 ];
 
+const EXACT_CACHE_KEY =
+  'content-sha256:b2d0149d4df84e1408ed3208160aa121666399f06ebc62f7636aaeac1d329fb6';
+const EXACT_CONTENT_DIGEST = 'b2d0149d4df84e1408ed3208160aa121666399f06ebc62f7636aaeac1d329fb6';
+const ALICE_IDENTITY = {
+  name: 'Alice',
+  email: 'alice@example.com',
+  tokenIdentifier: 'test|alice',
+};
+const BOB_IDENTITY = {
+  name: 'Bob',
+  email: 'bob@example.com',
+  tokenIdentifier: 'test|bob',
+};
+
+const exactGrantBindings = {
+  cacheKey: EXACT_CACHE_KEY,
+  contentDigest: EXACT_CONTENT_DIGEST,
+  voice: 'Adrian',
+};
+
 async function storeUploadedTestAudio(t: ReturnType<typeof convexTest>, bytes: number[]) {
   const storageId = await t.run(async (ctx) =>
     ctx.storage.store(new Blob([new Uint8Array(bytes)], { type: 'audio/mpeg' }))
@@ -118,8 +139,37 @@ async function storeUploadedTestAudio(t: ReturnType<typeof convexTest>, bytes: n
   return storageId;
 }
 
-async function issueTrackUploadGrant(t: ReturnType<typeof convexTest>, clientId: string) {
-  return (await t.mutation(api.routers.tts.generateTrackUploadUrl, { clientId })) as {
+function trackUploadContentType(grant: string, baseType = 'audio/mpeg') {
+  return `${baseType}; kinreader-grant=${grant}`;
+}
+
+async function storeBoundTrackUpload(
+  t: ReturnType<typeof convexTest>,
+  grant: string,
+  bytes: Uint8Array,
+  baseType = 'audio/mpeg'
+) {
+  const uploadBytes = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(uploadBytes).set(bytes);
+  const storageId = await t.run(async (ctx) =>
+    ctx.storage.store(new Blob([uploadBytes], { type: trackUploadContentType(grant, baseType) }))
+  );
+  await t.run(async (ctx) => {
+    await (ctx.db as any).patch(storageId, {
+      contentType: trackUploadContentType(grant, baseType),
+    });
+  });
+  return storageId;
+}
+
+async function issueTrackUploadGrant(
+  t: ReturnType<typeof convexTest>,
+  bindings: typeof exactGrantBindings = exactGrantBindings
+) {
+  return (await t.withIdentity(ALICE_IDENTITY).mutation(
+    api.routers.tts.generateTrackUploadUrl,
+    bindings
+  )) as {
     uploadUrl: string;
     grant: string;
     expiresAt: number;
@@ -133,43 +183,166 @@ async function exactPersistenceWrites(t: ReturnType<typeof convexTest>) {
   }));
 }
 
-test('exact cache lookup rejects legacy, estimated, truncated, and missing-storage tracks', async () => {
+test('anonymous callers cannot read, upload, or finalize server exact-cache artifacts', async () => {
   const t = convexTest(schema, modules);
   const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
-  const { articleId, trackId } = await t.run(async (ctx) => {
+  await t.run(async (ctx) => {
     const articleId = await ctx.db.insert('articles', {
-      url: 'https://example.com/provenance',
-      title: 'Provenance',
+      url: EXACT_CACHE_KEY,
+      title: 'Legacy global exact cache',
       content: 'Exact timing',
-      author: 'Author',
-      sourceType: 'article',
+      author: 'Unknown',
+      sourceType: 'text',
       wordCount: 2,
       createdAt: 1,
     });
-    const trackId = await ctx.db.insert('audioTracks', {
+    await ctx.db.insert('audioTracks', {
       articleId,
       voice: 'Adrian',
       speed: 1,
       storageId,
       duration: 0.7,
+      timingsSource: 'soniox',
       words: exactWords,
       createdAt: 1,
     });
-    return { articleId, trackId };
   });
 
-  const getExactTrack = api.routers.tts.getExactTrack;
   expect(
-    await t.query(getExactTrack, {
-      url: 'https://example.com/provenance',
+    await t.query(api.routers.tts.getExactTrack, {
+      url: EXACT_CACHE_KEY,
+      voice: 'Adrian',
+    })
+  ).toBeNull();
+  await expect(
+    t.mutation(api.routers.tts.generateTrackUploadUrl, exactGrantBindings as any)
+  ).rejects.toThrow(/sign in|authenticated/i);
+  await expect(
+    t.mutation(api.routers.tts.persistTrack, {
+      url: EXACT_CACHE_KEY,
+      text: 'Exact timing',
+      voice: 'Adrian',
+      grant: `${crypto.randomUUID()}${crypto.randomUUID()}`,
+      storageId,
+      duration: 0.7,
+      words: exactWords,
+    })
+  ).rejects.toThrow(/sign in|authenticated/i);
+});
+
+test("Bob cannot finalize Alice's owner-bound upload grant", async () => {
+  const t = convexTest(schema, modules);
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const bob = t.withIdentity(BOB_IDENTITY);
+  const issued = (await alice.mutation(
+    api.routers.tts.generateTrackUploadUrl,
+    exactGrantBindings as any
+  )) as { grant: string };
+  const storageId = await storeBoundTrackUpload(t, issued.grant, new Uint8Array([4, 5, 6]));
+
+  const result = await bob.mutation(api.routers.tts.persistTrack, {
+    url: EXACT_CACHE_KEY,
+    text: 'Exact timing',
+    voice: 'Adrian',
+    grant: issued.grant,
+    storageId,
+    duration: 0.7,
+    words: exactWords,
+  });
+  expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/grant|owner/i) });
+
+  expect(await exactPersistenceWrites(t)).toEqual({ articles: [], tracks: [] });
+});
+
+test("Alice's exact artifact cannot hit or poison Bob's owner-scoped cache", async () => {
+  const t = convexTest(schema, modules);
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const bob = t.withIdentity(BOB_IDENTITY);
+  const aliceGrant = (await alice.mutation(
+    api.routers.tts.generateTrackUploadUrl,
+    exactGrantBindings as any
+  )) as { grant: string };
+  const aliceStorageId = await storeBoundTrackUpload(
+    t,
+    aliceGrant.grant,
+    new Uint8Array([1, 2, 3])
+  );
+
+  expect(await alice.mutation(api.routers.tts.persistTrack, {
+    url: EXACT_CACHE_KEY,
+    text: 'Exact timing',
+    voice: 'Adrian',
+    grant: aliceGrant.grant,
+    storageId: aliceStorageId,
+    duration: 0.7,
+    words: exactWords,
+  })).toMatchObject({ ok: true });
+
+  expect(
+    await bob.query(api.routers.tts.getExactTrack, { url: EXACT_CACHE_KEY, voice: 'Adrian' })
+  ).toBeNull();
+  expect(
+    await alice.query(api.routers.tts.getExactTrack, { url: EXACT_CACHE_KEY, voice: 'Adrian' })
+  ).toMatchObject({ words: exactWords });
+
+  const bobGrant = (await bob.mutation(
+    api.routers.tts.generateTrackUploadUrl,
+    exactGrantBindings as any
+  )) as { grant: string };
+  const bobStorageId = await storeBoundTrackUpload(
+    t,
+    bobGrant.grant,
+    new Uint8Array([7, 8, 9])
+  );
+  expect(await bob.mutation(api.routers.tts.persistTrack, {
+    url: EXACT_CACHE_KEY,
+    text: 'Exact timing',
+    voice: 'Adrian',
+    grant: bobGrant.grant,
+    storageId: bobStorageId,
+    duration: 0.7,
+    words: exactWords,
+  })).toMatchObject({ ok: true });
+
+  const writes = await exactPersistenceWrites(t);
+  expect(writes.articles).toHaveLength(2);
+  expect(writes.tracks).toHaveLength(2);
+  expect(
+    await alice.query(api.routers.tts.getExactTrack, { url: EXACT_CACHE_KEY, voice: 'Adrian' })
+  ).toMatchObject({ words: exactWords });
+});
+
+test('exact cache lookup rejects legacy, estimated, truncated, and missing-storage tracks', async () => {
+  const t = convexTest(schema, modules);
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const grant = await issueTrackUploadGrant(t);
+  const storageId = await storeBoundTrackUpload(t, grant.grant, new Uint8Array([1, 2, 3]));
+  const persisted = await alice.mutation(api.routers.tts.persistTrack, {
+    url: EXACT_CACHE_KEY,
+    text: 'Exact timing',
+    voice: 'Adrian',
+    storageId,
+    grant: grant.grant,
+    duration: 0.7,
+    words: exactWords,
+  });
+  expect(persisted).toMatchObject({ ok: true });
+  const trackId = persisted.ok ? (persisted.trackId as Id<'audioTracks'>) : null;
+  if (!trackId) throw new Error('Expected exact track persistence to succeed');
+
+  const getExactTrack = api.routers.tts.getExactTrack;
+  await t.run(async (ctx) => ctx.db.patch(trackId, { timingsSource: undefined }));
+  expect(
+    await alice.query(getExactTrack, {
+      url: EXACT_CACHE_KEY,
       voice: 'Adrian',
     })
   ).toBeNull();
 
   await t.run(async (ctx) => ctx.db.patch(trackId, { timingsSource: 'estimated' }));
   expect(
-    await t.query(getExactTrack, {
-      url: 'https://example.com/provenance',
+    await alice.query(getExactTrack, {
+      url: EXACT_CACHE_KEY,
       voice: 'Adrian',
     })
   ).toBeNull();
@@ -181,15 +354,15 @@ test('exact cache lookup rejects legacy, estimated, truncated, and missing-stora
     })
   );
   expect(
-    await t.query(getExactTrack, {
-      url: 'https://example.com/provenance',
+    await alice.query(getExactTrack, {
+      url: EXACT_CACHE_KEY,
       voice: 'Adrian',
     })
   ).toBeNull();
 
   await t.run(async (ctx) => ctx.db.patch(trackId, { words: exactWords }));
-  const hit = await t.query(getExactTrack, {
-    url: 'https://example.com/provenance',
+  const hit = await alice.query(getExactTrack, {
+    url: EXACT_CACHE_KEY,
     voice: 'Adrian',
   });
   expect(hit).toMatchObject({ words: exactWords, duration: 0.7 });
@@ -197,23 +370,25 @@ test('exact cache lookup rejects legacy, estimated, truncated, and missing-stora
 
   await t.run(async (ctx) => ctx.storage.delete(storageId));
   expect(
-    await t.query(getExactTrack, {
-      url: 'https://example.com/provenance',
+    await alice.query(getExactTrack, {
+      url: EXACT_CACHE_KEY,
       voice: 'Adrian',
     })
   ).toBeNull();
 
-  expect(articleId).toBeTruthy();
 });
 
 test('track upload URL issuance is denied by the existing limiter before returning a URL', async () => {
   const t = convexTest(schema, modules);
   await drainTrackUploadRateLimit(t, 'upload-drained');
+  const drainedOwner = t.withIdentity({
+    name: 'Drained',
+    email: 'drained@example.com',
+    tokenIdentifier: 'upload-drained',
+  });
 
   await expect(
-    t.mutation(api.routers.tts.generateTrackUploadUrl, {
-      clientId: 'upload-drained',
-    })
+    drainedOwner.mutation(api.routers.tts.generateTrackUploadUrl, exactGrantBindings)
   ).rejects.toThrow('Too many track upload requests');
 
   const articles = await t.run(async (ctx) => ctx.db.query('articles').collect());
@@ -225,16 +400,17 @@ test('track upload URL issuance is denied by the existing limiter before returni
 test('track upload issuance returns distinct 256-bit capabilities with bounded expiry', async () => {
   const t = convexTest(schema, modules);
   const issuedAfter = Date.now();
-  const first = await issueTrackUploadGrant(t, 'capability-first');
-  const second = await issueTrackUploadGrant(t, 'capability-second');
+  const first = await issueTrackUploadGrant(t);
+  const firstCompletedAt = Date.now();
+  const second = await issueTrackUploadGrant(t);
 
   expect(first.grant).toMatch(/^[0-9a-f]{64}$/);
   expect(second.grant).toMatch(/^[0-9a-f]{64}$/);
   expect(second.grant).not.toBe(first.grant);
   expect(first.expiresAt).toBeGreaterThan(issuedAfter);
-  expect(first.expiresAt).toBeLessThanOrEqual(issuedAfter + 10 * 60 * 1000);
+  expect(first.expiresAt).toBeLessThanOrEqual(firstCompletedAt + 10 * 60 * 1000);
 
-  const grants = await t.run(async (ctx) => ctx.db.query('ttsUploadGrants').collect());
+  const grants = await t.run(async (ctx) => ctx.db.query('ttsExactUploadGrants').collect());
   expect(grants.map((grant) => grant.token).sort()).toEqual([first.grant, second.grant].sort());
 });
 
@@ -243,26 +419,38 @@ test('successful issuance removes at most 32 expired grants and preserves every 
   const now = Date.now();
   await t.run(async (ctx) => {
     for (let index = 0; index < 35; index += 1) {
-      await ctx.db.insert('ttsUploadGrants', {
+      await ctx.db.insert('ttsExactUploadGrants', {
         token: `expired-grant-${index}`,
+        ownerKey: ALICE_IDENTITY.tokenIdentifier,
+        cacheKey: EXACT_CACHE_KEY,
+        contentDigest: EXACT_CONTENT_DIGEST,
+        voice: 'Adrian',
         expiresAt: now - 1,
         createdAt: now - 60_000,
       });
     }
-    await ctx.db.insert('ttsUploadGrants', {
+    await ctx.db.insert('ttsExactUploadGrants', {
       token: 'live-grant-a',
+      ownerKey: ALICE_IDENTITY.tokenIdentifier,
+      cacheKey: EXACT_CACHE_KEY,
+      contentDigest: EXACT_CONTENT_DIGEST,
+      voice: 'Adrian',
       expiresAt: now + 60_000,
       createdAt: now,
     });
-    await ctx.db.insert('ttsUploadGrants', {
+    await ctx.db.insert('ttsExactUploadGrants', {
       token: 'live-grant-b',
+      ownerKey: ALICE_IDENTITY.tokenIdentifier,
+      cacheKey: EXACT_CACHE_KEY,
+      contentDigest: EXACT_CONTENT_DIGEST,
+      voice: 'Adrian',
       expiresAt: now + 120_000,
       createdAt: now,
     });
   });
 
-  const issued = await issueTrackUploadGrant(t, 'cleanup-issuer');
-  const grants = await t.run(async (ctx) => ctx.db.query('ttsUploadGrants').collect());
+  const issued = await issueTrackUploadGrant(t);
+  const grants = await t.run(async (ctx) => ctx.db.query('ttsExactUploadGrants').collect());
   const expired = grants.filter((grant) => grant.expiresAt <= now);
   const liveTokens = grants
     .filter((grant) => grant.expiresAt > now)
@@ -294,7 +482,7 @@ test('track upload allocation is unreachable when capability issuance is rate de
 
 test('exact track finalization requires a valid unexpired upload grant before writing', async () => {
   const baseInput = {
-    url: 'https://example.com/grant-required',
+    url: EXACT_CACHE_KEY,
     text: 'Exact timing',
     voice: 'Adrian',
     duration: 0.7,
@@ -303,33 +491,47 @@ test('exact track finalization requires a valid unexpired upload grant before wr
 
   for (const variant of ['missing', 'wrong', 'expired'] as const) {
     const t = convexTest(schema, modules);
-    const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
+    const alice = t.withIdentity(ALICE_IDENTITY);
+    const token = variant === 'wrong' ? 'f'.repeat(64) : variant === 'expired' ? 'e'.repeat(64) : null;
+    const storageId = token
+      ? await storeBoundTrackUpload(t, token, new Uint8Array([1, 2, 3]))
+      : await storeUploadedTestAudio(t, [1, 2, 3]);
     const input: Record<string, unknown> = { ...baseInput, storageId };
-    if (variant === 'wrong') input.grant = `wrong-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    if (token) input.grant = token;
     if (variant === 'expired') {
-      const grant = `expired-${crypto.randomUUID()}-${crypto.randomUUID()}`;
-      input.grant = grant;
       await t.run(async (ctx) => {
-        await (ctx.db as any).insert('ttsUploadGrants', {
-          token: grant,
+        await ctx.db.insert('ttsExactUploadGrants', {
+          token: token!,
+          ownerKey: ALICE_IDENTITY.tokenIdentifier,
+          cacheKey: EXACT_CACHE_KEY,
+          contentDigest: EXACT_CONTENT_DIGEST,
+          voice: 'Adrian',
           expiresAt: Date.now() - 1,
           createdAt: Date.now() - 60_000,
         });
       });
     }
 
-    await expect(t.mutation(api.routers.tts.persistTrack, input as any)).rejects.toThrow(
-      variant === 'expired' ? /expired/i : /grant/i
-    );
+    if (variant === 'missing') {
+      await expect(alice.mutation(api.routers.tts.persistTrack, input as any)).rejects.toThrow(/grant/i);
+    } else {
+      const result = await alice.mutation(api.routers.tts.persistTrack, input as any);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringMatching(variant === 'expired' ? /expired/i : /grant/i),
+      });
+    }
     expect(await exactPersistenceWrites(t)).toEqual({ articles: [], tracks: [] });
   }
 });
 
 test('an upload grant is single-use and a storage ID cannot be finalized into multiple rows', async () => {
   const t = convexTest(schema, modules);
-  const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
-  const firstGrant = await issueTrackUploadGrant(t, 'single-use-first');
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const firstGrant = await issueTrackUploadGrant(t);
+  const storageId = await storeBoundTrackUpload(t, firstGrant.grant, new Uint8Array([1, 2, 3]));
   const baseInput = {
+    url: EXACT_CACHE_KEY,
     text: 'Exact timing',
     voice: 'Adrian',
     storageId,
@@ -337,28 +539,32 @@ test('an upload grant is single-use and a storage ID cannot be finalized into mu
     words: exactWords,
   };
 
-  await t.mutation(api.routers.tts.persistTrack, {
-    ...baseInput,
-    url: 'https://example.com/grant-first',
-    grant: firstGrant.grant,
-  });
-
-  await expect(
-    t.mutation(api.routers.tts.persistTrack, {
+  expect(
+    await alice.mutation(api.routers.tts.persistTrack, {
       ...baseInput,
-      url: 'https://example.com/reused-grant',
       grant: firstGrant.grant,
     })
-  ).rejects.toThrow(/grant/i);
+  ).toMatchObject({ ok: true });
 
-  const secondGrant = await issueTrackUploadGrant(t, 'single-use-second');
-  await expect(
-    t.mutation(api.routers.tts.persistTrack, {
+  expect(
+    await alice.mutation(api.routers.tts.persistTrack, {
       ...baseInput,
-      url: 'https://example.com/reused-storage',
+      grant: firstGrant.grant,
+    })
+  ).toMatchObject({ ok: false, error: expect.stringMatching(/grant/i) });
+
+  const secondGrant = await issueTrackUploadGrant(t);
+  await t.run(async (ctx) => {
+    await (ctx.db as any).patch(storageId, {
+      contentType: trackUploadContentType(secondGrant.grant),
+    });
+  });
+  expect(
+    await alice.mutation(api.routers.tts.persistTrack, {
+      ...baseInput,
       grant: secondGrant.grant,
     })
-  ).rejects.toThrow(/storageId.*already/i);
+  ).toMatchObject({ ok: false, error: expect.stringMatching(/storageId.*already/i) });
 
   const writes = await exactPersistenceWrites(t);
   expect(writes.articles).toHaveLength(1);
@@ -367,11 +573,10 @@ test('an upload grant is single-use and a storage ID cannot be finalized into mu
 
 test('exact track finalization upserts at speed 1 and deletes the superseded stored audio', async () => {
   const t = convexTest(schema, modules);
-  const firstStorageId = await storeUploadedTestAudio(t, [1]);
-  const replacementStorageId = await storeUploadedTestAudio(t, [2, 3]);
+  const alice = t.withIdentity(ALICE_IDENTITY);
   const persistTrack = api.routers.tts.persistTrack;
   const input = {
-    url: 'https://example.com/upsert',
+    url: EXACT_CACHE_KEY,
     title: 'Exact Track',
     author: 'Author',
     text: 'Exact timing',
@@ -380,14 +585,20 @@ test('exact track finalization upserts at speed 1 and deletes the superseded sto
     words: exactWords,
   };
 
-  const firstGrant = await issueTrackUploadGrant(t, 'upsert-first');
-  const replacementGrant = await issueTrackUploadGrant(t, 'upsert-replacement');
-  const first = await t.mutation(persistTrack, {
+  const firstGrant = await issueTrackUploadGrant(t);
+  const replacementGrant = await issueTrackUploadGrant(t);
+  const firstStorageId = await storeBoundTrackUpload(t, firstGrant.grant, new Uint8Array([1]));
+  const replacementStorageId = await storeBoundTrackUpload(
+    t,
+    replacementGrant.grant,
+    new Uint8Array([2, 3])
+  );
+  const first = await alice.mutation(persistTrack, {
     ...input,
     storageId: firstStorageId,
     grant: firstGrant.grant,
   });
-  const replacement = await t.mutation(persistTrack, {
+  const replacement = await alice.mutation(persistTrack, {
     ...input,
     storageId: replacementStorageId,
     grant: replacementGrant.grant,
@@ -398,6 +609,9 @@ test('exact track finalization upserts at speed 1 and deletes the superseded sto
     ],
   });
 
+  expect(first.ok).toBe(true);
+  expect(replacement.ok).toBe(true);
+  if (!first.ok || !replacement.ok) throw new Error('Expected successful exact-track upsert');
   expect(replacement.articleId).toBe(first.articleId);
   expect(replacement.trackId).toBe(first.trackId);
 
@@ -419,11 +633,11 @@ test('exact track finalization upserts at speed 1 and deletes the superseded sto
   expect(replacementStorage?.size).toBe(2);
 });
 
-test('replacing one of two shared storage references leaves the old blob alive', async () => {
+test('replacing a legacy unclaimed storage reference does not delete a possibly shared blob', async () => {
   const t = convexTest(schema, modules);
   const sharedStorageId = await storeUploadedTestAudio(t, [1]);
   const replacementStorageId = await storeUploadedTestAudio(t, [2]);
-  const { primaryArticleId } = await t.run(async (ctx) => {
+  const { primaryArticleId, primaryTrackId } = await t.run(async (ctx) => {
     const primaryArticleId = await ctx.db.insert('articles', {
       url: 'https://example.com/shared-primary',
       title: 'Primary',
@@ -442,7 +656,7 @@ test('replacing one of two shared storage references leaves the old blob alive',
       wordCount: 2,
       createdAt: 1,
     });
-    await ctx.db.insert('audioTracks', {
+    const primaryTrackId = await ctx.db.insert('audioTracks', {
       articleId: primaryArticleId,
       voice: 'Adrian',
       speed: 1,
@@ -462,21 +676,20 @@ test('replacing one of two shared storage references leaves the old blob alive',
       words: exactWords,
       createdAt: 1,
     });
-    return { primaryArticleId };
+    return { primaryArticleId, primaryTrackId };
   });
-  const grant = await issueTrackUploadGrant(t, 'shared-storage-replacement');
 
-  const result = await t.mutation(api.routers.tts.persistTrack, {
-    url: 'https://example.com/shared-primary',
-    text: 'Exact timing',
+  const result = await t.mutation(internal.routers.ttsInternal.insertAudioTrack, {
+    articleId: primaryArticleId,
     voice: 'Adrian',
+    speed: 1,
     storageId: replacementStorageId,
-    grant: grant.grant,
     duration: 0.7,
+    timingsSource: 'estimated',
     words: exactWords,
   });
 
-  expect(result.articleId).toBe(primaryArticleId);
+  expect(result).toBe(primaryTrackId);
   const { sharedStorage, references } = await t.run(async (ctx) => ({
     sharedStorage: await ctx.db.system.get('_storage', sharedStorageId),
     references: (await ctx.db.query('audioTracks').collect()).filter(
@@ -489,7 +702,8 @@ test('replacing one of two shared storage references leaves the old blob alive',
 
 test('exact track finalization rejects values that are not uploaded audio storage IDs', async () => {
   const t = convexTest(schema, modules);
-  const grant = await issueTrackUploadGrant(t, 'not-storage');
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const grant = await issueTrackUploadGrant(t);
   const articleId = await t.run(async (ctx) =>
     ctx.db.insert('articles', {
       url: 'https://example.com/not-storage',
@@ -502,43 +716,185 @@ test('exact track finalization rejects values that are not uploaded audio storag
     })
   );
 
-  await expect(
-    t.mutation(api.routers.tts.persistTrack, {
-      url: 'https://example.com/not-storage',
-      text: 'Exact timing',
-      voice: 'Adrian',
-      storageId: articleId,
-      grant: grant.grant,
-      duration: 0.7,
-      words: exactWords,
-    })
-  ).rejects.toThrow(/ArgumentValidationError|storage/i);
+  const result = await alice.mutation(api.routers.tts.persistTrack, {
+    url: EXACT_CACHE_KEY,
+    text: 'Exact timing',
+    voice: 'Adrian',
+    storageId: articleId,
+    grant: grant.grant,
+    duration: 0.7,
+    words: exactWords,
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    error: expect.stringMatching(/ArgumentValidationError|storage/i),
+  });
 
   const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
   expect(tracks).toEqual([]);
 });
 
-test('exact track finalization rejects uploaded storage without the required audio MIME type', async () => {
+test('an unmarked invalid upload is rejected but retained because ownership cannot be proven safely', async () => {
   const t = convexTest(schema, modules);
-  const grant = await issueTrackUploadGrant(t, 'missing-mime');
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const grant = await issueTrackUploadGrant(t);
   const storageIdWithoutMime = await t.run(async (ctx) =>
     ctx.storage.store(new Blob([new Uint8Array([1, 2, 3])]))
   );
 
-  await expect(
-    t.mutation(api.routers.tts.persistTrack, {
-      url: 'https://example.com/missing-mime',
-      text: 'Exact timing',
-      voice: 'Adrian',
-      storageId: storageIdWithoutMime,
-      grant: grant.grant,
-      duration: 0.7,
-      words: exactWords,
-    })
-  ).rejects.toThrow('audio/mpeg');
+  const result = await alice.mutation(api.routers.tts.persistTrack, {
+    url: EXACT_CACHE_KEY,
+    text: 'Exact timing',
+    voice: 'Adrian',
+    storageId: storageIdWithoutMime,
+    grant: grant.grant,
+    duration: 0.7,
+    words: exactWords,
+  });
+  expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/audio\/mpeg/i) });
 
   const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
   expect(tracks).toEqual([]);
+  expect(await t.run(async (ctx) => ctx.db.system.get('_storage', storageIdWithoutMime))).not.toBeNull();
+});
+
+test('upload grants are bound to their exact cache key, content digest, and voice', async () => {
+  const variants = [
+    { url: `${EXACT_CACHE_KEY}-changed`, text: 'Exact timing', voice: 'Adrian', words: exactWords },
+    {
+      url: EXACT_CACHE_KEY,
+      text: 'Exact tracing',
+      voice: 'Adrian',
+      words: [exactWords[0]!, { ...exactWords[1]!, text: 'tracing' }],
+    },
+    { url: EXACT_CACHE_KEY, text: 'Exact timing', voice: 'Emma', words: exactWords },
+  ];
+
+  for (const variant of variants) {
+    const t = convexTest(schema, modules);
+    const alice = t.withIdentity(ALICE_IDENTITY);
+    const issued = (await alice.mutation(
+      api.routers.tts.generateTrackUploadUrl,
+      exactGrantBindings as any
+    )) as { grant: string };
+    const storageId = await storeBoundTrackUpload(t, issued.grant, new Uint8Array([1, 2, 3]));
+
+    const result = await alice.mutation(api.routers.tts.persistTrack, {
+      ...variant,
+      grant: issued.grant,
+      storageId,
+      duration: 0.7,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/grant|digest|voice|binding/i),
+    });
+    expect(await exactPersistenceWrites(t)).toEqual({ articles: [], tracks: [] });
+  }
+});
+
+test('invalid-MIME and oversized bound uploads are deleted without rolling deletion back', async () => {
+  for (const variant of ['mime', 'size'] as const) {
+    const t = convexTest(schema, modules);
+    const alice = t.withIdentity(ALICE_IDENTITY);
+    const issued = (await alice.mutation(
+      api.routers.tts.generateTrackUploadUrl,
+      exactGrantBindings as any
+    )) as { grant: string };
+    const storageId = await storeBoundTrackUpload(
+      t,
+      issued.grant,
+      variant === 'size'
+        ? new Uint8Array(25 * 1024 * 1024 + 1)
+        : new Uint8Array([1, 2, 3]),
+      variant === 'mime' ? 'application/octet-stream' : 'audio/mpeg'
+    );
+
+    const result = await alice.mutation(api.routers.tts.persistTrack, {
+      url: EXACT_CACHE_KEY,
+      text: 'Exact timing',
+      voice: 'Adrian',
+      grant: issued.grant,
+      storageId,
+      duration: 0.7,
+      words: exactWords,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(variant === 'mime' ? /audio\/mpeg|MIME/i : /large|size|byte/i),
+    });
+
+    const stored = await t.run(async (ctx) => ctx.db.system.get('_storage', storageId));
+    expect(stored).toBeNull();
+  }
+});
+
+test('bounded cleanup deletes only old unclaimed feature-marked uploads', async () => {
+  const t = convexTest(schema, modules);
+  const abandonedGrant = 'a'.repeat(64);
+  const claimedGrant = 'b'.repeat(64);
+  const oldUnclaimed = await storeBoundTrackUpload(
+    t,
+    abandonedGrant,
+    new Uint8Array([1])
+  );
+  const claimed = await storeBoundTrackUpload(t, claimedGrant, new Uint8Array([2]));
+  const unrelated = await t.run(async (ctx) =>
+    ctx.storage.store(new Blob([new Uint8Array([3])], { type: 'audio/mpeg' }))
+  );
+  const malformedMarker = await storeBoundTrackUpload(
+    t,
+    'not-a-feature-capability',
+    new Uint8Array([4])
+  );
+  await t.run(async (ctx) => {
+    await (ctx.db as any).patch(unrelated, { contentType: 'audio/mpeg' });
+    const articleId = await ctx.db.insert('articles', {
+      url: 'owner-scoped-cleanup-fixture',
+      title: 'Cleanup fixture',
+      content: 'Exact timing',
+      author: 'Unknown',
+      sourceType: 'text',
+      wordCount: 2,
+      createdAt: 1,
+    });
+    const trackId = await ctx.db.insert('audioTracks', {
+      articleId,
+      voice: 'Adrian',
+      speed: 1,
+      storageId: claimed,
+      duration: 0.7,
+      timingsSource: 'soniox',
+      words: exactWords,
+      createdAt: 1,
+    });
+    await (ctx.db as any).insert('ttsTrackStorageClaims', {
+      storageId: claimed,
+      trackId,
+      kind: 'exact',
+      ownerKey: ALICE_IDENTITY.tokenIdentifier,
+      grantToken: claimedGrant,
+      claimedAt: 1,
+    });
+  });
+
+  const result = await t.mutation(
+    (internal.routers.ttsInternal as any).cleanupAbandonedTrackUploads,
+    { cursor: null, now: Date.now() + 2 * 60 * 60 * 1000 }
+  );
+
+  expect(result.scanned).toBeLessThanOrEqual(32);
+  expect(result.deleted).toBe(1);
+  const storage = await t.run(async (ctx) => ({
+    oldUnclaimed: await ctx.db.system.get('_storage', oldUnclaimed),
+    claimed: await ctx.db.system.get('_storage', claimed),
+    unrelated: await ctx.db.system.get('_storage', unrelated),
+    malformedMarker: await ctx.db.system.get('_storage', malformedMarker),
+  }));
+  expect(storage.oldUnclaimed).toBeNull();
+  expect(storage.claimed).not.toBeNull();
+  expect(storage.unrelated).not.toBeNull();
+  expect(storage.malformedMarker).not.toBeNull();
 });
 
 test('cache miss stores exactly one file and inserts exactly one audioTracks row', async () => {
@@ -893,6 +1249,10 @@ async function withSonioxServerKey<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+function temporaryExpiry(offsetMs = 5 * 60 * 1000) {
+  return new Date(Date.now() + offsetMs).toISOString();
+}
+
 test('temporaryKey posts the constrained Soniox request and returns only the temporary key', async () => {
   const t = convexTest(schema, modules);
   let request: RequestInit | undefined;
@@ -902,14 +1262,15 @@ test('temporaryKey posts the constrained Soniox request and returns only the tem
       expect(url).toBe('https://api.soniox.com/v1/auth/temporary-api-key');
       request = init;
       return new Response(
-        JSON.stringify({ api_key: 'temporary-soniox-key', expires_at: '2026-08-29T12:05:00.000Z' }),
+        JSON.stringify({ api_key: 'temporary-soniox-key', expires_at: temporaryExpiry() }),
         { status: 201, headers: { 'Content-Type': 'application/json' } }
       );
     });
 
     const result = await t.action(api.routers.tts.temporaryKey, { clientId: 'browser-client-123' });
 
-    expect(result).toEqual({ apiKey: 'temporary-soniox-key', expiresAt: '2026-08-29T12:05:00.000Z' });
+    expect(result.apiKey).toBe('temporary-soniox-key');
+    expect(Date.parse(result.expiresAt)).toBeGreaterThan(Date.now());
     expect(result.apiKey).not.toBe(process.env.SONIOX_API_KEY);
   });
 
@@ -939,7 +1300,7 @@ test('temporaryKey uses authenticated identity for Soniox attribution ahead of c
   await withSonioxServerKey(async () => {
     stubFetch((_url, init) => {
       clientReferenceId = JSON.parse(String(init?.body)).client_reference_id;
-      return new Response(JSON.stringify({ api_key: 'temporary-key', expires_at: '2026-08-29T12:05:00.000Z' }), {
+      return new Response(JSON.stringify({ api_key: 'temporary-key', expires_at: temporaryExpiry() }), {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -956,7 +1317,7 @@ test('temporaryKey rejects the sixth request for one client before calling Sonio
 
   await withSonioxServerKey(async () => {
     stubFetch(() =>
-      new Response(JSON.stringify({ api_key: 'temporary-key', expires_at: '2026-08-29T12:05:00.000Z' }), {
+      new Response(JSON.stringify({ api_key: 'temporary-key', expires_at: temporaryExpiry() }), {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -965,7 +1326,7 @@ test('temporaryKey rejects the sixth request for one client before calling Sonio
     for (let request = 0; request < 5; request += 1) {
       await expect(t.action(api.routers.tts.temporaryKey, { clientId: 'key-burst-client' })).resolves.toEqual({
         apiKey: 'temporary-key',
-        expiresAt: '2026-08-29T12:05:00.000Z',
+        expiresAt: expect.any(String),
       });
     }
 
@@ -1021,7 +1382,7 @@ test('temporaryKey fails clearly without a server key or a valid Soniox response
 
   await withSonioxServerKey(async () => {
     stubFetch(() =>
-      new Response(JSON.stringify({ expires_at: '2026-08-29T12:05:00.000Z' }), {
+      new Response(JSON.stringify({ expires_at: temporaryExpiry() }), {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -1030,4 +1391,45 @@ test('temporaryKey fails clearly without a server key or a valid Soniox response
       'Soniox returned an invalid temporary key response'
     );
   });
+});
+
+test('temporaryKey trims and bounds anonymous client IDs before attribution and limiting', async () => {
+  const t = convexTest(schema, modules);
+  let clientReferenceId: string | undefined;
+
+  await withSonioxServerKey(async () => {
+    stubFetch((_url, init) => {
+      clientReferenceId = JSON.parse(String(init?.body)).client_reference_id;
+      return new Response(
+        JSON.stringify({ api_key: 'temporary-key', expires_at: temporaryExpiry() }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+
+    await t.action(api.routers.tts.temporaryKey, { clientId: '  browser-client  ' });
+    await expect(
+      t.action(api.routers.tts.temporaryKey, { clientId: 'x'.repeat(201) })
+    ).rejects.toThrow(/200|too (?:big|long)|validation/i);
+  });
+
+  expect(clientReferenceId).toBe('browser-client');
+  expect(fetchCalls).toHaveLength(1);
+});
+
+test('temporaryKey rejects upstream expiry outside the future ten-minute window', async () => {
+  for (const offsetMs of [-1, 11 * 60 * 1000]) {
+    const t = convexTest(schema, modules);
+    await withSonioxServerKey(async () => {
+      stubFetch(() =>
+        new Response(
+          JSON.stringify({ api_key: 'temporary-key', expires_at: temporaryExpiry(offsetMs) }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+      await expect(
+        t.action(api.routers.tts.temporaryKey, { clientId: `expiry-${offsetMs}` })
+      ).rejects.toThrow(/invalid temporary key response/i);
+    });
+    fetchCalls = [];
+  }
 });

@@ -127,12 +127,15 @@ export async function allocateTrackUploadAfterGrant(
 function isTemporaryKeyResponse(value: unknown): value is { api_key: string; expires_at: string } {
   if (!value || typeof value !== 'object') return false;
   const response = value as Record<string, unknown>;
-  return (
-    typeof response.api_key === 'string' &&
-    response.api_key.length > 0 &&
-    typeof response.expires_at === 'string' &&
-    !Number.isNaN(Date.parse(response.expires_at))
-  );
+  if (
+    typeof response.api_key !== 'string' ||
+    response.api_key.length === 0 ||
+    typeof response.expires_at !== 'string'
+  ) return false;
+
+  const expiresAt = Date.parse(response.expires_at);
+  const now = Date.now();
+  return Number.isFinite(expiresAt) && expiresAt > now && expiresAt <= now + 10 * 60 * 1000;
 }
 
 export const getExactTrack = query
@@ -144,9 +147,15 @@ export const getExactTrack = query
   )
   .output(exactTrackSchema.nullable())
   .query(async ({ ctx, input }) => {
+    const identity = await ctx.auth?.getUserIdentity?.();
+    if (!identity) return null;
     const track: Doc<'audioTracks'> | null = await ctx.runQuery(
       internal.routers.ttsInternal.findExactCachedTrackByUrl,
-      input
+      {
+        ownerKey: identity.tokenIdentifier,
+        cacheKey: input.url,
+        voice: input.voice,
+      }
     );
     if (!track?.storageId) return null;
 
@@ -161,7 +170,13 @@ export const getExactTrack = query
   });
 
 export const generateTrackUploadUrl = mutation
-  .input(z.object({ clientId: z.string().trim().min(1).max(200).optional() }))
+  .input(
+    z.object({
+      cacheKey: z.string().trim().min(1).max(5000),
+      contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      voice: z.string().trim().min(1).max(100),
+    })
+  )
   .output(
     z.object({
       uploadUrl: z.string().min(1),
@@ -171,7 +186,8 @@ export const generateTrackUploadUrl = mutation
   )
   .mutation(async ({ ctx, input }) => {
     const identity = await ctx.auth?.getUserIdentity?.();
-    const rateLimitKey = identity?.tokenIdentifier || input.clientId || 'anonymous';
+    if (!identity) throw new Error('Sign in is required to persist exact tracks');
+    const ownerKey = identity.tokenIdentifier;
     const grantToken = `${crypto.randomUUID().replaceAll('-', '')}${crypto
       .randomUUID()
       .replaceAll('-', '')}`;
@@ -180,7 +196,10 @@ export const generateTrackUploadUrl = mutation
     return await allocateTrackUploadAfterGrant(
       () =>
         ctx.runMutation(internal.routers.ttsInternal.issueTrackUploadGrant, {
-          key: rateLimitKey,
+          ownerKey,
+          cacheKey: input.cacheKey,
+          contentDigest: input.contentDigest,
+          voice: input.voice,
           token: grantToken,
           expiresAt,
         }) as Promise<TrackUploadGrantIssue>,
@@ -202,10 +221,18 @@ export const persistTrack = mutation
       words: z.array(wordTimingSchema).max(MAX_WORDS),
     })
   )
-  .output(z.object({ articleId: z.string(), trackId: z.string() }))
+  .output(
+    z.discriminatedUnion('ok', [
+      z.object({ ok: z.literal(true), articleId: z.string(), trackId: z.string() }),
+      z.object({ ok: z.literal(false), error: z.string() }),
+    ])
+  )
   .mutation(async ({ ctx, input }) => {
-    return await ctx.runMutation(internal.routers.ttsInternal.finalizeExactTrack, {
-      url: input.url,
+    const identity = await ctx.auth?.getUserIdentity?.();
+    if (!identity) throw new Error('Sign in is required to persist exact tracks');
+    const finalizeInput = {
+      ownerKey: identity.tokenIdentifier,
+      cacheKey: input.url,
       title: input.title,
       author: input.author,
       content: input.text,
@@ -214,11 +241,35 @@ export const persistTrack = mutation
       storageId: input.storageId as Id<'_storage'>,
       duration: input.duration,
       words: input.words,
-    });
+    };
+    try {
+      const result = await ctx.runMutation(
+        internal.routers.ttsInternal.finalizeExactTrack,
+        finalizeInput
+      );
+      return { ok: true as const, ...result };
+    } catch (error) {
+      try {
+        await ctx.runMutation(internal.routers.ttsInternal.rejectExactTrackUpload, {
+          ownerKey: identity.tokenIdentifier,
+          cacheKey: input.url,
+          content: input.text,
+          voice: input.voice,
+          grant: input.grant,
+          storageId: input.storageId as Id<'_storage'>,
+        });
+      } catch {
+        // A blob without the owner-bound grant marker cannot be deleted safely.
+      }
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : 'Exact track finalization failed',
+      };
+    }
   });
 
 export const temporaryKey = action
-  .input(z.object({ clientId: z.string().optional() }))
+  .input(z.object({ clientId: z.string().trim().min(1).max(200).optional() }))
   .action(async ({ ctx, input }): Promise<TemporaryKeyResult> => {
     const sonioxApiKey = env.SONIOX_API_KEY;
     if (!sonioxApiKey) {

@@ -17,8 +17,10 @@ export interface WordTimingAccumulator {
  * word split between WebSocket messages remains one timing.
  */
 export function createWordTimingAccumulator(text: string): WordTimingAccumulator {
-  const expectedWords = text.split(/\s+/).filter(Boolean);
-  let nextWordIndex = 0;
+  const expectedText = text.trim();
+  let receivedLength = 0;
+  let previousStart = -Infinity;
+  let previousEnd = -Infinity;
   let partialText = '';
   let partialStart: number | undefined;
   let partialEnd: number | undefined;
@@ -27,14 +29,10 @@ export function createWordTimingAccumulator(text: string): WordTimingAccumulator
     if (!partialText || partialStart === undefined || partialEnd === undefined) return [];
 
     const word: WordTiming = {
-      // The displayed token is authoritative. Step 0 verified Soniox returns
-      // characters verbatim, so this also makes the required 1:1 contract
-      // explicit at the API boundary.
-      text: expectedWords[nextWordIndex] ?? partialText,
+      text: partialText,
       start: partialStart,
       end: partialEnd,
     };
-    nextWordIndex += 1;
     partialText = '';
     partialStart = undefined;
     partialEnd = undefined;
@@ -43,11 +41,40 @@ export function createWordTimingAccumulator(text: string): WordTimingAccumulator
 
   return {
     append(batch) {
+      if (
+        batch.characters.length !== batch.starts.length ||
+        batch.characters.length !== batch.ends.length
+      ) {
+        throw new Error('Soniox timestamp arrays must have matching lengths');
+      }
       const words: WordTiming[] = [];
       for (let index = 0; index < batch.characters.length; index += 1) {
         const character = batch.characters[index]!;
         const start = batch.starts[index]!;
         const end = batch.ends[index]!;
+
+        if (!character || [...character].length !== 1) {
+          throw new Error('Soniox character stream contained a non-character entry');
+        }
+        const expectedCharacter = expectedText.slice(receivedLength, receivedLength + character.length);
+        if (character !== expectedCharacter) {
+          throw new Error(`Soniox character stream mismatch at offset ${receivedLength}`);
+        }
+        if (
+          !Number.isFinite(start) ||
+          !Number.isFinite(end) ||
+          start < 0 ||
+          end < 0 ||
+          end < start
+        ) {
+          throw new Error(`Invalid Soniox character timestamp at offset ${receivedLength}`);
+        }
+        if (start < previousStart || end < previousEnd) {
+          throw new Error(`Soniox character timestamps are not globally monotonic at offset ${receivedLength}`);
+        }
+        receivedLength += character.length;
+        previousStart = start;
+        previousEnd = end;
 
         if (/\s/.test(character)) {
           words.push(...emitPartial());
@@ -62,6 +89,11 @@ export function createWordTimingAccumulator(text: string): WordTimingAccumulator
     },
 
     flush() {
+      if (receivedLength !== expectedText.length) {
+        throw new Error(
+          `Incomplete Soniox character stream: received ${receivedLength} of ${expectedText.length} characters`
+        );
+      }
       return emitPartial();
     },
   };

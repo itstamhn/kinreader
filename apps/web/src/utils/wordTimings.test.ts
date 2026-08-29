@@ -20,14 +20,14 @@ test('keeps a word open across timestamp batches and only emits it after its del
   ).toEqual([{ text: 'Hello', start: 0.1, end: 0.19 }]);
   expect(
     accumulator.append({
-      characters: ['w'],
-      starts: [0.3],
-      ends: [0.31],
+      characters: ['w', 'o', 'r', 'l', 'd'],
+      starts: [0.3, 0.32, 0.34, 0.36, 0.38],
+      ends: [0.31, 0.33, 0.35, 0.37, 0.39],
     })
   ).toEqual([]);
   expect(
     accumulator.flush()
-  ).toEqual([{ text: 'world', start: 0.3, end: 0.31 }]);
+  ).toEqual([{ text: 'world', start: 0.3, end: 0.39 }]);
 });
 
 test('does not use leading or whitespace-only batch timestamps as a word start', () => {
@@ -35,9 +35,9 @@ test('does not use leading or whitespace-only batch timestamps as a word start',
 
   expect(
     accumulator.append({
-      characters: [' ', 'A'],
-      starts: [0, 0.12],
-      ends: [0.1, 0.2],
+      characters: ['A'],
+      starts: [0.12],
+      ends: [0.2],
     })
   ).toEqual([]);
   expect(
@@ -58,14 +58,9 @@ test('does not use leading or whitespace-only batch timestamps as a word start',
 });
 
 test('emits exactly the rendered whitespace tokens after single-character and whitespace-only batches', () => {
-  const text = '  One\n two   three ';
+  const text = 'One\n two   three';
   const accumulator = createWordTimingAccumulator(text);
   const emitted = [
-    ...accumulator.append({
-      characters: [' ', ' '],
-      starts: [0, 0.01],
-      ends: [0.005, 0.015],
-    }),
     ...accumulator.append({
       characters: ['O'],
       starts: [0.1],
@@ -100,4 +95,54 @@ test('emits exactly the rendered whitespace tokens after single-character and wh
     { text: 'two', start: 0.3, end: 0.35 },
     { text: 'three', start: 0.4, end: 0.49 },
   ]);
+});
+
+test.each([
+  ['substituted character', 'Hello world', 'Hxllo world'],
+  ['missing whitespace', 'Hello world', 'Helloworld'],
+  ['normalised whitespace', 'Hello\nworld', 'Hello world'],
+  ['duplicated character', 'Hello world', 'Helloo world'],
+  ['reordered characters', 'Hello world', 'Hlelo world'],
+])('rejects a %s instead of substituting displayed word text', (_name, expected, received) => {
+  const accumulator = createWordTimingAccumulator(expected);
+  const characters = [...received];
+
+  expect(() =>
+    accumulator.append({
+      characters,
+      starts: characters.map((_, index) => index * 0.1),
+      ends: characters.map((_, index) => index * 0.1 + 0.05),
+    })
+  ).toThrow(/character stream/i);
+});
+
+test('rejects incomplete final character consumption when the stream terminates', () => {
+  const accumulator = createWordTimingAccumulator('Exact timing');
+  const characters = [...'Exact'];
+  accumulator.append({
+    characters,
+    starts: characters.map((_, index) => index * 0.1),
+    ends: characters.map((_, index) => index * 0.1 + 0.05),
+  });
+
+  expect(() => accumulator.flush()).toThrow(/incomplete .*character stream/i);
+});
+
+test('rejects non-finite, negative, reversed, and globally non-monotonic character times', () => {
+  const invalidBatches = [
+    { characters: ['A'], starts: [Number.NaN], ends: [0.1] },
+    { characters: ['A'], starts: [-0.1], ends: [0.1] },
+    { characters: ['A'], starts: [0.2], ends: [0.1] },
+  ];
+
+  for (const batch of invalidBatches) {
+    const accumulator = createWordTimingAccumulator('A');
+    expect(() => accumulator.append(batch)).toThrow(/timestamp/i);
+  }
+
+  const accumulator = createWordTimingAccumulator('AB');
+  accumulator.append({ characters: ['A'], starts: [0.2], ends: [0.3] });
+  expect(() =>
+    accumulator.append({ characters: ['B'], starts: [0.1], ends: [0.4] })
+  ).toThrow(/monotonic/i);
 });

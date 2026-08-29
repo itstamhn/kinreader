@@ -61,6 +61,7 @@ export interface AppProps {
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
   loadExactTrack?: (input: { url: string; voice: string }) => Promise<ExactTrackCacheEntry | null>;
   persistExactTrack?: (input: PersistExactTrackInput) => Promise<void>;
+  serverExactCacheEnabled?: boolean;
 }
 
 export function App({
@@ -68,6 +69,7 @@ export function App({
   requestTemporaryKey,
   loadExactTrack,
   persistExactTrack,
+  serverExactCacheEnabled,
 }: AppProps = {}) {
   const crpc = useCRPC();
   const queryClient = useQueryClient();
@@ -87,7 +89,7 @@ export function App({
     persistExactTrack ??
     ((input: PersistExactTrackInput) =>
       uploadAndFinalizeExactTrack(input, {
-        requestUploadUrl: (clientId) => trackUploadUrlMutation.mutateAsync({ clientId }),
+        requestUploadUrl: (request) => trackUploadUrlMutation.mutateAsync(request),
         finalizeTrack: (finalizeInput) => persistTrackMutation.mutateAsync(finalizeInput),
       }));
 
@@ -100,6 +102,7 @@ export function App({
         tier: 'pro',
       }
     : null;
+  const canUseServerExactCache = serverExactCacheEnabled ?? Boolean(user);
 
   const { data: cloudPlaylist } = useQuery(
     crpc.routers.users.getUserPlaylist.queryOptions({}, { enabled: !!user })
@@ -178,6 +181,7 @@ export function App({
     // Read play/pause state from the engine itself, not a React mirror --
     // this is what lets the keyboard effect below subscribe once instead of
     // needing playback state in its dependency array.
+    if (!engine.playbackReady) return;
     if (engine.isPlaying) {
       engine.pause();
     } else {
@@ -256,8 +260,15 @@ export function App({
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
     const voice = currSettings.sonioxVoice || 'Adrian';
-    const cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: art.content });
-    if (!isCurrentLoad()) return;
+    let cacheUrl: string | null = null;
+    if (canUseServerExactCache) {
+      try {
+        cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: art.content });
+      } catch (error) {
+        console.warn('Exact track cache identity unavailable; continuing without server cache:', error);
+      }
+      if (!isCurrentLoad()) return;
+    }
     const cancelCurrentStream = () => {
       activeStreamRef.current?.cancel();
       activeStreamRef.current = null;
@@ -312,8 +323,8 @@ export function App({
         let audioFinished = false;
         let completedBlob: Blob | null = null;
         let attemptActive = true;
-        const progressivePlayback = eng.startStreamingSession(initialWordTimings, totalDuration);
-        setPlaybackStatus(progressivePlayback ? 'synthesizing' : 'degraded');
+        eng.startStreamingSession(initialWordTimings, totalDuration);
+        setPlaybackStatus('ready');
 
         const finalizeTimings = () => {
           if (!attemptActive || !isCurrentLoad()) return;
@@ -329,9 +340,8 @@ export function App({
           activeStreamRef.current = null;
           setPlaybackStatus('ready');
 
-          if (completedBlob) {
+          if (completedBlob && canUseServerExactCache && cacheUrl) {
             const persistenceInput: PersistExactTrackInput = {
-              clientId,
               url: cacheUrl,
               title: art.title,
               author: art.author,
@@ -398,21 +408,23 @@ export function App({
       }
     };
 
-    try {
-      const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
-      if (!isCurrentLoad()) return;
-      if (cachedTrack) {
-        let cacheFailed = false;
-        eng.loadAudioUrl(cachedTrack.audioUrl, cachedTrack.words, cachedTrack.duration, () => {
-          if (cacheFailed || !isCurrentLoad()) return;
-          cacheFailed = true;
-          void runWebSocketAttempt(0);
-        });
-        setPlaybackStatus('ready');
-        return;
+    if (canUseServerExactCache && cacheUrl) {
+      try {
+        const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
+        if (!isCurrentLoad()) return;
+        if (cachedTrack) {
+          let cacheFailed = false;
+          eng.loadAudioUrl(cachedTrack.audioUrl, cachedTrack.words, cachedTrack.duration, () => {
+            if (cacheFailed || !isCurrentLoad()) return;
+            cacheFailed = true;
+            void runWebSocketAttempt(0);
+          });
+          setPlaybackStatus('ready');
+          return;
+        }
+      } catch (error) {
+        console.warn('Exact track cache lookup failed; continuing with synthesis:', error);
       }
-    } catch (error) {
-      console.warn('Exact track cache lookup failed; continuing with synthesis:', error);
     }
 
     void runWebSocketAttempt(0);
@@ -780,6 +792,12 @@ export function App({
             viewMode={viewMode}
             onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
             isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
+            isPlayable={playback.playbackReady}
+            isBuffering={
+              !playback.playbackReady &&
+              playbackStatus !== 'degraded' &&
+              playbackStatus !== 'error'
+            }
             isDegraded={playbackStatus === 'degraded'}
             isError={playbackStatus === 'error'}
           />

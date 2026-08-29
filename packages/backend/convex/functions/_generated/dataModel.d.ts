@@ -136,7 +136,6 @@ export type DataModel = {
       by_creation_time: ["_creationTime"];
       by_article: ["articleId", "_creationTime"];
       by_article_voice_speed: ["articleId", "voice", "speed", "_creationTime"];
-      by_storage_id: ["storageId", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};
@@ -227,6 +226,66 @@ export type DataModel = {
       by_creation_time: ["_creationTime"];
       token: ["token", "_creationTime"];
       userId: ["userId", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  ttsExactUploadGrants: {
+    document: {
+      cacheKey: string;
+      contentDigest: string;
+      createdAt: number;
+      expiresAt: number;
+      ownerKey: string;
+      token: string;
+      voice: string;
+      _id: Id<"ttsExactUploadGrants">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "cacheKey"
+      | "contentDigest"
+      | "createdAt"
+      | "expiresAt"
+      | "ownerKey"
+      | "token"
+      | "voice";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_expires_at: ["expiresAt", "_creationTime"];
+      by_token: ["token", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  ttsTrackStorageClaims: {
+    document: {
+      claimedAt: number;
+      grantToken?: string;
+      kind: "exact" | "rest";
+      ownerKey?: string;
+      storageId: Id<"_storage">;
+      trackId: Id<"audioTracks">;
+      _id: Id<"ttsTrackStorageClaims">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "claimedAt"
+      | "grantToken"
+      | "kind"
+      | "ownerKey"
+      | "storageId"
+      | "trackId";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_storage_id: ["storageId", "_creationTime"];
+      by_track_id: ["trackId", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};

@@ -110,8 +110,15 @@ export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxSt
   const fail = (error: Error) => {
     if (cancelled || failed) return;
     failed = true;
-    handlers.onError(error);
-    socket?.close();
+    try {
+      handlers.onError(error);
+    } catch {
+      // Consumer error reporting is terminal too; never let it escape a
+      // WebSocket close/error callback or trigger a second report.
+    }
+    try {
+      socket?.close();
+    } catch {}
   };
 
   const send = (message: object) => {
@@ -211,18 +218,23 @@ export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxSt
 
   socket.onerror = () => fail(new SonioxProtocolError('Soniox WebSocket error'));
   socket.onclose = () => {
-    if (!cancelled && !failed && !audioEnded) {
-      fail(new SonioxProtocolError('Soniox WebSocket closed before audio completed'));
-    } else if (!cancelled && !failed && audioEnded) {
-      finishTermination();
-    }
+    if (cancelled || failed || terminated) return;
+    fail(
+      new SonioxProtocolError(
+        audioEnded
+          ? 'Soniox WebSocket closed before explicit termination'
+          : 'Soniox WebSocket closed before audio completed'
+      )
+    );
   };
 
   return {
     cancel() {
       if (cancelled) return;
       cancelled = true;
-      socket?.close();
+      try {
+        socket?.close();
+      } catch {}
     },
   };
 }

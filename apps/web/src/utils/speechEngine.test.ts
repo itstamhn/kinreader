@@ -316,6 +316,7 @@ test('streaming prefers MediaSource and exposes progressive playback availabilit
 
     expect(progressive).toBe(true);
     expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
     expect(created).toEqual(['FakeMediaSource']);
   } finally {
     (window as any).MediaSource = originalMediaSource;
@@ -377,6 +378,7 @@ test('streaming without a supported source exposes degradation and loads the com
   try {
     const engine = new SpeechEngine();
     const progressive = engine.startStreamingSession(evenWords(1), 1);
+    expect(engine.getSnapshot().playbackReady).toBe(false);
     engine.appendAudioChunk(new Uint8Array([1, 2]));
     engine.appendAudioChunk(new Uint8Array([3]));
 
@@ -384,6 +386,7 @@ test('streaming without a supported source exposes degradation and loads the com
 
     expect(progressive).toBe(false);
     expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
     expect(completedBlob).toBe(blob);
     expect((engine as any).audio.src).toContain('blob:completed-audio');
     expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([1, 2, 3]);
@@ -391,6 +394,134 @@ test('streaming without a supported source exposes degradation and loads the com
     (window as any).MediaSource = originalMediaSource;
     (window as any).ManagedMediaSource = originalManagedMediaSource;
     URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+function installThrowingAppendMediaSource() {
+  const created: Array<{ kind: string; value: unknown }> = [];
+
+  class ThrowingSourceBuffer {
+    updating = false;
+    private updateListeners = new Set<() => void>();
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === 'updateend') this.updateListeners.add(listener);
+    }
+
+    removeEventListener(type: string, listener: () => void) {
+      if (type === 'updateend') this.updateListeners.delete(listener);
+    }
+
+    appendBuffer() {
+      throw new Error('non-transient append failure');
+    }
+
+    abort() {}
+  }
+
+  class ThrowingAppendMediaSource {
+    static instances: ThrowingAppendMediaSource[] = [];
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    private sourceOpenListeners = new Set<() => void>();
+
+    constructor() {
+      ThrowingAppendMediaSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.sourceOpenListeners.add(listener);
+    }
+
+    removeEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.sourceOpenListeners.delete(listener);
+    }
+
+    addSourceBuffer() {
+      return new ThrowingSourceBuffer();
+    }
+
+    endOfStream() {
+      this.readyState = 'ended';
+    }
+
+    open() {
+      this.readyState = 'open';
+      for (const listener of [...this.sourceOpenListeners]) listener();
+    }
+  }
+
+  (window as any).MediaSource = ThrowingAppendMediaSource;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = (source: any) => {
+    const kind = source instanceof Blob ? 'blob' : 'media-source';
+    created.push({ kind, value: source });
+    return `blob:${kind}-${created.length}`;
+  };
+
+  return { ThrowingAppendMediaSource, created };
+}
+
+test('an appendBuffer failure before audio_end tears down MSE and installs all retained bytes at finish', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const { ThrowingAppendMediaSource, created } = installThrowingAppendMediaSource();
+    const engine = new SpeechEngine();
+    engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([1, 2]));
+    ThrowingAppendMediaSource.instances[0]!.open();
+
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().playbackReady).toBe(false);
+    expect((engine as any).mediaSource).toBeNull();
+
+    engine.appendAudioChunk(new Uint8Array([3, 4]));
+    engine.finishStreamingSession();
+
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
+    expect([
+      ...new Uint8Array(await (created[1]!.value as Blob).arrayBuffer()),
+    ]).toEqual([1, 2, 3, 4]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    console.warn = originalWarn;
+  }
+});
+
+test('an appendBuffer failure after audio_end immediately replaces MSE with the completed Blob', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const { ThrowingAppendMediaSource, created } = installThrowingAppendMediaSource();
+    const engine = new SpeechEngine();
+    engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([7, 8, 9]));
+    engine.finishStreamingSession();
+    ThrowingAppendMediaSource.instances[0]!.open();
+
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
+    expect([
+      ...new Uint8Array(await (created[1]!.value as Blob).arrayBuffer()),
+    ]).toEqual([7, 8, 9]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    console.warn = originalWarn;
   }
 });
 

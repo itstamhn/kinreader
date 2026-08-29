@@ -11,4 +11,11 @@ crons.cron(
   {}
 );
 
+crons.interval(
+  'cleanup abandoned exact-track uploads',
+  { hours: 1 },
+  internal.routers.ttsInternal.cleanupAbandonedTrackUploads,
+  { cursor: null }
+);
+
 export default crons;
