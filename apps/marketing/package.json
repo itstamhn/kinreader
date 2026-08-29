@@ -1,0 +1,29 @@
+{
+  "name": "@kinreader/marketing",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check",
+    "test": "bun test test/"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^14.2.5",
+    "@astrojs/rss": "^4.0.19",
+    "@astrojs/sitemap": "^3.7.3",
+    "@resvg/resvg-wasm": "^2.6.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.2.9",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@expo-google-fonts/instrument-sans": "^0.4.2",
+    "@expo-google-fonts/newsreader": "^0.4.1",
+    "@types/bun": "latest",
+    "typescript": "^5",
+    "wrangler": "^4.127.0"
+  }
+}

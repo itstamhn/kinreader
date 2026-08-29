@@ -110,7 +110,7 @@ For more information, read the Bun API docs in `node_modules/bun-types/docs/**.m
 This project uses [Convex](https://convex.dev) as its backend.
 
 When working on Convex code, **always read
-`convex/_generated/ai/guidelines.md` first** for important guidelines on
+`packages/backend/convex/_generated/ai/guidelines.md` first** for important guidelines on
 how to correctly use Convex APIs and patterns. The file contains rules that
 override what you may have learned about Convex from training data.
 
@@ -118,3 +118,36 @@ Convex agent skills for common tasks can be installed by running
 `npx convex ai-files install`.
 
 <!-- convex-ai-end -->
+
+## Repo layout
+
+A Bun workspace. Run commands from the directory that owns the config:
+
+| Path | Package | What it is | Commands |
+|------|---------|-----------|----------|
+| `apps/web` | `@kinreader/web` | The Vite SPA and the Cloudflare Worker (auth, share routes) | `bun run dev`, `vite build`, `bunx wrangler deploy` |
+| `apps/marketing` | `@kinreader/marketing` | The Astro site on the apex: landing, blog, `/r/:id`, `/api/og` | `bun run dev`, `astro build`, `bunx wrangler deploy` |
+| `packages/backend` | `@kinreader/backend` | Convex functions — the shared API for every client | `bunx convex dev`, `bunx kitcn codegen` |
+
+From the repo root, `bun run typecheck`, `bun run test` and `bun run build` fan out to
+every package via `bun run --filter`. **`bun test` at the root does not work** — the
+happy-dom preload lives in `apps/web/bunfig.toml`, so run `bun run test` instead, or
+`bun test` from inside a package.
+
+The web app imports the backend as `@kinreader/backend/api`, never by relative path.
+
+kitcn ships its own agent skill inside its npm package; it is vendored to
+`.claude/skills/kitcn` (see `VENDORED.md` there to refresh it after a kitcn bump). Its
+`references/setup/index.md` describes a `convex/functions/` layout this repo does not use
+yet — `plans/015` is the migration, and until it lands the paths in that skill will not
+match what is on disk.
+
+Two origins, deliberately: `kinreader.com` is the marketing site, `app.kinreader.com` is
+the reader. They do not share cookies or `localStorage`, so anything that assumes
+same-origin between them needs an explicit CORS or `targetOrigin` decision.
+
+Astro routes **every** file under `apps/marketing/src/pages`, so tests for that package
+live in `apps/marketing/test/`. Its `wrangler.jsonc` must not set `main` or `assets` —
+the Cloudflare adapter generates those at build time.
+
+Planned but not yet present: `apps/mobile` (Expo). See `plans/013` and `plans/014`.

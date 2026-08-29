@@ -1,0 +1,33 @@
+{
+  // The @astrojs/cloudflare adapter generates dist/server/wrangler.json at build
+  // time and fills in `main` and `assets` itself -- do NOT set them here, or the
+  // Cloudflare Vite plugin resolves `main` against a file that does not exist
+  // yet and the build fails before Astro has written it.
+  //
+  // What this file is for is the deploy-time configuration the adapter has no
+  // opinion about: the name, the compat settings, and the domains.
+  "name": "kinreader-marketing",
+  "compatibility_date": "2026-08-01",
+  // Deliberately NO nodejs_compat. satori's text shaper is Emscripten-compiled
+  // and branches on `typeof process == "object" && process.versions?.node`,
+  // which nodejs_compat makes true -- it then reaches for `__dirname` and
+  // `require("fs")`, neither of which exists in an ESM Worker bundle, and every
+  // OG render falls back to the SVG. Verified under `wrangler dev`: with the
+  // flag the route serves image/svg+xml, without it image/png.
+  // The apex and www. The reader is a separate Worker on app.kinreader.com,
+  // deployed from apps/web with its own config.
+  //
+  // www serves the same site rather than 301ing to the apex, and that is a
+  // limitation, not a preference: Cloudflare serves prerendered pages straight
+  // from the asset store without invoking the Worker, so no code here can
+  // redirect them, and a `_redirects` file rejects absolute URLs -- an entry
+  // like `https://www.kinreader.com/* https://kinreader.com/:splat 301` is
+  // parsed and skipped with a warning (confirmed under `wrangler dev`).
+  // Every page emits <link rel="canonical"> pointing at the apex, which is what
+  // keeps the duplicate out of search. For an actual 301, add a Cloudflare
+  // Redirect Rule for the www hostname in the dashboard.
+  "routes": [
+    { "pattern": "kinreader.com", "custom_domain": true },
+    { "pattern": "www.kinreader.com", "custom_domain": true }
+  ]
+}

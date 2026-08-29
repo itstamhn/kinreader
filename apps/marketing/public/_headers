@@ -1,0 +1,17 @@
+# Cloudflare serves prerendered pages directly from the asset store without
+# invoking the Worker, so the security headers for a page load have to live
+# here. The @astrojs/cloudflare adapter appends its own immutable Cache-Control
+# block for /_astro/* to this file at build time -- check dist/client/_headers
+# after a build to see the merged result.
+#
+# Unlike apps/web, this CSP needs NO script hash: there are no inline scripts on
+# this site. The one script it has (public/pwa-redirect.js) is an external file
+# precisely so that stays true. If you ever add an inline <script>, you will
+# need a sha256 here, and it will break silently the first time the script
+# changes by one character -- prefer public/ or a bundled external script.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; media-src 'self' data: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin

@@ -1,0 +1,49 @@
+---
+import Base from '../../layouts/Base.astro';
+import { getCollection, render, type CollectionEntry } from 'astro:content';
+import type { GetStaticPaths } from 'astro';
+
+// Astro cannot infer prop types from getStaticPaths on its own; without this,
+// `Astro.props` is `unknown` and every use of `post` below is a type error.
+type Props = { post: CollectionEntry<'blog'> };
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  // Drafts get no route at all, so a draft cannot be reached by guessing its
+  // slug -- filtering it out of the index alone would not be enough.
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+};
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+
+const ogImage = new URL(
+  `/api/og?title=${encodeURIComponent(post.data.title)}&author=Kinreader`,
+  Astro.site
+).href;
+---
+
+<Base title={`${post.data.title} — Kinreader`} description={post.data.description} ogType="article" ogImage={ogImage}>
+  <article class="py-12">
+    <time datetime={post.data.pubDate.toISOString()} class="font-mono text-[10.5px] uppercase tracking-wider text-paper/35">
+      {post.data.pubDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+    </time>
+    <h1 class="font-serif text-3xl sm:text-4xl text-cream tracking-tight mt-2 leading-tight">{post.data.title}</h1>
+
+    <div class="prose-kinreader mt-8">
+      <Content />
+    </div>
+  </article>
+</Base>
+
+<style is:global>
+  /* Scoped to rendered Markdown; the layout has no other long-form prose. */
+  .prose-kinreader { font-family: var(--font-serif); color: color-mix(in srgb, var(--color-paper) 80%, transparent); }
+  .prose-kinreader p { margin-block: 1.15rem; line-height: 1.75; font-size: 1.0625rem; }
+  .prose-kinreader h2 {
+    font-family: var(--font-sans); font-weight: 600; font-size: 1.15rem;
+    color: var(--color-cream); margin-block: 2.25rem 0.75rem;
+  }
+  .prose-kinreader a { color: var(--color-amber); text-underline-offset: 3px; text-decoration: underline; }
+  .prose-kinreader code { font-family: var(--font-mono); font-size: 0.875em; }
+</style>

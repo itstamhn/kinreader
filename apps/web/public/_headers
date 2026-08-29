@@ -1,0 +1,19 @@
+# Cloudflare serves files matching dist/ directly and never invokes src/worker.ts,
+# so security headers for the page load have to live here. The Worker keeps its own
+# copy for /api/* and /r/:id, which it does handle. This policy is deliberately
+# looser than the Worker's: the app shell loads Google Fonts and has one inline
+# script, neither of which the /r/:id share page has.
+#
+# WARNING: the sha256 below is the hash of the inline HTTPS-redirect script in
+# index.html (lines 5-9). Edit that script by even one character and the hash stops
+# matching, which silently disables the redirect. Recompute with:
+#   python3 -c "import re,hashlib,base64;h=open('dist/index.html').read();b=re.search(r'<script>(.*?)</script>',h,re.S).group(1);print(base64.b64encode(hashlib.sha256(b.encode()).digest()).decode())"
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-WxuGxEql1kXlATK3dvStVHdNJ4DjiQ7Vii9VAWoNvBo=' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud https://cloudflareinsights.com; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  # app.kinreader.com is the reader, not a page anyone should reach from search.
+  # The apex (the Astro marketing site) is the indexable front door -- plan 014.
+  X-Robots-Tag: noindex

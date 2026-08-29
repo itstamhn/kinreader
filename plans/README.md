@@ -17,14 +17,25 @@ the table when done.
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 | 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | DONE |
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | DONE |
-| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
+| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006, 015 | BLOCKED (needs a Convex deployment — see log) |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
+| 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | DONE |
+| 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | IN PROGRESS (code DONE; cutover pending) |
+| 015 | Align the backend with kitcn's expected project layout | P2 | M | 013 | TODO — do before 008 |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
+
+**Note on 009**: plan 014 takes over most of it — `/r/:id` and `/api/og` move to the Astro
+app on the apex, because the domain split forces it. What remains of 009 after 014 is
+"delete Spiceflow and `src/server.ts`", which needs plan 008 (auth to Convex) first.
+
+**One follow-up still owed by 014**: `/r/:id` is half-built — nothing generates those links
+and nothing handles the `?read=` it redirects to. (The SVG-card follow-up is DONE; see the
+log entry below.)
 
 ## Execution log
 
@@ -403,3 +414,135 @@ are not re-audited from scratch next session.
 - **Share links are cosmetic.** `/r/:id` renders a rich card, but `id` only becomes
   `?read=` and nothing resolves it — a recipient cannot actually open the shared
   article.
+
+- **013 — DONE**. Every move recorded as a rename; test count conserved exactly
+  (79 = 56 web + 23 backend), typecheck and build green. Two things worth knowing:
+  1. Bun links workspace packages into the *consuming* package's `node_modules`
+     (`apps/web/node_modules/@kinreader/backend`), not the root's. `ls node_modules` at
+     the root shows nothing — that is normal, not a broken install.
+  2. The web CSS bundle shrank 50181 → 49845 bytes. Investigated by building the previous
+     commit in a worktree and diffing selector sets: the only classes lost are `.block`,
+     `.contents`, `.grow`, `.invisible`, `.isolate`, `.outline`, `.table` and `.visible` —
+     bare utilities Tailwind had been generating because it scanned the whole repo root,
+     including the prose in `plans/*.md`. No source file uses any of them (the real
+     usages are `outline-none`, `overflow-visible` and `sm:block`, all still present).
+     Scoping Tailwind to `apps/web` removed junk, it did not drop a style.
+
+- **014 — code DONE, cutover PENDING.** Everything in the repo is built, tested and
+  verified locally: `apps/marketing` serves the landing page, the blog (content
+  collections + RSS + sitemap), `/r/:id` and `/api/og`; both routes are gone from the
+  Worker; the origin constants, the Worker route, and `X-Robots-Tag: noindex` are all
+  switched to `app.kinreader.com`. 88 tests pass (49 web + 23 backend + 16 marketing),
+  `astro check` reports 0 errors, both apps build.
+
+  **What is NOT done, and needs credentials this environment does not have:** Step 7's
+  cutover — registering the new redirect URI in the Google Cloud console, pointing the
+  custom domains, and deploying the two Workers. `wrangler` is installed here but
+  unauthenticated, and `wrangler login` is an interactive browser flow a remote session
+  cannot complete; a `CLOUDFLARE_API_TOKEN` in the environment would be enough to change
+  that. Nothing has changed in production; the branch is safe to hold until someone does
+  the cutover in the order Step 7 specifies — **console first, deploy before DNS**.
+
+  **Step 9 (the `localStorage` migration bridge) was deleted, not skipped.** The owner
+  confirmed they are the only user with data on the apex, so the bridge would have relaxed
+  `frame-ancestors` — a header plan 012 added deliberately — to migrate one person's
+  library. The cost of not having it is one sign-in.
+
+  Deviations found during execution, all verified:
+  1. **Astro is on 7.2.9 and `docs.astro.build` is blocked by the egress proxy**, so the
+     API was derived from the installed package's own types rather than from docs or
+     memory. Confirmed there: `src/content.config.ts` with the `glob` loader from
+     `astro/loaders`, `render()` as a top-level `astro:content` export, and
+     `output: 'static' | 'server'`.
+  2. **`@astrojs/cloudflare` generates `dist/server/wrangler.json` itself.** A hand-written
+     `wrangler.jsonc` must NOT set `main` or `assets` — the Cloudflare Vite plugin
+     resolves `main` before Astro has written the file and the build dies. It *does* merge
+     `name`, `routes` and the compat settings, which is how the custom domains get set.
+  3. **Anything under `src/pages` is a route.** A test file next to the endpoint was
+     picked up as `/api/og.test` and broke the build trying to prerender `bun:test`. Tests
+     live in `apps/marketing/test/`, and the card was split into `src/lib/og-card.ts` so
+     it can be imported without touching the route tree.
+  4. **Astro inlines small scripts**, so the PWA-recovery redirect is a file in `public/`
+     rather than an Astro `<script>`. That keeps `script-src 'self'` hash-free, which was
+     the explicit goal of Step 8 given the silent-failure warning in `apps/web/public/_headers`.
+  5. **The escaping tests could not port verbatim, and the plan was wrong to assume they
+     could.** `bun test` cannot import a `.astro` file. More importantly Astro escapes `&`
+     and `"` in attribute values but leaves `<`/`>` raw inside them — safe, because the
+     quote escaping prevents any breakout, but `expect(body).not.toContain('<script>')`
+     fails on it for a benign reason. Verified end to end against a dev server instead
+     (`curl "localhost:4321/r/abc?t=</title><script>alert(1)</script>&a=Bob\"onload=\"evil()"`
+     → title and body escaped, the quote becomes `&quot;`), and the page is now guarded by
+     a test that it never grows a `set:html`.
+  6. **The OG card is byte-identical**, and this was proven rather than assumed: the
+     removed Worker implementation was restored from the previous commit and rendered
+     alongside the new one across six inputs, XSS payloads included.
+  7. Test count is deliberately **not** conserved (6 route tests became 16). The moved
+     tests were rewritten against the split-out renderer, which is directly testable.
+
+- **008 — BLOCKED.** Not started, on the plan's own terms. Step 2 is an unconditional
+  gate ("sign in from the client and confirm identity reaches the server; do not proceed
+  until both hold"), and Step 1 verifies with `bunx convex dev --once`. Both need a live
+  Convex deployment, and this execution environment has no Convex credentials
+  (`CONVEX_DEPLOYMENT` unset, no `.env.local`). Writing Steps 3-5 without that gate would
+  mean rewriting authorization and **deleting the working auth backend** with the
+  foundation unverified — which is what makes this plan HIGH risk in the first place.
+
+  Reconnaissance done so it starts ahead, answering one of its STOP conditions:
+  **kitcn's Better Auth adapter is compatible with what is installed.** kitcn 0.32.1
+  peer-requires `better-auth >=1.7.0 <1.8.0` (1.7.2 resolves and installs cleanly),
+  `convex >=1.42 <1.45.0` (pinned at 1.44.0 by plan 012 ✓) and `zod >=4` (4.4.3 ✓).
+  `packages/backend/convex/generated/auth.ts` already imports from `kitcn/auth/generated`
+  and carries the disabled-reason path, exactly as the plan describes. `better-auth` is
+  not yet a dependency — Step 1 needs to add it to `packages/backend`.
+
+  Note for whoever picks this up: `docs.convex.dev` is also blocked by the egress proxy
+  here, and Step 1 says not to write `auth.ts` / `auth.config.ts` from memory. Run it
+  somewhere with both docs access and a deployment.
+
+- **009 — still TODO**, and much smaller now. Plan 014 moved `/r/:id` and `/api/og` out of
+  the Worker, so what remains is deleting Spiceflow and `src/server.ts` once 008 has moved
+  auth off them.
+
+- **014 follow-up — OG card renders as PNG. DONE, verified on the real runtime.**
+  X, Facebook and LinkedIn do not render SVG for `og:image`, so the card had almost
+  certainly never appeared anywhere. `/api/og` now returns a 1200x630 PNG.
+
+  The design is unchanged and, more usefully, *not duplicated*: `renderOgCardPng`
+  rasterises the very SVG `renderOgCard` produces, so there is one card with two outputs.
+  Two edits made that possible — the `<foreignObject>` headline became wrapped `<tspan>`s
+  (resvg does not implement foreignObject, and the fallback SVG is better off without it),
+  and the emoji placeholder became a typographic one (no emoji font reaches a Worker).
+
+  **satori was tried first and abandoned**, which is the part worth recording. It fails on
+  Cloudflare Workers three different ways in sequence, each hidden behind the previous one:
+  1. Its shaper is Emscripten-compiled harfbuzz, which sets
+     `ENVIRONMENT_IS_WORKER = typeof WorkerGlobalScope != "undefined"` — true on Workers —
+     then reads `self.location.href`, which Workers do not have.
+  2. Shim `location` and it takes the *Node* branch instead, because `nodejs_compat` makes
+     `process.versions.node` truthy, and reaches for `__dirname` and `require("fs")`.
+  3. Drop `nodejs_compat` and it reaches for `XMLHttpRequest` to fetch a harfbuzz wasm it
+     does not inline.
+
+  resvg needs none of that: it takes font buffers directly. The marketing Worker therefore
+  runs **without `nodejs_compat`** — deliberately, and commented as such in its
+  `wrangler.jsonc`.
+
+  Verified by running the built Worker under `wrangler dev` (real workerd) and fetching the
+  route: `Content-Type: image/png`, 161434 bytes, IHDR 1200x630. Before the rewrite the
+  same request returned `image/svg+xml` — the fallback firing silently, which is exactly
+  how this would have shipped looking fine.
+
+  Two things this changed that are worth knowing:
+  - **Fonts are embedded as TTF, not woff.** resvg's font database does not decode woff,
+    and it fails *silently* — it renders the card with no text rather than erroring.
+    `scripts/embed-fonts.ts` regenerates `src/lib/og-fonts.ts` from @expo-google-fonts.
+  - **The Worker now fetches the hero image itself**, where the SVG only emitted an
+    `<image href>` for the client to resolve. That is a new server-side fetch of a URL from
+    a query parameter, so it goes through the same host guard the extractor uses (plan 011)
+    plus content-type and size caps, and any failure degrades to the placeholder. Tests
+    assert the blocked hosts are never fetched at all.
+
+  Also fixed while verifying: `public/_redirects` carried a www→apex 301 that **Cloudflare
+  silently skips** — Workers Static Assets rejects absolute URLs in that file ("Only
+  relative URLs are allowed"). It has been removed. www serves the same site with a
+  canonical link to the apex; a real 301 needs a Cloudflare Redirect Rule in the dashboard.
