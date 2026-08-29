@@ -28,6 +28,9 @@ the table when done.
 | 016 | Make `/r/:id` a real share feature, backed by a store not a query string | P3 | M | 015 | TODO |
 | 017 | `apps/mobile` — the Expo app, and the shared core it forces out | P3 | XL | 015, 008 | TODO |
 | 018 | Stop mirroring the speech engine into React (two live bugs) | P2 | M | — | DONE |
+| 019 | Fix the article-load lifecycle — a race, a dead sheet, an unreachable state | P2 | M | — | TODO |
+| 020 | The library becomes server state; `localStorage` becomes a cache | P2 | L | 008, 019 | TODO |
+| 021 | Settings stop round-tripping through the parent on every keystroke | P2 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -39,6 +42,16 @@ app on the apex, because the domain split forces it. What remains of 009 after 0
 **One follow-up still owed by 014**: `/r/:id` is half-built — nothing generates those links
 and nothing handles the `?read=` it redirects to. (The SVG-card follow-up is DONE; see the
 log entry below.)
+
+**Note on 019-021**: these come from a second pass over the app against the same
+state-management playbook that produced 018, run against `d46a69b` once 018 had landed.
+018 fixed what it scoped and deferred the rest on purpose; 019 is the part that turned out
+to contain live defects, 020 is the largest architectural gap (a complete cloud playlist
+that no client calls), and 021 is 018's deferred tidying. They are independent of each
+other except that 020 depends on 019, and 021 must not touch `savedArticles` — 020 owns it.
+All three were written against `d46a69b` and re-verified against `83af051` after the UI
+rework landed mid-review; 021 was rewritten outright, since that rework deleted the
+components its first draft was about.
 
 ## Execution log
 
@@ -610,3 +623,42 @@ are not re-audited from scratch next session.
   (a) was taken** — `apps/web/src/worker.ts` survives, doing the redirect and nothing else,
   with `worker.test.ts` covering it. That keeps the behaviour in code rather than in
   dashboard configuration, which is the trade-off the plan named.
+
+- **Second state-management pass — plans 019, 020, 021 written** against `d46a69b`, after
+  018 merged. Reviewer-only pass; no source changed. Confirmed 018's own work holds up:
+  the engine/`useSyncExternalStore` split is a faithful implementation, `getSnapshot`'s
+  referential stability is asserted by a test, and the status union, the derived `user`, and
+  `KineticDisplay`'s `useMemo`-derived cards are all what the playbook asks for.
+
+  One correction to the record: 018's log listed `PlaybackStatus`'s unreachable `'error'`
+  member as "known and accepted ... since the on-device fallback always succeeds". The
+  fallback does **not** always succeed — `speechEngine.ts:227` silently returns when
+  `this.synth` is null, so `loadBrowserText` sets up playback that does nothing while the
+  UI reports `'degraded'`. That moves it from tidying to a real defect; it is plan 019
+  Step 3.
+
+  Two findings 018 did not see at all, both in the same function it left alone: the
+  article-load race (`App.tsx:149-213` has no cancellation, so a slow load can overwrite a
+  newer one) and `ClipboardDetectSheet` being unreachable — `detectedClipboardUrl` is never
+  set to anything but `''`, while the component's own 96-line test file passes. A green
+  suite reporting a feature the app cannot reach is the part worth remembering.
+
+- **The UI rework (`41b26b1..83af051`) landed while 019-021 were being written**, and it
+  moved enough to matter: `SettingsModal.tsx`, `ShareClipModal.tsx` and `MediaCard.tsx` are
+  gone, settings became a tab inside `LibraryDrawer`, and the library became a full-screen
+  view rather than an overlay. All three plans were re-pointed at `83af051` and their line
+  references re-checked; `bun run typecheck` and `bun run test` (87 pass) are clean on it.
+
+  The rework changed one finding's severity rather than fixing it. Settings were
+  double-sourced before; they are now triple-sourced, with `LibraryDrawer` holding its own
+  copy of three fields (`:86-88`) and an effect keyed on the whole `settings` object
+  (`:94-98`) syncing them back. Every rate-slider drag frame therefore runs local
+  `setState` → parent `setState` → a synchronous `localStorage.setItem` → a new object
+  identity → three more `setState`s. A `JSON.stringify` and a disk write per pointer-move
+  event moved 021 from P3 tidying to P2, and it is now that plan's headline rather than an
+  item in its list. Worth noting how it got there: each half — a local copy for
+  responsiveness, an effect to keep it fresh — is reasonable alone.
+
+  Unchanged by the rework: the load race, the dead `ClipboardDetectSheet`
+  (`detectedClipboardUrl` is still only ever set to `''`), and the unreachable `'error'`
+  status. 019 and 020 needed only new line numbers.
