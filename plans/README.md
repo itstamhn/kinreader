@@ -12,13 +12,13 @@ the table when done.
 |------|-------|----------|--------|------------|--------|
 | 001 | Import the missing `Pause` icon so the library drawer stops crashing | P1 | S | — | DONE |
 | 002 | Establish a verification baseline — `typecheck` and `test` that pass | P1 | M | 001 | DONE |
-| 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | DONE |
+| 003 | Verify every auth token server-side against durable storage | P1 | M | 002 | SUPERSEDED (by 008) |
 | 004 | Escape user-controlled values in the share page and OG image | P1 | S | 002 | DONE |
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 | 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | DONE |
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | DONE |
-| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006, 015 | BLOCKED (needs a Convex deployment — see log) |
-| 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
+| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006, 015 | DONE |
+| 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO (next: retire Spiceflow) |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |

@@ -42,6 +42,28 @@ export declare const api: {
         any
       >;
     };
+    users: {
+      deleteUserArticle: FunctionReference<
+        "mutation",
+        "public",
+        { articleId: string },
+        any
+      >;
+      getCurrentUser: FunctionReference<"query", "public", {}, any>;
+      getUserPlaylist: FunctionReference<"query", "public", {}, any>;
+      saveUserProgress: FunctionReference<
+        "mutation",
+        "public",
+        {
+          articleId: string;
+          currentTime: number;
+          isCompleted: boolean;
+          lastWordIndex: number;
+          progress: number;
+        },
+        any
+      >;
+    };
   };
 };
 
@@ -54,6 +76,157 @@ export declare const api: {
  * ```
  */
 export declare const internal: {
+  generated: {
+    auth: {
+      count: FunctionReference<
+        "query",
+        "internal",
+        {
+          model: string;
+          where?: Array<{
+            connector?: "AND" | "OR";
+            field: string;
+            mode?: "sensitive" | "insensitive";
+            operator?:
+              | "lt"
+              | "lte"
+              | "gt"
+              | "gte"
+              | "eq"
+              | "in"
+              | "not_in"
+              | "ne"
+              | "contains"
+              | "starts_with"
+              | "ends_with";
+            value:
+              string | number | boolean | Array<string> | Array<number> | null;
+          }>;
+        },
+        any
+      >;
+      create: FunctionReference<
+        "mutation",
+        "internal",
+        { input: { data: any; model: string }; select?: Array<string> },
+        any
+      >;
+      deleteMany: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          input: { model: string; where?: Array<any> };
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+        },
+        any
+      >;
+      deleteOne: FunctionReference<
+        "mutation",
+        "internal",
+        { input: { model: string; where?: Array<any> } },
+        any
+      >;
+      findMany: FunctionReference<
+        "query",
+        "internal",
+        {
+          join?: any;
+          limit?: number;
+          model: string;
+          offset?: number;
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+          sortBy?: { direction: "asc" | "desc"; field: string };
+          where?: Array<{
+            connector?: "AND" | "OR";
+            field: string;
+            mode?: "sensitive" | "insensitive";
+            operator?:
+              | "lt"
+              | "lte"
+              | "gt"
+              | "gte"
+              | "eq"
+              | "in"
+              | "not_in"
+              | "ne"
+              | "contains"
+              | "starts_with"
+              | "ends_with";
+            value:
+              string | number | boolean | Array<string> | Array<number> | null;
+          }>;
+        },
+        any
+      >;
+      findOne: FunctionReference<
+        "query",
+        "internal",
+        {
+          join?: any;
+          model: string;
+          select?: Array<string>;
+          where?: Array<{
+            connector?: "AND" | "OR";
+            field: string;
+            mode?: "sensitive" | "insensitive";
+            operator?:
+              | "lt"
+              | "lte"
+              | "gt"
+              | "gte"
+              | "eq"
+              | "in"
+              | "not_in"
+              | "ne"
+              | "contains"
+              | "starts_with"
+              | "ends_with";
+            value:
+              string | number | boolean | Array<string> | Array<number> | null;
+          }>;
+        },
+        any
+      >;
+      getLatestJwks: FunctionReference<"action", "internal", {}, any>;
+      rotateKeys: FunctionReference<"action", "internal", {}, any>;
+      updateMany: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          input: { model: string; update: any; where?: Array<any> };
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+        },
+        any
+      >;
+      updateOne: FunctionReference<
+        "mutation",
+        "internal",
+        { input: { model: string; update: any; where?: Array<any> } },
+        any
+      >;
+    };
+  };
   routers: {
     ttsInternal: {
       consumeTtsRateLimit: FunctionReference<
@@ -90,38 +263,6 @@ export declare const internal: {
           storageId: Id<"_storage">;
           voice: string;
           words: Array<{ end: number; start: number; text: string }>;
-        },
-        any
-      >;
-    };
-    users: {
-      getUserPlaylist: FunctionReference<
-        "query",
-        "internal",
-        { userId: Id<"users"> },
-        any
-      >;
-      saveUserProgress: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          articleId: Id<"articles">;
-          currentTime: number;
-          isCompleted: boolean;
-          lastWordIndex: number;
-          progress: number;
-          userId: Id<"users">;
-        },
-        any
-      >;
-      upsertUser: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          avatar?: string;
-          email: string;
-          name: string;
-          provider: "email" | "google" | "apple";
         },
         any
       >;

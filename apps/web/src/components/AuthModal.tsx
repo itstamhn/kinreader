@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { X, Mail, Sparkles, ArrowRight, CheckCircle2, KeyRound, LogOut, ShieldCheck, CreditCard, ExternalLink, Copy } from 'lucide-react';
+import { X, Mail, Sparkles, ArrowRight, ShieldCheck, CreditCard, ExternalLink, Copy, LogOut, Lock } from 'lucide-react';
 import { isEmbeddedBrowser } from '../lib/browser';
+import { authClient } from '../lib/auth-client';
 
 export interface UserProfile {
   email: string;
@@ -12,7 +13,7 @@ export interface UserProfile {
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (user: UserProfile) => void;
+  onLoginSuccess?: (user: UserProfile) => void;
   user?: UserProfile | null;
   onLogout?: () => void;
   /** A failure reported by the redirect back from Google (`?auth_error=`). */
@@ -29,9 +30,10 @@ export function AuthModal({
   externalError,
   onDismissExternalError,
 }: AuthModalProps) {
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
-  const [step, setStep] = useState<'input' | 'verify'>('input');
-  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -39,8 +41,6 @@ export function AuthModal({
     typeof navigator === 'undefined' ? false : isEmbeddedBrowser(navigator.userAgent)
   );
 
-  // Anything the Google round trip reported is the freshest news the modal
-  // has; a stale in-modal error must not hide it.
   useEffect(() => {
     if (externalError) setError(null);
   }, [externalError]);
@@ -54,8 +54,6 @@ export function AuthModal({
     onDismissExternalError?.();
   };
 
-  // An error raised in the modal replaces whatever the Google redirect
-  // reported, so a stale banner can never mask the live one.
   const showError = (message: string) => {
     onDismissExternalError?.();
     setError(message);
@@ -72,38 +70,28 @@ export function AuthModal({
     }
   };
 
-  const handleSendMagicLink = async (e: React.FormEvent) => {
+  const handleGoogleSignIn = async () => {
+    clearErrors();
+    setIsLoading(true);
+    try {
+      await authClient.signIn.social({
+        provider: 'google',
+        callbackURL: window.location.origin,
+      });
+    } catch (err: any) {
+      showError(err.message || 'Google sign-in failed');
+      setIsLoading(false);
+    }
+  };
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !email.includes('@')) {
       showError('Please enter a valid email address');
       return;
     }
-
-    setIsLoading(true);
-    clearErrors();
-
-    try {
-      const res = await fetch('/api/auth/magic-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send magic link');
-
-      setStep('verify');
-    } catch (err: any) {
-      showError(err.message || 'Something went wrong');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleVerifyCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (code.length < 6) {
-      showError('Please enter the 6-digit verification code');
+    if (!password || password.length < 6) {
+      showError('Password must be at least 6 characters');
       return;
     }
 
@@ -111,22 +99,52 @@ export function AuthModal({
     clearErrors();
 
     try {
-      const res = await fetch('/api/auth/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Verification failed');
-
-      onLoginSuccess(data.user);
+      if (mode === 'signup') {
+        const res = await authClient.signUp.email({
+          email,
+          password,
+          name: name.trim() || email.split('@')[0] || 'User',
+          callbackURL: window.location.origin,
+        });
+        if (res.error) throw new Error(res.error.message || 'Failed to sign up');
+        if (res.data?.user) {
+          onLoginSuccess?.({
+            email: res.data.user.email,
+            name: res.data.user.name || email.split('@')[0] || 'User',
+            avatar: res.data.user.image || undefined,
+            tier: 'pro',
+          });
+        }
+      } else {
+        const res = await authClient.signIn.email({
+          email,
+          password,
+          callbackURL: window.location.origin,
+        });
+        if (res.error) throw new Error(res.error.message || 'Invalid email or password');
+        if (res.data?.user) {
+          onLoginSuccess?.({
+            email: res.data.user.email,
+            name: res.data.user.name || email.split('@')[0] || 'User',
+            avatar: res.data.user.image || undefined,
+            tier: 'pro',
+          });
+        }
+      }
       onClose();
     } catch (err: any) {
-      showError(err.message || 'Invalid or expired verification code');
+      showError(err.message || 'Authentication failed');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await authClient.signOut();
+    } catch {}
+    onLogout?.();
+    onClose();
   };
 
   return (
@@ -199,25 +217,23 @@ export function AuthModal({
             </div>
 
             <button
-              onClick={() => {
-                if (onLogout) onLogout();
-                onClose();
-              }}
+              onClick={handleSignOut}
               className="w-full py-2.5 rounded-2xl border border-white/10 hover:border-rose-500/30 hover:bg-rose-500/10 text-[#ECEAE4]/60 hover:text-rose-400 font-sans text-xs font-semibold flex items-center justify-center gap-2 transition active:scale-98"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>Sign Out</span>
             </button>
           </div>
-        ) : step === 'input' ? (
-          /* ── 2. LOGGED OUT: SIGN IN FORM ── */
+        ) : (
+          /* ── 2. LOGGED OUT: SIGN IN / SIGN UP ── */
           <div>
             <div className="w-12 h-12 mx-auto mb-3.5 rounded-2xl bg-gradient-to-br from-[#2A2D38] to-[#181A21] border border-white/10 flex items-center justify-center shadow-lg">
               <Sparkles className="w-5 h-5 text-[#F2A33C]" />
             </div>
 
             <h2 className="font-serif font-medium text-2xl text-[#F4F0E6] tracking-tight">
-              Sign In to Kinreader<span className="text-[#F2A33C]">.</span>
+              {mode === 'signin' ? 'Sign In to Kinreader' : 'Create Account'}
+              <span className="text-[#F2A33C]">.</span>
             </h2>
             <p className="font-sans text-xs text-[#ECEAE4]/50 mt-1 mb-5">
               Sync your reading queue, audio progress, and custom speed presets across all your devices.
@@ -253,11 +269,9 @@ export function AuthModal({
             {/* Google 1-Tap Sign-In Button */}
             <button
               type="button"
-              onClick={() => {
-                clearErrors();
-                window.location.href = '/api/auth/google';
-              }}
-              className="w-full bg-white hover:bg-gray-100 text-gray-900 font-sans font-semibold py-3 rounded-2xl text-xs transition shadow-md flex items-center justify-center gap-2.5 mb-3 select-none active:scale-[0.98]"
+              onClick={handleGoogleSignIn}
+              disabled={isLoading}
+              className="w-full bg-white hover:bg-gray-100 text-gray-900 font-sans font-semibold py-3 rounded-2xl text-xs transition shadow-md flex items-center justify-center gap-2.5 mb-3 select-none active:scale-[0.98] disabled:opacity-50"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path
@@ -289,16 +303,39 @@ export function AuthModal({
               <div className="h-px bg-white/10 flex-1" />
             </div>
 
-            <form onSubmit={handleSendMagicLink} className="space-y-3">
+            <form onSubmit={handleEmailAuth} className="space-y-2.5">
+              {mode === 'signup' && (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Your Name (optional)"
+                    className="w-full bg-white/5 border border-white/10 focus:border-[#F2A33C]/50 rounded-2xl py-2.5 px-4 font-sans text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/30 focus:outline-none transition"
+                  />
+                </div>
+              )}
+
               <div className="relative">
-                <Mail className="w-4 h-4 text-white/40 absolute left-3.5 top-3.5" />
+                <Mail className="w-4 h-4 text-white/40 absolute left-3.5 top-3" />
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter your email address"
-                  className="w-full bg-white/5 border border-white/10 focus:border-[#F2A33C]/50 rounded-2xl py-3 pl-10 pr-4 font-sans text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/30 focus:outline-none transition"
-                  autoFocus
+                  placeholder="Email address"
+                  className="w-full bg-white/5 border border-white/10 focus:border-[#F2A33C]/50 rounded-2xl py-2.5 pl-10 pr-4 font-sans text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/30 focus:outline-none transition"
+                  required
+                />
+              </div>
+
+              <div className="relative">
+                <Lock className="w-4 h-4 text-white/40 absolute left-3.5 top-3" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password (min 6 chars)"
+                  className="w-full bg-white/5 border border-white/10 focus:border-[#F2A33C]/50 rounded-2xl py-2.5 pl-10 pr-4 font-sans text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/30 focus:outline-none transition"
                   required
                 />
               </div>
@@ -306,73 +343,31 @@ export function AuthModal({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full h-11 rounded-2xl glow-amber-btn font-sans font-semibold text-xs transition active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full h-11 rounded-2xl glow-amber-btn font-sans font-semibold text-xs transition active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 mt-1"
               >
                 {isLoading ? (
-                  <span className="animate-spin text-xs">⚡ Sending...</span>
+                  <span className="animate-spin text-xs">⚡ Processing...</span>
                 ) : (
                   <>
-                    <span>Send Magic Link</span>
+                    <span>{mode === 'signin' ? 'Sign In' : 'Create Account'}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}
               </button>
             </form>
 
-            <p className="font-sans text-[11px] text-[#ECEAE4]/40 mt-4">
-              Delivered instantly via AutoSend • No password needed
-            </p>
-          </div>
-        ) : (
-          /* ── 3. VERIFY MAGIC LINK CODE ── */
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F2A33C]/15 text-[#F2A33C] border border-[#F2A33C]/35 font-sans text-xs font-semibold mb-3">
-              <CheckCircle2 className="w-3.5 h-3.5 text-[#F2A33C]" />
-              Magic Link Sent!
-            </div>
-
-            <h2 className="font-serif font-medium text-xl text-[#F4F0E6] tracking-tight">Check your email</h2>
-            <p className="font-sans text-xs text-[#ECEAE4]/50 mt-1 mb-5">
-              We sent a 6-digit verification code to <strong className="text-[#F2A33C]">{email}</strong>
-            </p>
-
-            {shownError && (
-              <div className="mb-4 p-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-sans">
-                {shownError}
-              </div>
-            )}
-
-            <form onSubmit={handleVerifyCode} className="space-y-3">
-              <div className="relative">
-                <KeyRound className="w-4 h-4 text-white/40 absolute left-3.5 top-3.5" />
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Enter 6-digit code"
-                  className="w-full bg-white/5 border border-white/10 focus:border-[#F2A33C]/50 rounded-2xl py-3 pl-10 pr-4 text-center font-mono text-lg tracking-[0.25em] text-[#F2A33C] placeholder-white/20 focus:outline-none transition"
-                  autoFocus
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading || code.length < 6}
-                className="w-full h-11 rounded-2xl glow-amber-btn font-sans font-semibold text-xs transition active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {isLoading ? 'Verifying...' : 'Verify Code'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStep('input')}
-                className="w-full font-sans text-xs text-[#ECEAE4]/50 hover:text-white transition py-1"
-              >
-                Use different email
-              </button>
-            </form>
+            <button
+              type="button"
+              onClick={() => {
+                clearErrors();
+                setMode(mode === 'signin' ? 'signup' : 'signin');
+              }}
+              className="mt-4 font-sans text-xs text-[#ECEAE4]/50 hover:text-white transition"
+            >
+              {mode === 'signin'
+                ? "Don't have an account? Sign up"
+                : 'Already have an account? Sign in'}
+            </button>
           </div>
         )}
       </div>

@@ -2,20 +2,70 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 
 export default defineSchema({
-  // 1. User Profiles & Accounts
-  users: defineTable({
-    email: v.string(),
+  // 1. Better Auth: User Table
+  user: defineTable({
     name: v.string(),
-    avatar: v.optional(v.string()),
-    tier: v.union(v.literal('free'), v.literal('pro')),
-    provider: v.union(v.literal('email'), v.literal('google'), v.literal('apple')),
+    email: v.string(),
+    emailVerified: v.boolean(),
+    image: v.optional(v.string()),
     createdAt: v.number(),
-    lastLoginAt: v.number(),
-  })
-    .index('by_email', ['email'])
-    .index('by_tier', ['tier']),
+    updatedAt: v.number(),
+    role: v.optional(v.string()),
+    banned: v.optional(v.boolean()),
+    banReason: v.optional(v.string()),
+    banExpires: v.optional(v.number()),
+    tier: v.optional(v.union(v.literal('free'), v.literal('pro'))),
+  }).index('email', ['email']),
 
-  // 2. Saved / Extracted Articles
+  // 2. Better Auth: Session Table
+  session: defineTable({
+    token: v.string(),
+    userId: v.id('user'),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    ipAddress: v.optional(v.string()),
+    userAgent: v.optional(v.string()),
+    impersonatedBy: v.optional(v.string()),
+  })
+    .index('token', ['token'])
+    .index('userId', ['userId']),
+
+  // 3. Better Auth: Account Table
+  account: defineTable({
+    accountId: v.string(),
+    providerId: v.string(),
+    userId: v.id('user'),
+    accessToken: v.optional(v.string()),
+    refreshToken: v.optional(v.string()),
+    idToken: v.optional(v.string()),
+    accessTokenExpiresAt: v.optional(v.number()),
+    refreshTokenExpiresAt: v.optional(v.number()),
+    scope: v.optional(v.string()),
+    password: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('accountId', ['accountId'])
+    .index('userId', ['userId']),
+
+  // 4. Better Auth: Verification Table
+  verification: defineTable({
+    identifier: v.string(),
+    value: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index('identifier', ['identifier']),
+
+  // 5. Better Auth: JWKS Table
+  jwks: defineTable({
+    publicKey: v.string(),
+    privateKey: v.string(),
+    createdAt: v.number(),
+  }),
+
+  // 6. Saved / Extracted Articles
   articles: defineTable({
     url: v.string(),
     title: v.string(),
@@ -31,10 +81,10 @@ export default defineSchema({
     .index('by_url', ['url'])
     .index('by_created', ['createdAt']),
 
-  // 3. Cached Audio Tracks (Persistent Audio + Exact Whisper Timestamps)
+  // 7. Cached Audio Tracks (Persistent Audio + Exact Whisper Timestamps)
   audioTracks: defineTable({
     articleId: v.id('articles'),
-    voice: v.string(), // e.g. 'Adrian', 'Daniel'
+    voice: v.string(), // e.g. 'Adrian', 'Emma'
     speed: v.number(), // e.g. 1.0
     storageId: v.optional(v.id('_storage')), // Convex File Storage ID
     audioBase64: v.optional(v.string()), // Inline fallback base64
@@ -51,9 +101,9 @@ export default defineSchema({
     .index('by_article_voice_speed', ['articleId', 'voice', 'speed'])
     .index('by_article', ['articleId']),
 
-  // 4. User Reading Playlists & Cross-Device Progress
+  // 8. User Reading Playlists & Cross-Device Progress
   userArticles: defineTable({
-    userId: v.id('users'),
+    userId: v.id('user'),
     articleId: v.id('articles'),
     progress: v.number(), // 0 to 100
     lastWordIndex: v.number(),
@@ -65,21 +115,7 @@ export default defineSchema({
     .index('by_user', ['userId'])
     .index('by_updated', ['updatedAt']),
 
-  // 5. Auth Sessions & Tokens
-  sessions: defineTable({
-    userId: v.id('users'),
-    token: v.string(),
-    expiresAt: v.number(),
-  })
-    .index('by_token', ['token'])
-    .index('by_user', ['userId']),
-
-  // 6. Rate limiter state (plan 007's TTS synthesis guard). This is
-  // `kitcn/ratelimit`'s standalone store shape -- a plain table this app's
-  // own `ctx.db` reads/writes, not the ORM-scaffolded `bunx kitcn add
-  // ratelimit` flow (this app doesn't use kitcn's ORM). Field names, types,
-  // and index names are fixed by kitcn's convex-store implementation
-  // (node_modules/kitcn/dist/ratelimit/index.js) -- do not rename them.
+  // 9. Rate limiter state
   ratelimitState: defineTable({
     name: v.string(),
     key: v.optional(v.string()),

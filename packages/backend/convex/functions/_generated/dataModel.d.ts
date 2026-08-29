@@ -27,6 +27,47 @@ import type { GenericId } from "convex/values";
  */
 
 export type DataModel = {
+  account: {
+    document: {
+      accessToken?: string;
+      accessTokenExpiresAt?: number;
+      accountId: string;
+      createdAt: number;
+      idToken?: string;
+      password?: string;
+      providerId: string;
+      refreshToken?: string;
+      refreshTokenExpiresAt?: number;
+      scope?: string;
+      updatedAt: number;
+      userId: Id<"user">;
+      _id: Id<"account">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "accessToken"
+      | "accessTokenExpiresAt"
+      | "accountId"
+      | "createdAt"
+      | "idToken"
+      | "password"
+      | "providerId"
+      | "refreshToken"
+      | "refreshTokenExpiresAt"
+      | "scope"
+      | "updatedAt"
+      | "userId";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      accountId: ["accountId", "_creationTime"];
+      userId: ["userId", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   articles: {
     document: {
       author: string;
@@ -97,6 +138,23 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  jwks: {
+    document: {
+      createdAt: number;
+      privateKey: string;
+      publicKey: string;
+      _id: Id<"jwks">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      "_creationTime" | "_id" | "createdAt" | "privateKey" | "publicKey";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   ratelimitState: {
     document: {
       auxTs?: number;
@@ -129,20 +187,73 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
-  sessions: {
+  session: {
     document: {
+      createdAt: number;
       expiresAt: number;
+      impersonatedBy?: string;
+      ipAddress?: string;
       token: string;
-      userId: Id<"users">;
-      _id: Id<"sessions">;
+      updatedAt: number;
+      userAgent?: string;
+      userId: Id<"user">;
+      _id: Id<"session">;
       _creationTime: number;
     };
-    fieldPaths: "_creationTime" | "_id" | "expiresAt" | "token" | "userId";
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "createdAt"
+      | "expiresAt"
+      | "impersonatedBy"
+      | "ipAddress"
+      | "token"
+      | "updatedAt"
+      | "userAgent"
+      | "userId";
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
-      by_token: ["token", "_creationTime"];
-      by_user: ["userId", "_creationTime"];
+      token: ["token", "_creationTime"];
+      userId: ["userId", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  user: {
+    document: {
+      banExpires?: number;
+      banReason?: string;
+      banned?: boolean;
+      createdAt: number;
+      email: string;
+      emailVerified: boolean;
+      image?: string;
+      name: string;
+      role?: string;
+      tier?: "free" | "pro";
+      updatedAt: number;
+      _id: Id<"user">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "banExpires"
+      | "banned"
+      | "banReason"
+      | "createdAt"
+      | "email"
+      | "emailVerified"
+      | "image"
+      | "name"
+      | "role"
+      | "tier"
+      | "updatedAt";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      email: ["email", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};
@@ -155,7 +266,7 @@ export type DataModel = {
       lastWordIndex: number;
       progress: number;
       updatedAt: number;
-      userId: Id<"users">;
+      userId: Id<"user">;
       _id: Id<"userArticles">;
       _creationTime: number;
     };
@@ -179,33 +290,28 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
-  users: {
+  verification: {
     document: {
-      avatar?: string;
       createdAt: number;
-      email: string;
-      lastLoginAt: number;
-      name: string;
-      provider: "email" | "google" | "apple";
-      tier: "free" | "pro";
-      _id: Id<"users">;
+      expiresAt: number;
+      identifier: string;
+      updatedAt: number;
+      value: string;
+      _id: Id<"verification">;
       _creationTime: number;
     };
     fieldPaths:
       | "_creationTime"
       | "_id"
-      | "avatar"
       | "createdAt"
-      | "email"
-      | "lastLoginAt"
-      | "name"
-      | "provider"
-      | "tier";
+      | "expiresAt"
+      | "identifier"
+      | "updatedAt"
+      | "value";
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
-      by_email: ["email", "_creationTime"];
-      by_tier: ["tier", "_creationTime"];
+      identifier: ["identifier", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};

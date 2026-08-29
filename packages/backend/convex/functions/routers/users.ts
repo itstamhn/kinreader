@@ -1,90 +1,53 @@
-// SECURITY: these functions are deliberately `internal*`, not public.
-// They derive the acting user from a `userId` ARGUMENT rather than from
-// `ctx.auth.getUserIdentity()`, so as public functions anyone holding the
-// deployment URL (which ships in the client bundle) could mint a session for
-// any email via upsertUser, or read and write any user's playlist by id.
-// Nothing calls them today. Plan 008 rewrites them around Convex identity and
-// restores whichever of them the app actually needs as public procedures.
-// Do NOT make these public again without deriving identity server-side.
-import { internalMutation, internalQuery } from '../_generated/server';
-import { v } from 'convex/values';
-import type { Id } from '../_generated/dataModel';
+import { z } from 'zod';
+import { query, mutation } from '../crpc';
 
-// 1. Upsert User on Sign In (Magic Link / Google)
-export const upsertUser = internalMutation({
-  args: {
-    email: v.string(),
-    name: v.string(),
-    avatar: v.optional(v.string()),
-    provider: v.union(v.literal('email'), v.literal('google'), v.literal('apple')),
-  },
-  handler: async (ctx, args) => {
-    const email = args.email.trim().toLowerCase();
-    const existing = await ctx.db
-      .query('users')
-      .withIndex('by_email', (q) => q.eq('email', email))
-      .first();
+/**
+ * Resolves the authenticated user's record from Better Auth / Convex auth.
+ * Returns null if the request is unauthenticated or user is not found.
+ */
+async function resolveAuthUser(ctx: { auth: { getUserIdentity: () => Promise<any> }; db: any }) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity || !identity.email) {
+    return null;
+  }
+  const email = typeof identity.email === 'string' ? identity.email.toLowerCase() : '';
+  return await ctx.db
+    .query('user')
+    .withIndex('email', (q: any) => q.eq('email', email))
+    .first();
+}
 
-    const now = Date.now();
-    let userId: Id<'users'>;
-
-    if (existing) {
-      userId = existing._id;
-      await ctx.db.patch(userId, {
-        name: args.name || existing.name,
-        avatar: args.avatar || existing.avatar,
-        lastLoginAt: now,
-      });
-    } else {
-      userId = await ctx.db.insert('users', {
-        email,
-        name: args.name,
-        avatar: args.avatar,
-        tier: 'pro',
-        provider: args.provider,
-        createdAt: now,
-        lastLoginAt: now,
-      });
-    }
-
-    // Create a 30-day session token
-    const token = crypto.randomUUID();
-    const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
-    await ctx.db.insert('sessions', {
-      userId,
-      token,
-      expiresAt,
-    });
-
-    const user = await ctx.db.get(userId);
+// 1. Get Current Authenticated User Profile
+export const getCurrentUser = query
+  .input(z.object({}))
+  .query(async ({ ctx }) => {
+    const user = await resolveAuthUser(ctx);
+    if (!user) return null;
     return {
-      user: {
-        id: userId,
-        email: user?.email,
-        name: user?.name,
-        avatar: user?.avatar,
-        tier: user?.tier,
-      },
-      sessionToken: token,
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      image: user.image,
+      tier: user.tier ?? 'pro',
     };
-  },
-});
+  });
 
-// 2. Get User's Cloud Playlist & Progress
-export const getUserPlaylist = internalQuery({
-  args: {
-    userId: v.id('users'),
-  },
-  handler: async (ctx, args) => {
+// 2. Get User's Cloud Playlist & Progress (Derives identity server-side)
+export const getUserPlaylist = query
+  .input(z.object({}))
+  .query(async ({ ctx }) => {
+    const user = await resolveAuthUser(ctx);
+    if (!user) return [];
+
     const userItems = await ctx.db
       .query('userArticles')
-      .withIndex('by_user', (q) => q.eq('userId', args.userId))
+      .withIndex('by_user', (q: any) => q.eq('userId', user._id))
       .order('desc')
       .collect();
 
     const results = [];
     for (const item of userItems) {
-      const article = await ctx.db.get(item.articleId);
+      const article = await ctx.db.get(item.articleId as any);
       if (article) {
         results.push({
           id: item._id,
@@ -99,45 +62,76 @@ export const getUserPlaylist = internalQuery({
       }
     }
     return results;
-  },
-});
+  });
 
-// 3. Save / Update User Reading Progress
-export const saveUserProgress = internalMutation({
-  args: {
-    userId: v.id('users'),
-    articleId: v.id('articles'),
-    progress: v.number(),
-    lastWordIndex: v.number(),
-    currentTime: v.number(),
-    isCompleted: v.boolean(),
-  },
-  handler: async (ctx, args) => {
+// 3. Save / Update User Reading Progress (Derives identity server-side)
+export const saveUserProgress = mutation
+  .input(
+    z.object({
+      articleId: z.string(),
+      progress: z.number(),
+      lastWordIndex: z.number(),
+      currentTime: z.number(),
+      isCompleted: z.boolean(),
+    })
+  )
+  .mutation(async ({ ctx, input }) => {
+    const user = await resolveAuthUser(ctx);
+    if (!user) {
+      throw new Error('Unauthorized: You must be signed in to save reading progress');
+    }
+
+    const articleId = input.articleId;
     const existing = await ctx.db
       .query('userArticles')
-      .withIndex('by_user_article', (q) => q.eq('userId', args.userId).eq('articleId', args.articleId))
+      .withIndex('by_user_article', (q: any) =>
+        q.eq('userId', user._id).eq('articleId', articleId)
+      )
       .first();
 
     const now = Date.now();
     if (existing) {
-      await ctx.db.patch(existing._id, {
-        progress: args.progress,
-        lastWordIndex: args.lastWordIndex,
-        currentTime: args.currentTime,
-        isCompleted: args.isCompleted,
+      await ctx.db.patch(existing._id as any, {
+        progress: input.progress,
+        lastWordIndex: input.lastWordIndex,
+        currentTime: input.currentTime,
+        isCompleted: input.isCompleted,
         updatedAt: now,
       });
       return existing._id;
-    } else {
-      return await ctx.db.insert('userArticles', {
-        userId: args.userId,
-        articleId: args.articleId,
-        progress: args.progress,
-        lastWordIndex: args.lastWordIndex,
-        currentTime: args.currentTime,
-        isCompleted: args.isCompleted,
-        updatedAt: now,
-      });
     }
-  },
-});
+
+    return await ctx.db.insert('userArticles', {
+      userId: user._id,
+      articleId,
+      progress: input.progress,
+      lastWordIndex: input.lastWordIndex,
+      currentTime: input.currentTime,
+      isCompleted: input.isCompleted,
+      updatedAt: now,
+    });
+  });
+
+// 4. Delete Article from User Playlist (Derives identity server-side)
+export const deleteUserArticle = mutation
+  .input(z.object({ articleId: z.string() }))
+  .mutation(async ({ ctx, input }) => {
+    const user = await resolveAuthUser(ctx);
+    if (!user) {
+      throw new Error('Unauthorized: You must be signed in to modify playlist');
+    }
+
+    const articleId = input.articleId;
+    const existing = await ctx.db
+      .query('userArticles')
+      .withIndex('by_user_article', (q: any) =>
+        q.eq('userId', user._id).eq('articleId', articleId)
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.delete(existing._id as any);
+      return true;
+    }
+    return false;
+  });

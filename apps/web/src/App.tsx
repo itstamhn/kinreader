@@ -18,6 +18,7 @@ import {
   getOrCreateClientId,
 } from './lib/storage';
 import { useCRPC } from './lib/convex';
+import { authClient } from './lib/auth-client';
 import type { ArticleData, ReaderSettings, WordTiming } from './types';
 
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -35,15 +36,15 @@ export function App() {
   const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
   const synthesizeTtsMutation = useMutation(crpc.routers.tts.synthesize.mutationOptions());
 
-  const [user, setUser] = useState<UserProfile | null>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const raw = localStorage.getItem('kinreader_user');
-        return raw ? JSON.parse(raw) : null;
-      } catch {}
-    }
-    return null;
-  });
+  const { data: session } = authClient.useSession();
+  const user: UserProfile | null = session?.user
+    ? {
+        name: session.user.name,
+        email: session.user.email,
+        avatar: session.user.image || undefined,
+        tier: 'pro',
+      }
+    : null;
 
   const [article, setArticle] = useState<ArticleData>(SAMPLE_ARTICLE);
   const [savedArticles, setSavedArticles] = useState<SavedArticleItem[]>(() => getSavedArticles());
@@ -307,62 +308,19 @@ export function App() {
     }
   }, [article?.title, isPlaying]);
 
-  // Check URL on mount for an auth token, or for a failure reported by the
-  // redirect back from Google.
+  // Check URL on mount for a failure reported by OAuth redirect
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const urlParams = new URLSearchParams(window.location.search);
-    const token = urlParams.get('auth_token');
-    const email = urlParams.get('email');
     const failure = urlParams.get('auth_error');
 
-    // Every Google failure path redirects to `/?auth_error=...`. Nothing used
-    // to read it, so a failed sign-in landed the user back on an ordinary home
-    // screen with no explanation at all -- on a phone, where the address bar
-    // is collapsed, that is indistinguishable from the button doing nothing.
     if (failure) {
       window.history.replaceState({}, document.title, window.location.pathname);
       setAuthError(failure);
       setIsAuthOpen(true);
-      return;
     }
-
-    if (!token || !email) return;
-
-    // Strip the credentials from the address bar before any await.
-    window.history.replaceState({}, document.title, window.location.pathname);
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/auth/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, token }),
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled || !data?.success || !data.user) return;
-        setUser(data.user);
-        localStorage.setItem('kinreader_user', JSON.stringify(data.user));
-      } catch {
-        // Verification failed — stay signed out.
-      }
-    })();
-
-    return () => { cancelled = true; };
   }, []);
-
-  const handleLoginSuccess = (newUser: UserProfile) => {
-    setUser(newUser);
-    localStorage.setItem('kinreader_user', JSON.stringify(newUser));
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('kinreader_user');
-  };
 
   const remainingSeconds = Math.max(0, duration - currentTime);
 
@@ -486,9 +444,7 @@ export function App() {
           setAuthError(null);
           setIsAuthOpen(false);
         }}
-        onLoginSuccess={handleLoginSuccess}
         user={user}
-        onLogout={handleLogout}
         externalError={authError}
         onDismissExternalError={() => setAuthError(null)}
       />

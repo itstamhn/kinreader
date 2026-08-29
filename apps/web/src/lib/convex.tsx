@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
-  ConvexProvider,
   ConvexReactClient,
   createCRPCContext,
   getConvexQueryClientSingleton,
   getQueryClientSingleton,
 } from 'kitcn/react';
+import { ConvexAuthProvider } from 'kitcn/auth/client';
 import { api } from '@kinreader/backend/api';
+import { authClient } from './auth-client';
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL!);
 
@@ -28,12 +29,15 @@ export function ConvexAppProvider({ children }: { children: ReactNode }) {
   const convexQueryClient = getConvexQueryClientSingleton({ convex, queryClient });
 
   return (
-    <ConvexProvider client={convex}>
+    <ConvexAuthProvider
+      client={convex}
+      authClient={authClient}
+    >
       <QueryClientProvider client={queryClient}>
         <CRPCProvider convexClient={convex} convexQueryClient={convexQueryClient}>
           {children}
         </CRPCProvider>
       </QueryClientProvider>
-    </ConvexProvider>
+    </ConvexAuthProvider>
   );
 }

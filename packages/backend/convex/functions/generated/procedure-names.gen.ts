@@ -5,4 +5,5 @@
 export const procedureNames = {
   "routers/articles.ts": [{ column: 3, line: 85, name: "routers/articles:extract" }],
   "routers/tts.ts": [{ column: 3, line: 79, name: "routers/tts:synthesize" }],
+  "routers/users.ts": [{ column: 3, line: 118, name: "routers/users:deleteUserArticle" }, { column: 3, line: 23, name: "routers/users:getCurrentUser" }, { column: 3, line: 38, name: "routers/users:getUserPlaylist" }, { column: 3, line: 78, name: "routers/users:saveUserProgress" }],
 };

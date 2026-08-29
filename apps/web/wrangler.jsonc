@@ -11,22 +11,8 @@
     "not_found_handling": "single-page-application"
   },
   "vars": {
-    // The origin Google redirects OAuth back to. It must match a registered
-    // "Authorized redirect URI" in the Google Cloud console exactly:
-    // https://app.kinreader.com/api/auth/google/callback
     "APP_ORIGIN": "https://app.kinreader.com"
   },
-  "kv_namespaces": [
-    { "binding": "AUTH_CODES", "id": "7348870b7ec3415ea3c4e751a860022c" }
-  ],
-  "ratelimits": [
-    {
-      "name": "AUTH_RATE_LIMITER",
-      "namespace_id": "1002",
-      // 10 verify attempts per minute per client IP
-      "simple": { "limit": 10, "period": 60 }
-    }
-  ],
   // The reader only. The apex and www belong to the Astro marketing site,
   // deployed from apps/marketing with its own wrangler config (plan 014).
   "routes": [

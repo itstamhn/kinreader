@@ -6,39 +6,53 @@ import {
   type BetterAuthOptionsWithoutDatabase,
   type AuthRuntime,
   defineAuth as baseDefineAuth,
+  createAuthRuntime,
   type GenericAuthDefinition,
-  getGeneratedAuthDisabledReason,
-  createDisabledAuthRuntime,
-} from 'kitcn/auth/generated';
-
+  getInvalidAuthDefinitionExportReason,
+  resolveGeneratedAuthDefinition,
+} from 'kitcn/auth';
+import { internal } from '../_generated/api.js';
 import type { DataModel } from '../_generated/dataModel';
 import type { GenericCtx, MutationCtx } from './server';
-import type { GenericSchema, SchemaDefinition } from 'convex/server';
 
 
+import schema from '../schema';
+import * as authDefinitionModule from '../auth';
 
 
-type GeneratedSchema = SchemaDefinition<GenericSchema, true>;
 
 export function defineAuth<
   AuthOptions extends BetterAuthOptionsWithoutDatabase = BetterAuthOptionsWithoutDatabase,
 >(
-  definition: GenericAuthDefinition<GenericCtx, DataModel, GeneratedSchema, AuthOptions>
+  definition: GenericAuthDefinition<GenericCtx, DataModel, typeof schema, AuthOptions>
 ) {
   return baseDefineAuth(definition);
 }
 
+type AuthDefinitionFromFile = typeof authDefinitionModule.default;
+
+const authDefinition = resolveGeneratedAuthDefinition<AuthDefinitionFromFile>(
+  authDefinitionModule,
+  getInvalidAuthDefinitionExportReason("convex/functions/auth.ts")
+);
 
 const authRuntime: AuthRuntime<
   DataModel,
-  GeneratedSchema,
+  typeof schema,
   MutationCtx,
-  GenericCtx
-> = createDisabledAuthRuntime<DataModel, GeneratedSchema, MutationCtx, GenericCtx>({
-  reason: getGeneratedAuthDisabledReason(
-    "missing_auth_file",
-    "convex/functions/auth.ts"
-  ),
+  GenericCtx,
+  ReturnType<AuthDefinitionFromFile>
+> = createAuthRuntime<
+  DataModel,
+  typeof schema,
+  MutationCtx,
+  GenericCtx,
+  ReturnType<AuthDefinitionFromFile>
+>({
+  internal,
+  moduleName: "generated/auth",
+  schema,
+  auth: authDefinition,
 });
 
 export const {
