@@ -93,6 +93,12 @@ export declare const api: {
 export declare const internal: {
   generated: {
     auth: {
+      consumeOne: FunctionReference<
+        "mutation",
+        "internal",
+        { input: { model: string; where?: Array<any> } },
+        any
+      >;
       count: FunctionReference<
         "query",
         "internal",
@@ -217,6 +223,42 @@ export declare const internal: {
         any
       >;
       getLatestJwks: FunctionReference<"action", "internal", {}, any>;
+      incrementOne: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          input: {
+            increment: Record<string, number>;
+            model: string;
+            set?: Record<string, any>;
+            where?: Array<{
+              connector?: "AND" | "OR";
+              field: string;
+              mode?: "sensitive" | "insensitive";
+              operator?:
+                | "lt"
+                | "lte"
+                | "gt"
+                | "gte"
+                | "eq"
+                | "in"
+                | "not_in"
+                | "ne"
+                | "contains"
+                | "starts_with"
+                | "ends_with";
+              value:
+                | string
+                | number
+                | boolean
+                | Array<string>
+                | Array<number>
+                | null;
+            }>;
+          };
+        },
+        any
+      >;
       rotateKeys: FunctionReference<"action", "internal", {}, any>;
       updateMany: FunctionReference<
         "mutation",
