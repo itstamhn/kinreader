@@ -450,37 +450,57 @@ export function LibraryDrawer({
             </>
           )}
 
-          {/* TAB 2: SETTINGS (Integrated Inline Screen - No Popups) */}
+          {/* TAB 2: SETTINGS (Full-width Integrated Screen) */}
           {currentTab === 'settings' && (
-            <div className="flex flex-col gap-6 max-w-xl py-2">
-              <div className="flex items-center justify-between">
+            <div className="flex-1 flex flex-col gap-6 w-full max-w-5xl py-2">
+              {/* Header with full-width alignment */}
+              <div className="flex items-center justify-between pb-4 border-b border-white/5">
                 <div>
-                  <h2 className="font-serif text-2xl text-[#F4F0E6]">Settings & Preferences</h2>
-                  <p className="font-sans text-xs text-[#ECEAE4]/40 pt-0.5">
-                    Customize your kinetic reading velocity and narrator cadence.
+                  <h2 className="font-serif text-2xl sm:text-3xl text-[#F4F0E6]">Settings & Preferences</h2>
+                  <p className="font-sans text-xs sm:text-sm text-[#ECEAE4]/40 pt-1">
+                    Customize your kinetic reading velocity, focal text size, and neural narrator voice.
                   </p>
                 </div>
-                <button
-                  onClick={onClose}
-                  className="hidden sm:flex w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 items-center justify-center text-white/50 hover:text-white transition shrink-0"
-                  title="Close (Esc)"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={onOpenAuth}
+                    className="hidden sm:flex w-9 h-9 rounded-full bg-gradient-to-br from-[#2A2D38] to-[#181A21] border border-white/10 items-center justify-center font-sans font-semibold text-xs text-[#ECEAE4]/70 shrink-0"
+                    title="Account Profile"
+                  >
+                    {user?.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt=""
+                        className="w-full h-full rounded-full object-cover"
+                      />
+                    ) : user ? (
+                      user.name.slice(0, 2).toUpperCase()
+                    ) : (
+                      'JD'
+                    )}
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="hidden sm:flex w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 items-center justify-center text-white/50 hover:text-white transition shrink-0"
+                    title="Close (Esc)"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {/* 1. Focal Text Scale */}
-              <div className="flex flex-col gap-2.5">
-                <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
+              <div className="flex flex-col gap-3">
+                <label className="font-sans text-xs sm:text-sm font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
                   <Type className="w-4 h-4 text-[#F2A33C]" />
                   <span>Focal Text Scale</span>
                 </label>
-                <div className="grid grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {(
                     [
-                      { id: 'sm', label: 'Compact', desc: '36px' },
-                      { id: 'md', label: 'Standard', desc: '46px (Default)' },
-                      { id: 'lg', label: 'Large', desc: '56px' },
+                      { id: 'sm', label: 'Compact', desc: '36px font scale' },
+                      { id: 'md', label: 'Standard', desc: '46px font scale (Default)' },
+                      { id: 'lg', label: 'Large', desc: '56px font scale' },
                     ] as const
                   ).map((opt) => (
                     <button
@@ -489,32 +509,32 @@ export function LibraryDrawer({
                         setFontSize(opt.id);
                         handleUpdateSettings({ fontSize: opt.id });
                       }}
-                      className={`p-3 rounded-2xl border flex flex-col items-center gap-1 transition ${
+                      className={`p-4 rounded-2xl border flex flex-col items-center gap-1.5 transition ${
                         fontSize === opt.id
-                          ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F2A33C]'
+                          ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F2A33C] shadow-[0_0_20px_rgba(242,163,60,0.15)]'
                           : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
                       }`}
                     >
-                      <span className="font-sans text-xs font-bold">{opt.label}</span>
-                      <span className="font-mono text-[10px] opacity-70">{opt.desc}</span>
+                      <span className="font-sans text-sm font-bold text-[#F4F0E6]">{opt.label}</span>
+                      <span className="font-mono text-xs opacity-70">{opt.desc}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* 2. Default Playback Tempo */}
-              <div className="flex flex-col gap-2.5">
+              <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                  <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80">
+                  <label className="font-sans text-xs sm:text-sm font-semibold text-[#ECEAE4]/80">
                     Default Playback Tempo
                   </label>
-                  <span className="font-mono text-xs font-bold text-[#F2A33C] px-2.5 py-0.5 rounded-lg bg-[#F2A33C]/10 border border-[#F2A33C]/30">
+                  <span className="font-mono text-xs sm:text-sm font-bold text-[#F2A33C] px-3 py-1 rounded-lg bg-[#F2A33C]/10 border border-[#F2A33C]/30">
                     {defaultRate.toFixed(1)}×
                   </span>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-[11px] text-[#ECEAE4]/40">0.8×</span>
+                <div className="flex items-center gap-4 bg-white/[0.03] border border-white/5 p-4 rounded-2xl">
+                  <span className="font-mono text-xs text-[#ECEAE4]/40">0.8×</span>
                   <input
                     type="range"
                     min="0.8"
@@ -526,19 +546,19 @@ export function LibraryDrawer({
                       setDefaultRate(val);
                       handleUpdateSettings({ defaultRate: val });
                     }}
-                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#F2A33C]"
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#F2A33C]"
                   />
-                  <span className="font-mono text-[11px] text-[#ECEAE4]/40">3.5×</span>
+                  <span className="font-mono text-xs text-[#ECEAE4]/40">3.5×</span>
                 </div>
               </div>
 
               {/* 3. Narrator Voice */}
-              <div className="flex flex-col gap-2.5">
-                <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
+              <div className="flex flex-col gap-3">
+                <label className="font-sans text-xs sm:text-sm font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
                   <Volume2 className="w-4 h-4 text-[#F2A33C]" />
                   <span>Neural Voice Selection</span>
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {SONIOX_VOICES.map((v) => (
                     <button
                       key={v.id}
@@ -546,32 +566,39 @@ export function LibraryDrawer({
                         setSonioxVoice(v.id);
                         handleUpdateSettings({ sonioxVoice: v.id });
                       }}
-                      className={`p-3 rounded-2xl border text-left flex flex-col gap-1 transition ${
+                      className={`p-4 rounded-2xl border text-left flex flex-col gap-1.5 transition ${
                         sonioxVoice === v.id
-                          ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F4F0E6]'
+                          ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F4F0E6] shadow-[0_0_20px_rgba(242,163,60,0.15)]'
                           : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-sans font-bold text-xs text-[#F4F0E6]">{v.name}</span>
-                        {sonioxVoice === v.id && <Check className="w-3.5 h-3.5 text-[#F2A33C]" />}
+                        <span className="font-sans font-bold text-sm text-[#F4F0E6]">{v.name}</span>
+                        {sonioxVoice === v.id && <Check className="w-4 h-4 text-[#F2A33C]" />}
                       </div>
-                      <span className="font-sans text-[11px] text-[#ECEAE4]/40">{v.desc}</span>
+                      <span className="font-sans text-xs text-[#ECEAE4]/50">{v.desc}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* 4. Kinreader Pro Banner */}
-              <div className="rounded-2xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-[#F2A33C]/30 p-4 flex items-center justify-between mt-2">
-                <div className="flex items-center gap-3">
-                  <Sparkles className="w-5 h-5 text-[#F2A33C]" />
-                  <div className="flex flex-col">
-                    <span className="font-sans font-semibold text-xs text-[#F4F0E6]">
-                      Kinreader Pro
-                    </span>
-                    <span className="font-sans text-[11px] text-[#ECEAE4]/50">
-                      All neural voices, 3.5× tempo, unlimited articles.
+              <div className="rounded-3xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-[#F2A33C]/30 p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-2">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-[#F2A33C]/10 border border-[#F2A33C]/20 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-6 h-6 text-[#F2A33C]" />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-serif font-medium text-lg text-[#F4F0E6]">
+                        Kinreader Pro
+                      </span>
+                      <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#F2A33C]/15 text-[#F2A33C] border border-[#F2A33C]/30">
+                        UNLIMITED
+                      </span>
+                    </div>
+                    <span className="font-sans text-xs text-[#ECEAE4]/50">
+                      Unlock full neural synthesis voices, 3.5× tempo acceleration, and priority queue sync.
                     </span>
                   </div>
                 </div>
@@ -579,9 +606,9 @@ export function LibraryDrawer({
                   href="https://buy.stripe.com/eVqfZbgvZeDH6Uc2zJ53O00"
                   target="_blank"
                   rel="noreferrer"
-                  className="px-4 py-2 rounded-xl glow-amber-btn font-sans font-semibold text-xs transition"
+                  className="px-6 py-3 rounded-2xl glow-amber-btn font-sans font-semibold text-xs sm:text-sm transition active:scale-95 shrink-0"
                 >
-                  Upgrade
+                  Start Pro Trial →
                 </a>
               </div>
             </div>
