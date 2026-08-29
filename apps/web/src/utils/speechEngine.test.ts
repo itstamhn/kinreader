@@ -112,3 +112,176 @@ test('falling back to on-device speech is visible via engine.mode, not silent', 
   expect(engine.mode).toBe('browser');
   expect(engine.getSnapshot().mode).toBe('browser');
 });
+
+// --- Audio/highlight sync -------------------------------------------------
+
+// A stand-in for the <audio> element. Only the properties the sync loop
+// reads are modelled; each test drives `currentTime`/`paused` by hand to
+// stage the exact condition it is about.
+function fakeAudio(overrides: Record<string, any> = {}) {
+  return {
+    currentTime: 0,
+    duration: NaN,
+    paused: false,
+    ended: false,
+    seeking: false,
+    readyState: 4,
+    networkState: 1,
+    buffered: { length: 0, end: () => 0 },
+    playbackRate: 1,
+    defaultPlaybackRate: 1,
+    pause() {
+      this.paused = true;
+    },
+    play() {
+      this.paused = false;
+      return Promise.resolve();
+    },
+    ...overrides,
+  };
+}
+
+function attach(engine: SpeechEngine, audio: any, words: { text: string; start: number; end: number }[]) {
+  (engine as any).audio = audio;
+  engine.mode = 'audio';
+  engine.words = words;
+  engine.duration = words[words.length - 1]!.end;
+  engine.isPlaying = true;
+}
+
+// Evenly spaced one-word-per-second timings, `count` seconds long.
+function evenWords(count: number) {
+  return Array.from({ length: count }, (_, i) => ({ text: `w${i}`, start: i, end: i + 1 }));
+}
+
+// The bug this file's sync fixes: the loop used to advance its own clock by
+// `dt * rate` whenever the audio element was not moving, and a `< 2.0s` drift
+// gate then refused to ever trust the element again. Raising the speed makes
+// a streamed Soniox MP3 stall routinely -- playback drains it faster than it
+// arrives -- so the words would run away from the voice and never come back.
+test('a stalled stream does not let the highlight run away from the audio at high speed', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ currentTime: 1.0 });
+  attach(engine, audio, evenWords(60));
+  engine.rate = 3.5;
+
+  // Ten wall-clock seconds of frames while the element sits frozen at 1.0s.
+  for (let i = 0; i < 100; i++) {
+    (engine as any).syncFromAudioTick(0.1);
+  }
+
+  // At most the small coast budget ahead of where the voice actually is --
+  // the old behaviour landed at 1.0 + 100 * 0.1 * 3.5 = 36s.
+  expect(engine.currentTime).toBeLessThanOrEqual(1.0 + 0.35 + 1e-6);
+  expect(engine.currentTime).toBeGreaterThanOrEqual(1.0);
+});
+
+// ...and once the element starts moving again the highlight snaps back onto
+// it, rather than staying stuck ahead behind a drift gate.
+test('the highlight re-locks onto the audio clock as soon as the stream resumes', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ currentTime: 1.0 });
+  attach(engine, audio, evenWords(60));
+  engine.rate = 3.5;
+
+  for (let i = 0; i < 100; i++) {
+    (engine as any).syncFromAudioTick(0.1);
+  }
+  expect(engine.currentTime).toBeGreaterThan(1.0); // coasted a little
+
+  audio.currentTime = 1.4;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(engine.currentTime).toBe(1.4);
+  expect(engine.getSnapshot().currentWordIndex).toBe(1);
+});
+
+// `currentTime` is media time, so the element already advances it at
+// `playbackRate` -- and the word timings are media time too. Anything that
+// scales the timeline by the rate a second time desyncs by exactly that
+// factor, which is what "not following when I change speed" looked like.
+test('the highlight tracks audio media time exactly, at any playback rate', () => {
+  for (const rate of [0.8, 1, 2, 3.5]) {
+    const engine = new SpeechEngine();
+    const audio = fakeAudio();
+    attach(engine, audio, evenWords(60));
+    engine.rate = rate;
+
+    // One wall second of frames: the element advances `rate` media seconds.
+    // Assigned rather than accumulated so float drift cannot nudge the final
+    // position just under a word boundary.
+    for (let i = 1; i <= 10; i++) {
+      audio.currentTime = Number(((i * 0.1 * rate).toFixed(6)));
+      (engine as any).syncFromAudioTick(0.1);
+    }
+
+    expect(engine.currentTime).toBeCloseTo(rate, 5);
+    expect(engine.getSnapshot().currentWordIndex).toBe(Math.floor(rate));
+  }
+});
+
+// The estimated ~175 WPM timeline App.tsx builds is routinely shorter than
+// the real Soniox audio. `duration` used to be pinned to that estimate on
+// every tick, so playback "ended" while the voice was still talking.
+test('an estimated timeline shorter than the real audio does not end playback early', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ duration: 20 });
+  attach(engine, audio, evenWords(10)); // estimate says 10s, audio is really 20s
+
+  for (let t = 0.5; t <= 12; t += 0.5) {
+    audio.currentTime = t;
+    (engine as any).syncFromAudioTick(0.5);
+  }
+
+  expect(engine.isPlaying).toBe(true);
+  expect(engine.duration).toBe(20);
+  // Past the last estimated word, the highlight holds there instead of stopping.
+  expect(engine.getSnapshot().currentWordIndex).toBe(9);
+});
+
+test('ending playback pauses the audio element instead of leaving it talking', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ duration: 10 });
+  attach(engine, audio, evenWords(10));
+
+  audio.currentTime = 10;
+  (engine as any).syncFromAudioTick(0.1);
+
+  expect(engine.isPlaying).toBe(false);
+  expect(audio.paused).toBe(true);
+});
+
+// The estimate is a guess at the pace of a voice we never got timings for
+// (Soniox's REST stream carries no alignment data). Once the whole file has
+// arrived and reports a real duration, the timeline is stretched onto it.
+test('the estimated word timeline is rescaled to the real audio duration once known', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({
+    duration: 20,
+    networkState: 1,
+    buffered: { length: 1, end: () => 20 },
+  });
+  attach(engine, audio, evenWords(10));
+
+  (engine as any).calibrateToAudioDuration();
+
+  expect(engine.duration).toBe(20);
+  expect(engine.words[0]!.end).toBe(2); // 1s estimated -> 2s real
+  expect(engine.words[9]!.end).toBe(20);
+});
+
+// A duration that the buffer does not yet cover is a chunked MP3's growing
+// estimate, not the real length -- rescaling onto it would be worse than
+// leaving the estimate alone.
+test('rescaling waits for a duration the buffer actually covers', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({
+    duration: 4,
+    buffered: { length: 1, end: () => 4 },
+    networkState: 2, // NETWORK_LOADING -- still pulling bytes
+  });
+  attach(engine, audio, evenWords(10));
+
+  (engine as any).calibrateToAudioDuration();
+
+  expect(engine.words[9]!.end).toBe(10); // untouched
+});

@@ -28,6 +28,10 @@ the table when done.
 | 016 | Make `/r/:id` a real share feature, backed by a store not a query string | P3 | M | 015 | TODO |
 | 017 | `apps/mobile` — the Expo app, and the shared core it forces out | P3 | XL | 015, 008 | TODO |
 | 018 | Stop mirroring the speech engine into React (two live bugs) | P2 | M | — | DONE |
+| 019 | Core engine & lifecycle integrity (in-flight race, TTS error handling, paste detection, O(1) sync) | P1 | M | 018 | DONE |
+| 020 | Server state & full cloud library sync (articleId, addToPlaylist, resilient resolution) | P2 | M | 008, 019 | DONE |
+| 021 | UI state, design tokens, and modal a11y (eliminate duplicate state, @theme, ARIA) | P2 | S | 019, 020 | DONE |
+| 022 | Real word timings from the Soniox WebSocket API | P2 | M | 019 | TODO (Step 0 spike DONE) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -610,3 +614,44 @@ are not re-audited from scratch next session.
   (a) was taken** — `apps/web/src/worker.ts` survives, doing the redirect and nothing else,
   with `worker.test.ts` covering it. That keeps the behaviour in code rather than in
   dashboard configuration, which is the trade-off the plan named.
+
+- **019 — DONE.** Core engine & lifecycle integrity:
+  1. Guarded against in-flight synthesis race conditions when switching articles rapidly
+     via `loadIdRef`. Stale async synthesis responses are cleanly discarded rather than
+     overwriting the newly loaded article.
+  2. Handled environments missing `window.speechSynthesis` gracefully. `isSpeechSynthesisSupported()`
+     detects capability; `loadBrowserText` returns boolean; when both neural synthesis and
+     on-device speech fail, the engine transitions to `'error'` status and displays an
+     unobtrusive playback warning banner in `Controls`.
+  3. Added global `paste` event listener so pasting an article URL anywhere on screen
+     seamlessly summons `ClipboardDetectSheet`.
+  4. Hoisted `SYNTACTIC_CONNECTORS` `Set` and clause punctuation regexes out of `KineticDisplay`
+     render body to module scope.
+  5. Optimized `syncFromAudioTick` word search from linear $O(N)$ scan to monotonic $O(1)$
+     local index traversal.
+  6. Replaced loose `catch (err: any)` with `catch (err: unknown)` + type guards across all
+     modal components.
+
+- **020 — DONE.** Server state & full cloud library sync:
+  1. Exposed `articleId` on `tts.synthesize` returns across both cache hits and fresh
+     generations.
+  2. Created authenticated `addToPlaylist` mutation with automatic `articles` record
+     upsert and `userArticles` association.
+  3. Made `saveUserProgress` and `deleteUserArticle` resilient to both `Id<'articles'>` and
+     URL string keys.
+  4. Wired reactive `getUserPlaylist` query and `addToPlaylist`/`deleteUserArticle` mutations
+     in `App.tsx` for seamless cross-device synchronization when authenticated, falling back
+     to local storage when unauthenticated.
+  5. Added comprehensive Convex backend test suite covering `addToPlaylist`, cross-user
+     isolation, and progress tracking.
+
+- **021 — DONE.** UI state, design tokens, and modal a11y:
+  1. Removed redundant local settings state copies and `useEffect` sync loop in `LibraryDrawer`.
+     Directly bound to props and eliminated disk-write loops on tempo slider dragging with a
+     250ms debounce.
+  2. Replaced fragmented boolean state (`isLibraryOpen`, `libraryTab`) with unified top-level
+     navigation state (`activeView: 'reader' | 'queue' | 'settings'`).
+  3. Added Tailwind v4 `@theme` design tokens in `index.css` for consistent dark theme palettes.
+  4. Added WAI-ARIA dialog attributes (`role="dialog"`, `aria-modal="true"`, `aria-labelledby`,
+     explicit labels) across `UrlInputModal`, `ClipboardDetectSheet`, and `AuthModal`.
+

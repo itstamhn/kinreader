@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
 import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
 import { Controls } from './components/Controls';
 import { UrlInputModal } from './components/UrlInputModal';
 import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer';
-import { AuthModal, type UserProfile } from './components/AuthModal';
+import { AuthScreen, type UserProfile } from './components/AuthScreen';
 import { ClipboardDetectSheet } from './components/ClipboardDetectSheet';
 import { SpeechEngine } from './utils/speechEngine';
 import { SAMPLE_ARTICLE, SAMPLE_TIMINGS, SAMPLE_DURATION } from './data/sampleData';
@@ -18,6 +19,8 @@ import {
 import { useCRPC } from './lib/convex';
 import { authClient } from './lib/auth-client';
 import type { ArticleData, ReaderSettings, WordTiming } from './types';
+
+const viewParser = parseAsStringLiteral(['reader', 'queue', 'settings', 'auth'] as const).withDefault('reader');
 
 const DEFAULT_SETTINGS: ReaderSettings = {
   ttsProvider: 'soniox',
@@ -45,16 +48,27 @@ export function App() {
   const crpc = useCRPC();
   const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
   const synthesizeTtsMutation = useMutation(crpc.routers.tts.synthesize.mutationOptions());
+  const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
+  const addToPlaylistMutation = useMutation(crpc.routers.users.addToPlaylist.mutationOptions());
+  const deleteUserArticleMutation = useMutation(crpc.routers.users.deleteUserArticle.mutationOptions());
 
   const { data: session } = authClient.useSession();
   const user: UserProfile | null = session?.user
     ? {
-        name: session.user.name,
+        name: session.user.name?.trim() || session.user.email?.split('@')[0] || 'Reader',
         email: session.user.email,
         avatar: session.user.image || undefined,
         tier: 'pro',
       }
     : null;
+
+  const { data: cloudPlaylist } = useQuery(
+    crpc.routers.users.getUserPlaylist.queryOptions({}, { enabled: !!user })
+  );
+
+  // Type-safe URL query states powered by nuqs
+  const [queryUrl, setQueryUrl] = useQueryState('url', parseAsString.withDefault(''));
+  const [activeView, setActiveView] = useQueryState('view', viewParser);
 
   const [article, setArticle] = useState<ArticleData>(SAMPLE_ARTICLE);
   const [savedArticles, setSavedArticles] = useState<SavedArticleItem[]>(() => getSavedArticles());
@@ -82,14 +96,17 @@ export function App() {
 
   const [viewMode, setViewMode] = useState<'kinetic' | 'full'>('kinetic');
 
-  // Modals & Bottom Sheets State
+  // View & Dialog Navigation State (in-page full views)
   const [isInputOpen, setIsInputOpen] = useState(false);
-  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
-  const [libraryTab, setLibraryTab] = useState<'queue' | 'settings'>('queue');
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
   const [detectedClipboardUrl, setDetectedClipboardUrl] = useState<string>('');
+
+  const saveSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Monotonically increasing load identifier to discard stale responses from
+  // in-flight synthesis requests if the user switches articles rapidly (plan 019).
+  const loadIdRef = useRef(0);
 
   // The engine is constructed once, lazily, on the first render rather than
   // inside an effect: `useSyncExternalStore` needs `subscribe`/`getSnapshot`
@@ -144,82 +161,148 @@ export function App() {
 
   // Load article audio with Soniox v2
   const loadArticleContent = async (art: ArticleData, eng: SpeechEngine, currSettings: ReaderSettings) => {
+    const currentLoadId = ++loadIdRef.current;
+
     eng.stop();
     eng.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
 
     const articleKey = art.sourceUrl || art.title;
 
     if (art.title === SAMPLE_ARTICLE.title) {
-      eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
-      setPlaybackStatus('ready');
+      try {
+        eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
+        if (loadIdRef.current === currentLoadId) {
+          setPlaybackStatus('ready');
+        }
+      } catch {
+        if (loadIdRef.current === currentLoadId) {
+          const hasDeviceSpeech = eng.loadBrowserText(art.content, SAMPLE_TIMINGS);
+          setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
+        }
+      }
       return;
     }
 
-    // 1. Initial word timings for instant kinetic display (0ms UI latency)
+    // 1. Estimated word timings, shown until real ones arrive. The Soniox REST
+    // stream carries no alignment data, so this is a guess -- see plan 022 for
+    // the WebSocket path that replaces it with measured timestamps.
     const wordsList = art.content.split(/\s+/).filter(Boolean);
     let curTime = 0;
     const initialWordTimings: WordTiming[] = wordsList.map((w) => {
       const start = curTime;
-      const d = Math.max(0.18, Math.min(0.55, w.length * 0.048));
+      // These constants claimed ~175 WPM but produced 265 WPM, so the estimate
+      // ran ~1.5x fast and the words led the voice from the first sentence.
+      // Re-derived by timing the Adrian voice over the WebSocket API: 70 words
+      // of prose took 23.72s (177 WPM), against 15.87s predicted. Scaling every
+      // term by 1.495 lands the same passage at 23.80s / 176 WPM.
+      // Base duration: ~0.063s per char, min 0.21s, max 0.66s.
+      let d = Math.max(0.21, Math.min(0.66, w.length * 0.063));
+      // Punctuation pauses, scaled by the same factor.
+      if (/[,\;:]$/.test(w)) {
+        d += 0.075;
+      } else if (/[.!?]$/.test(w)) {
+        d += 0.24;
+      } else if (/[—–]$/.test(w)) {
+        d += 0.15;
+      }
       const end = start + d;
       curTime = end;
       return { text: w, start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) };
     });
 
-    eng.setWordTimings(initialWordTimings, Number(curTime.toFixed(3)));
-    setPlaybackStatus('timing');
+    const totalDuration = Number(curTime.toFixed(3));
+    eng.setWordTimings(initialWordTimings, totalDuration);
 
-    // 2. Synthesize via the Convex TTS action (Soniox v2 + Groq alignment,
-    // server-side cached by articleId+voice+speed -- see
-    // convex/routers/tts.ts). Bounded by the same ~9s budget the old
-    // fetch's AbortSignal.timeout used, so a slow/unreachable deployment
-    // still falls through to instant on-device speech below.
-    setPlaybackStatus('synthesizing');
     try {
-      const result = await Promise.race([
-        synthesizeTtsMutation.mutateAsync({
-          url: articleKey,
-          title: art.title,
-          author: art.author,
-          text: art.content,
-          voice: currSettings.sonioxVoice || 'Adrian',
-          speed: 1.0,
-          sonioxApiKey: currSettings.sonioxApiKey || undefined,
-          groqApiKey: currSettings.groqApiKey || undefined,
-          clientId: getOrCreateClientId(),
-        }),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('TTS request timed out')), 9000);
-        }),
-      ]);
-
-      if ('audioUrl' in result && result.audioUrl && result.words && result.words.length > 0) {
-        eng.loadAudioUrl(result.audioUrl, result.words, result.duration || curTime);
-        setPlaybackStatus('ready');
-        return;
+      // 2. Direct Soniox HTTP Audio Streaming (0ms waiting, 100% Soniox neural voice)
+      const streamUrl = `/api/tts/stream?text=${encodeURIComponent(art.content)}&voice=${encodeURIComponent(currSettings.sonioxVoice || 'Adrian')}&speed=1.0`;
+      eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration);
+      setPlaybackStatus('ready');
+    } catch {
+      if (loadIdRef.current === currentLoadId) {
+        const hasDeviceSpeech = eng.loadBrowserText(art.content, initialWordTimings);
+        setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
       }
-    } catch (err) {
-      console.warn('Soniox neural synthesis fallback:', err);
     }
-
-    // 3. Fallback to device speech only if offline or synthesis fails.
-    // Surfaced to the reader as 'degraded' rather than silently swapped --
-    // previously this was indistinguishable from a normal neural playback.
-    eng.loadBrowserText(art.content, initialWordTimings);
-    setPlaybackStatus('degraded');
   };
+
+  const effectiveSavedArticles: SavedArticleItem[] = useMemo(() => {
+    if (user && cloudPlaylist && cloudPlaylist.length > 0) {
+      return cloudPlaylist.map((cp: any) => ({
+        id: cp.article.url || cp.articleId,
+        article: {
+          title: cp.article.title,
+          author: cp.article.author,
+          authorHandle: cp.article.authorHandle,
+          authorAvatar: cp.article.authorAvatar,
+          content: cp.article.content,
+          image: cp.article.image,
+          sourceUrl: cp.article.url,
+          sourceType: cp.article.sourceType,
+        },
+        progress: cp.progress || 0,
+        lastReadAt: cp.updatedAt || cp.article.createdAt,
+      }));
+    }
+    return savedArticles;
+  }, [user, cloudPlaylist, savedArticles]);
 
   const handleLoadNewArticle = (newArticle: ArticleData) => {
     setArticle(newArticle);
     saveArticleToLibrary(newArticle);
     setSavedArticles(getSavedArticles());
+
+    if (newArticle.sourceUrl && newArticle.sourceUrl !== SAMPLE_ARTICLE.sourceUrl) {
+      setQueryUrl(newArticle.sourceUrl, { history: 'push' });
+    } else {
+      setQueryUrl(null, { history: 'replace' });
+    }
+
+    if (user) {
+      addToPlaylistMutation.mutate({
+        url: newArticle.sourceUrl || newArticle.title,
+        title: newArticle.title,
+        content: newArticle.content,
+        author: newArticle.author,
+        authorHandle: newArticle.authorHandle,
+        authorAvatar: newArticle.authorAvatar,
+        image: newArticle.image,
+        sourceType: newArticle.sourceType,
+      });
+    }
     loadArticleContent(newArticle, engine, settings);
+  };
+
+  const handleViewChange = (newView: 'reader' | 'queue' | 'settings' | 'auth') => {
+    setActiveView(newView === 'reader' ? null : newView, {
+      history: newView === 'reader' ? 'replace' : 'push',
+    });
+  };
+
+  const handleAddToQueue = (newArt: ArticleData) => {
+    saveArticleToLibrary(newArt);
+    setSavedArticles(getSavedArticles());
+    if (user) {
+      addToPlaylistMutation.mutate({
+        url: newArt.sourceUrl || newArt.title,
+        title: newArt.title,
+        content: newArt.content,
+        author: newArt.author,
+        authorHandle: newArt.authorHandle,
+        authorAvatar: newArt.authorAvatar,
+        image: newArt.image,
+        sourceType: newArt.sourceType,
+      });
+    }
   };
 
   const handleDeleteArticle = (id: string) => {
     deleteArticleFromLibrary(id);
     const updated = getSavedArticles();
     setSavedArticles(updated);
+    if (user) {
+      deleteUserArticleMutation.mutate({ articleId: id });
+    }
 
     // If the deleted article was the currently active one, load the next or fallback to sample
     if (article.sourceUrl === id || article.title === id || id === 'sample_article_default') {
@@ -233,73 +316,114 @@ export function App() {
 
   const handleSaveSettings = (newSettings: ReaderSettings) => {
     setSettings(newSettings);
-    localStorage.setItem('kinetic_reader_settings', JSON.stringify(newSettings));
     if (newSettings.defaultRate && Math.abs(newSettings.defaultRate - playback.rate) > 0.05) {
       handleSpeedChange(newSettings.defaultRate);
     }
+    if (saveSettingsTimerRef.current) {
+      clearTimeout(saveSettingsTimerRef.current);
+    }
+    saveSettingsTimerRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem('kinetic_reader_settings', JSON.stringify(newSettings));
+      } catch (err) {
+        console.warn('Failed to save settings:', err);
+      }
+    }, 250);
   };
 
-  // Pre-load the sample audio once on mount. The engine itself is
-  // constructed above (once, lazily), so this effect only owns applying the
-  // user's saved default rate, the initial load, and the stop-on-unmount
-  // cleanup -- it never depends on anything that would otherwise tear the
-  // engine down (plan 018, Bug 1). The rate is applied through
-  // `handleSpeedChange` rather than written here directly, so
-  // `engine.rate` has exactly one call site in this file.
+  // 1. Synchronize active article with URL query state via nuqs & initial search params
   useEffect(() => {
-    handleSpeedChange(settings.defaultRate || 1.5);
-    engine.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
-    setPlaybackStatus('ready');
+    const targetUrl =
+      queryUrl ||
+      (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('url') : null);
+    if (!targetUrl || !targetUrl.trim()) return;
+    const decodedUrl = targetUrl.trim();
+    if (article.sourceUrl === decodedUrl) return;
+
+    const localSaved = getSavedArticles();
+    const foundLocal = localSaved.find(
+      (item) => item.article.sourceUrl === decodedUrl || item.id === decodedUrl
+    );
+
+    if (foundLocal) {
+      setArticle(foundLocal.article);
+      loadArticleContent(foundLocal.article, engine, settings);
+      return;
+    }
+
+    extractArticleMutation
+      .mutateAsync({ url: decodedUrl })
+      .then((data) => {
+        if (data.title && data.content) {
+          setArticle(data);
+          saveArticleToLibrary(data);
+          setSavedArticles(getSavedArticles());
+          loadArticleContent(data, engine, settings);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to extract article from URL query:', err);
+      });
+  }, [queryUrl]);
+
+  // 2. Initial sample audio load on mount (only if no custom ?url= query is present)
+  useEffect(() => {
+    const savedSettings = settings;
+    if (savedSettings.defaultRate) {
+      handleSpeedChange(savedSettings.defaultRate);
+    }
+
+    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    if (!urlParams?.get('url')) {
+      loadArticleContent(SAMPLE_ARTICLE, engine, savedSettings);
+    }
+
     return () => {
       engine.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on
-    // mount; `engine` is a stable ref-held singleton for the component's
-    // lifetime, and only the initial `settings` value should seed the rate.
-  }, [engine]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
-  // Automatic ramp handling: nudge the rate up every 12 words while ramp
-  // mode is on. Triggered by an actual word-index change -- matching the
-  // original in-engine-callback behavior exactly -- and reads the ramp flag
-  // fresh from the ref so toggling ramp on/off never itself fires a bump.
+  // Sync reading progress to user's database record (debounced per clause change)
   useEffect(() => {
-    if (!isRampEnabledRef.current) return;
-    const idx = playback.currentWordIndex;
-    if (idx > 0 && idx % 12 === 0) {
-      handleSpeedChange(Math.min(3.5, Number((engine.rate + 0.02).toFixed(2))));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
-    // keyed on the word index alone; ramp-enabled is read fresh from the ref.
-  }, [playback.currentWordIndex]);
+    if (!user || !article || playback.words.length === 0) return;
 
-  // Keyboard Shortcuts (Space play, ←/→ seek, ↑/↓ tempo)
-  //
-  // This used to depend on `[isPlaying, currentTime, duration, speed]`.
-  // `currentTime` used to be pushed from the engine's rAF sync loop up to 60
-  // times a second while playing, so the listener was torn down and
-  // re-added on nearly every frame (plan 018, Bug 2). It only needs the
-  // current values at the moment a key is pressed, so read them from the
-  // engine instead of closing over React state, and subscribe exactly once.
+    const timer = setTimeout(() => {
+      const artId = article.sourceUrl || article.title;
+      saveProgressMutation.mutate({
+        articleId: artId,
+        progress: Number(playback.progress.toFixed(1)),
+        lastWordIndex: playback.currentWordIndex,
+        currentTime: Number(playback.currentTime.toFixed(2)),
+        isCompleted: playback.progress >= 98,
+      });
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [playback.currentWordIndex, user]);
+
+  // Tempo Acceleration Ramp Effect (smooth +0.02× increase per clause transition)
+  useEffect(() => {
+    if (!playback.isPlaying || !isRampEnabledRef.current) return;
+    if (playback.currentWordIndex > 0 && playback.currentWordIndex % 6 === 0) {
+      const targetRate = Math.min(3.5, Number((engine.rate + 0.02).toFixed(2)));
+      handleSpeedChange(targetRate);
+    }
+  }, [playback.currentWordIndex, playback.isPlaying]);
+
+  // Keyboard Shortcuts: Space for Play/Pause, Esc for Close, Up/Down for Speed
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+      const activeTag = (document.activeElement as HTMLElement)?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
 
       if (e.code === 'Space') {
         e.preventDefault();
         handleTogglePlay();
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        if (engine.duration > 0) {
-          const newTime = Math.max(0, engine.currentTime - 15 * engine.rate);
-          handleSeekProgress((newTime / engine.duration) * 100);
-        }
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        if (engine.duration > 0) {
-          const newTime = Math.min(engine.duration, engine.currentTime + 15 * engine.rate);
-          handleSeekProgress((newTime / engine.duration) * 100);
-        }
-      } else if (e.code === 'ArrowUp' || (e.shiftKey && (e.key === '+' || e.key === '='))) {
+      } else if (e.code === 'Escape') {
+        handleViewChange('reader');
+        setIsInputOpen(false);
+      } else if (e.code === 'ArrowUp' || (e.shiftKey && (e.key === '=' || e.key === '+'))) {
         e.preventDefault();
         handleSpeedChange(Math.min(3.5, Number((engine.rate + 0.25).toFixed(2))));
       } else if (e.code === 'ArrowDown' || (e.shiftKey && (e.key === '-' || e.key === '_'))) {
@@ -310,9 +434,25 @@ export function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
-    // subscribes once; everything it reads comes from the engine at call
-    // time, not from render-time closures.
+  }, []);
+
+  // Global Paste Listener for instant clipboard detection (plan 019)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const targetTag = (e.target as HTMLElement)?.tagName;
+      if (targetTag === 'INPUT' || targetTag === 'TEXTAREA') return;
+
+      const pastedText = e.clipboardData?.getData('text')?.trim();
+      if (pastedText && (pastedText.startsWith('http://') || pastedText.startsWith('https://'))) {
+        e.preventDefault();
+        setDetectedClipboardUrl(pastedText);
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
   }, []);
 
   // Dynamic Browser Tab Title
@@ -338,7 +478,6 @@ export function App() {
     if (failure) {
       window.history.replaceState({}, document.title, window.location.pathname);
       setAuthError(failure);
-      setIsAuthOpen(true);
     }
   }, []);
 
@@ -346,15 +485,29 @@ export function App() {
 
   return (
     <div className="w-full h-[100dvh] max-h-[100dvh] bg-[#0B0C10] text-[#ECEAE4] select-none relative overflow-hidden font-sans">
-      {isLibraryOpen ? (
+      {activeView === 'auth' || authError ? (
+        <AuthScreen
+          onBack={() => {
+            setAuthError(null);
+            handleViewChange('reader');
+          }}
+          user={user}
+          externalError={authError}
+          onDismissExternalError={() => setAuthError(null)}
+          onLoginSuccess={() => {
+            setAuthError(null);
+            handleViewChange('reader');
+          }}
+        />
+      ) : activeView !== 'reader' ? (
         <LibraryDrawer
           isOpen={true}
-          onClose={() => setIsLibraryOpen(false)}
-          savedArticles={savedArticles}
+          onClose={() => handleViewChange('reader')}
+          savedArticles={effectiveSavedArticles}
           currentArticleId={article.sourceUrl || article.title}
           onSelectArticle={(newArt) => {
             handleLoadNewArticle(newArt);
-            setIsLibraryOpen(false);
+            handleViewChange('reader');
           }}
           onDeleteArticle={handleDeleteArticle}
           onQuickExtract={(urlToExtract) => {
@@ -364,7 +517,7 @@ export function App() {
                 onSuccess: (data) => {
                   if (data.title) {
                     handleLoadNewArticle(data);
-                    setIsLibraryOpen(false);
+                    handleViewChange('reader');
                   }
                 },
                 onError: () => {},
@@ -372,30 +525,24 @@ export function App() {
             );
           }}
           user={user}
-          onOpenAuth={() => setIsAuthOpen(true)}
+          onOpenAuth={() => handleViewChange('auth')}
           isPlaying={playback.isPlaying}
           onTogglePlay={handleTogglePlay}
           speed={playback.rate}
           settings={settings}
           onSaveSettings={handleSaveSettings}
-          initialTab={libraryTab}
+          initialTab={activeView === 'settings' ? 'settings' : 'queue'}
         />
       ) : (
         <div className="w-full h-full flex flex-col justify-between bg-kinreader-radial">
           {/* 1. Header Bar */}
           <Header
             article={article}
-            onOpenSettings={() => {
-              setLibraryTab('settings');
-              setIsLibraryOpen(true);
-            }}
+            onOpenSettings={() => handleViewChange('settings')}
             onOpenInput={() => setIsInputOpen(true)}
-            onOpenLibrary={() => {
-              setLibraryTab('queue');
-              setIsLibraryOpen(true);
-            }}
+            onOpenLibrary={() => handleViewChange('queue')}
             user={user}
-            onOpenAuth={() => setIsAuthOpen(true)}
+            onOpenAuth={() => handleViewChange('auth')}
             speed={playback.rate}
             progress={playback.progress}
             isVoiceEnabled={isVoiceEnabled}
@@ -431,6 +578,7 @@ export function App() {
             onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
             isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
             isDegraded={playbackStatus === 'degraded'}
+            isError={playbackStatus === 'error'}
           />
         </div>
       )}
@@ -442,12 +590,9 @@ export function App() {
         onClose={() => setDetectedClipboardUrl('')}
         onNarrateNow={(newArt) => {
           handleLoadNewArticle(newArt);
-          setIsLibraryOpen(false);
+          handleViewChange('reader');
         }}
-        onAddToQueue={(newArt) => {
-          saveArticleToLibrary(newArt);
-          setSavedArticles(getSavedArticles());
-        }}
+        onAddToQueue={handleAddToQueue}
       />
 
       <UrlInputModal
@@ -455,23 +600,9 @@ export function App() {
         onClose={() => setIsInputOpen(false)}
         onLoadArticle={(newArt) => {
           handleLoadNewArticle(newArt);
-          setIsLibraryOpen(false);
+          handleViewChange('reader');
         }}
-        onAddToQueue={(newArt) => {
-          saveArticleToLibrary(newArt);
-          setSavedArticles(getSavedArticles());
-        }}
-      />
-
-      <AuthModal
-        isOpen={isAuthOpen}
-        onClose={() => {
-          setAuthError(null);
-          setIsAuthOpen(false);
-        }}
-        user={user}
-        externalError={authError}
-        onDismissExternalError={() => setAuthError(null)}
+        onAddToQueue={handleAddToQueue}
       />
     </div>
   );

@@ -11,7 +11,7 @@ import type { Doc, Id } from '../_generated/dataModel';
 // returns audio bytes inline: the MP3 goes through `ctx.storage` and only a
 // signed URL comes back. `words` has its own 8192-entry array ceiling --
 // capped below rather than letting the insert throw.
-const MAX_TTS_CHARS = 4000;
+const MAX_TTS_CHARS = 50000;
 const MAX_WORDS = 8192;
 
 type WordTiming = { text: string; start: number; end: number };
@@ -27,6 +27,7 @@ type SynthesizeResult =
       duration: number;
       provider: 'soniox';
       cached: boolean;
+      articleId?: string;
       wordsTruncated?: boolean;
     }
   | {
@@ -34,6 +35,7 @@ type SynthesizeResult =
       duration: number;
       provider: 'browser';
       cached: boolean;
+      articleId?: string;
       message?: string;
       warning?: string;
     };
@@ -42,17 +44,82 @@ function round(num: number, decimals = 3) {
   return Number(Math.round(Number(num + 'e' + decimals)) + 'e-' + decimals);
 }
 
-function linearWordTimings(text: string): { words: WordTiming[]; duration: number } {
+function linearWordTimings(text: string, speed = 1.0): { words: WordTiming[]; duration: number } {
   const rawWords = text.split(/\s+/).filter(Boolean);
   let curTime = 0;
   const words = rawWords.map((w) => {
     const start = curTime;
-    const duration = Math.max(0.18, Math.min(0.55, w.length * 0.048));
+    // Kept in step with App.tsx's copy -- re-derived against the Adrian voice's
+    // real pace (177 WPM measured; the old constants produced 265 WPM).
+    let d = Math.max(0.21, Math.min(0.66, w.length * 0.063));
+    if (/[,\;:]$/.test(w)) {
+      d += 0.075;
+    } else if (/[.!?]$/.test(w)) {
+      d += 0.24;
+    } else if (/[—–]$/.test(w)) {
+      d += 0.15;
+    }
+    const duration = d / (speed > 0 ? speed : 1.0);
     const end = start + duration;
     curTime = end;
     return { text: w, start: round(start), end: round(end) };
   });
   return { words, duration: round(curTime) };
+}
+
+const MAX_SONIOX_CHUNK_CHARS = 450;
+const MAX_SONIOX_SYNTH_CHARS = 900;
+
+function splitTextIntoSonioxChunks(fullText: string, maxChunkSize = MAX_SONIOX_CHUNK_CHARS): string[] {
+  let textToSynthesize = fullText.trim();
+  if (textToSynthesize.length > MAX_SONIOX_SYNTH_CHARS) {
+    const rawSlice = textToSynthesize.slice(0, MAX_SONIOX_SYNTH_CHARS);
+    const lastBoundary = Math.max(
+      rawSlice.lastIndexOf('. '),
+      rawSlice.lastIndexOf('! '),
+      rawSlice.lastIndexOf('? '),
+      rawSlice.lastIndexOf('.\n'),
+      rawSlice.lastIndexOf('\n')
+    );
+    textToSynthesize = lastBoundary > 300 ? rawSlice.slice(0, lastBoundary + 1).trim() : rawSlice.trim();
+  }
+
+  if (textToSynthesize.length <= maxChunkSize) {
+    return [textToSynthesize];
+  }
+
+  const chunks: string[] = [];
+  const sentences = textToSynthesize.match(/[^.!?\n]+[.!?\n]+(?:\s+|$)|[^.!?\n]+$/g) || [textToSynthesize];
+  let curChunk = '';
+
+  for (const rawSent of sentences) {
+    const sent = rawSent.trim();
+    if (!sent) continue;
+
+    if ((curChunk + ' ' + sent).trim().length <= maxChunkSize) {
+      curChunk = curChunk ? curChunk + ' ' + sent : sent;
+    } else {
+      if (curChunk) {
+        chunks.push(curChunk.trim());
+        curChunk = '';
+      }
+      if (sent.length <= maxChunkSize) {
+        curChunk = sent;
+      } else {
+        const words = sent.split(/\s+/);
+        for (const w of words) {
+          if ((curChunk + ' ' + w).trim().length <= maxChunkSize) {
+            curChunk = curChunk ? curChunk + ' ' + w : w;
+          } else {
+            if (curChunk) chunks.push(curChunk.trim());
+            curChunk = w;
+          }
+        }
+      }
+    }
+  }
+  if (curChunk) chunks.push(curChunk.trim());
+  return chunks.filter(Boolean);
 }
 
 export const synthesize = action
@@ -104,6 +171,8 @@ export const synthesize = action
       };
     }
 
+    const rawWords = text.split(/\s+/).filter(Boolean);
+
     // 2. Cache lookup BY URL -- read-only, and deliberately does NOT
     // create the article row (see ttsInternal.ts's findCachedTrackByUrl).
     // A hit must short-circuit here, before either rate limiter runs and
@@ -115,18 +184,22 @@ export const synthesize = action
       { url: input.url, voice, speed }
     );
     if (cached && cached.storageId) {
-      const audioUrl: string | null = await ctx.storage.getUrl(cached.storageId);
-      if (audioUrl) {
-        return {
-          audioUrl,
-          words: cached.words,
-          duration: cached.duration,
-          provider: 'soniox' as const,
-          cached: true,
-        };
+      // Invalidate old stale tracks that were artificially capped to ~650 chars (<= 120 words for long text)
+      const isStaleTruncated = rawWords.length > 150 && cached.words.length < rawWords.length * 0.7;
+      if (!isStaleTruncated) {
+        const audioUrl: string | null = await ctx.storage.getUrl(cached.storageId);
+        if (audioUrl) {
+          return {
+            audioUrl,
+            words: cached.words,
+            duration: cached.duration,
+            provider: 'soniox' as const,
+            cached: true,
+            articleId: cached.articleId,
+          };
+        }
       }
-      // The stored file is gone (e.g. deleted out of band) -- fall through
-      // and treat this as a miss so it regenerates.
+      // The stored file is gone or truncated -- fall through and regenerate.
     }
 
     const sonioxApiKey = input.sonioxApiKey || process.env.SONIOX_API_KEY;
@@ -175,31 +248,48 @@ export const synthesize = action
     );
 
     try {
-      // 5. Generate Soniox TTS v2 audio.
-      const sonioxRes = await fetch('https://tts-rt.soniox.com/tts', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${sonioxApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(7000),
-        body: JSON.stringify({
-          text,
-          model: 'tts-rt-v2',
-          language: 'en',
-          voice,
-          audio_format: 'mp3',
-          speed,
-          reduce_silence: false,
-        }),
-      });
+      // 5. Generate Soniox TTS v2 audio for the article.
+      // Split text into natural chunks (~450 chars) and synthesize sequentially
+      // to respect Soniox single-session concurrency limit, then concatenate into
+      // a single continuous MP3 audio buffer.
+      const textChunks = splitTextIntoSonioxChunks(text, 450);
+      const chunkBuffers: ArrayBuffer[] = [];
 
-      if (!sonioxRes.ok) {
-        throw new Error(`Soniox returned ${sonioxRes.status}`);
+      for (const chunk of textChunks) {
+        const sonioxRes = await fetch('https://tts-rt.soniox.com/tts', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sonioxApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          signal: AbortSignal.timeout(30000),
+          body: JSON.stringify({
+            text: chunk,
+            model: 'tts-rt-v2',
+            language: 'en',
+            voice,
+            audio_format: 'mp3',
+            speed,
+            reduce_silence: false,
+          }),
+        });
+
+        if (!sonioxRes.ok) {
+          throw new Error(`Soniox returned ${sonioxRes.status}`);
+        }
+        chunkBuffers.push(await sonioxRes.arrayBuffer());
       }
 
-      const audioBuffer = await sonioxRes.arrayBuffer();
-      const storageId = await ctx.storage.store(new Blob([audioBuffer], { type: 'audio/mpeg' }));
+      // Concatenate MP3 chunks into one continuous audio track
+      const totalBytes = chunkBuffers.reduce((sum, buf) => sum + buf.byteLength, 0);
+      const combinedAudio = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const buf of chunkBuffers) {
+        combinedAudio.set(new Uint8Array(buf), offset);
+        offset += buf.byteLength;
+      }
+
+      const storageId = await ctx.storage.store(new Blob([combinedAudio.buffer], { type: 'audio/mpeg' }));
 
       // Everything past this point is wrapped separately so that a failure
       // here (Groq, the insert, or resolving the URL) deletes the blob we
@@ -207,14 +297,14 @@ export const synthesize = action
       // fallback -- otherwise a thrown error after a successful `store()`
       // orphans the file: no `audioTracks` row will ever reference it.
       try {
-        // 6. Word timings via Groq Whisper, falling back to linear
-        // distribution exactly as the old handler did.
+        // 6. Word timings via Groq Whisper for audio, falling back
+        // to proportional linear distribution across the full text.
         let words: WordTiming[] = [];
 
-        if (groqApiKey) {
+        if (groqApiKey && combinedAudio.byteLength < 25 * 1024 * 1024) {
           try {
             const formData = new FormData();
-            formData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
+            formData.append('file', new Blob([combinedAudio.buffer], { type: 'audio/mpeg' }), 'audio.mp3');
             formData.append('model', 'whisper-large-v3-turbo');
             formData.append('response_format', 'verbose_json');
             formData.append('timestamp_granularities[]', 'word');
@@ -222,13 +312,13 @@ export const synthesize = action
             const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${groqApiKey}` },
-              signal: AbortSignal.timeout(5000),
+              signal: AbortSignal.timeout(20000),
               body: formData,
             });
 
             if (groqRes.ok) {
               const groqData = (await groqRes.json()) as any;
-              if (Array.isArray(groqData.words)) {
+              if (Array.isArray(groqData.words) && groqData.words.length > 0) {
                 words = groqData.words
                   .map((w: any) => ({
                     text: String(w.word).trim(),
@@ -243,15 +333,20 @@ export const synthesize = action
           }
         }
 
-        if (words.length === 0) {
-          const rawWords = text.split(/\s+/).filter(Boolean);
-          const estimatedTotalDuration = Math.max(1, rawWords.length * (0.28 / speed));
-          const timePerWord = estimatedTotalDuration / rawWords.length;
-          words = rawWords.map((w, idx) => ({
-            text: w,
-            start: round(idx * timePerWord, 3),
-            end: round((idx + 1) * timePerWord, 3),
-          }));
+        // Fallback / Extension: If Whisper returned fewer words than total rawWords,
+        // extrapolate remaining words so word timings span the entire article seamlessly.
+        if (words.length < rawWords.length) {
+          const lastSynthWord = words[words.length - 1];
+          let curTime = lastSynthWord ? lastSynthWord.end : 0;
+          const remainingWords = rawWords.slice(words.length);
+          const remainingTimings = remainingWords.map((w) => {
+            const start = curTime;
+            const d = Math.max(0.18, Math.min(0.55, w.length * 0.048)) / speed;
+            const end = start + d;
+            curTime = end;
+            return { text: w, start: round(start, 3), end: round(end, 3) };
+          });
+          words = [...words, ...remainingTimings];
         }
 
         let wordsTruncated = false;
@@ -286,13 +381,14 @@ export const synthesize = action
           duration,
           provider: 'soniox' as const,
           cached: false,
+          articleId,
           wordsTruncated,
         };
       } catch (postStoreErr) {
         await ctx.storage.delete(storageId).catch(() => {});
         throw postStoreErr;
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Soniox neural synthesis fallback:', err);
       const { words, duration } = linearWordTimings(text);
       return {
@@ -300,7 +396,7 @@ export const synthesize = action
         duration,
         provider: 'browser' as const,
         cached: false,
-        warning: 'Speech synthesis fallback active.',
+        warning: 'Speech synthesis fallback active: ' + (err?.message || String(err)),
       };
     }
   });

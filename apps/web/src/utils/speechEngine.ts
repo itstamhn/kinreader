@@ -14,6 +14,7 @@ export interface PlaybackSnapshot {
   currentTime: number;
   rate: number;
   mode: 'browser' | 'audio';
+  isStreaming: boolean;
 }
 
 export class SpeechEngine {
@@ -23,6 +24,12 @@ export class SpeechEngine {
   private fullText: string = '';
   private currentWordIdx: number = 0;
   private animFrameId: number | null = null;
+
+  private mediaSource: MediaSource | null = null;
+  private sourceBuffer: SourceBuffer | null = null;
+  private pendingAudioChunks: Uint8Array[] = [];
+  private allAudioChunks: Uint8Array[] = [];
+  public isStreaming: boolean = false;
 
   // Playback position/progress, updated at every point the old code used to
   // push them out via `onProgressChange`. Cached rather than derived from
@@ -46,12 +53,18 @@ export class SpeechEngine {
       this.synth = window.speechSynthesis;
       this.audio = new Audio();
       this.audio.preload = 'auto';
-      this.audio.onended = () => this.handleEnded();
-      this.audio.ontimeupdate = () => {
-        if (this.audio && !this.audio.paused) {
-          this.syncFromAudioTick();
-        }
+      this.audio.onerror = (e) => {
+        console.error('[SpeechEngine] Audio element error:', this.audio?.error);
       };
+      this.audio.onended = () => this.handleEnded();
+      // The real audio duration only becomes knowable once enough of the
+      // stream has arrived, and which event delivers it varies by browser --
+      // `calibrateToAudioDuration` is a cheap no-op until it is trustworthy.
+      this.audio.ondurationchange = () => this.calibrateToAudioDuration();
+      this.audio.oncanplaythrough = () => this.calibrateToAudioDuration();
+      this.audio.onprogress = () => this.calibrateToAudioDuration();
+      this.audio.onsuspend = () => this.calibrateToAudioDuration();
+      (window as any).__engine = this;
     }
     this.snapshot = this.buildSnapshot();
   }
@@ -156,6 +169,7 @@ export class SpeechEngine {
       currentTime: this._currentTime,
       rate: this._rate,
       mode: this.mode,
+      isStreaming: this.isStreaming,
     };
   }
 
@@ -197,12 +211,121 @@ export class SpeechEngine {
       this.audio.src = url;
       this.audio.playbackRate = this._rate;
       this.audio.defaultPlaybackRate = this._rate;
+      (this.audio as any).preservesPitch = true;
     }
     this.notify();
   }
 
+  // --- Real-Time Audio Streaming (Soniox WebSocket) -----------------------
+
+  public startStreamingSession(initialWords: WordTiming[], estimatedDuration: number) {
+    this.stop();
+    this.mode = 'audio';
+    this.isStreaming = true;
+    this.words = initialWords;
+    this.duration = estimatedDuration;
+    this.pendingAudioChunks = [];
+    this.allAudioChunks = [];
+
+    if (typeof window !== 'undefined' && 'MediaSource' in window && MediaSource.isTypeSupported('audio/mpeg')) {
+      try {
+        this.mediaSource = new MediaSource();
+        if (this.audio) {
+          this.audio.src = URL.createObjectURL(this.mediaSource);
+          this.audio.playbackRate = this._rate;
+          this.audio.defaultPlaybackRate = this._rate;
+        }
+
+        this.mediaSource.addEventListener('sourceopen', () => {
+          if (!this.mediaSource || this.mediaSource.readyState !== 'open') return;
+          try {
+            this.sourceBuffer = this.mediaSource.addSourceBuffer('audio/mpeg');
+            this.sourceBuffer.addEventListener('updateend', () => {
+              this.flushPendingChunks();
+            });
+            this.flushPendingChunks();
+          } catch (err) {
+            console.warn('Failed to addSourceBuffer:', err);
+          }
+        });
+      } catch (err) {
+        console.warn('MediaSource creation error:', err);
+      }
+    }
+    this.notify();
+  }
+
+  private flushPendingChunks() {
+    if (!this.sourceBuffer || this.sourceBuffer.updating || this.pendingAudioChunks.length === 0) {
+      return;
+    }
+    const chunk = this.pendingAudioChunks.shift();
+    if (chunk) {
+      try {
+        this.sourceBuffer.appendBuffer(chunk as any);
+      } catch (err) {
+        console.warn('Error appending chunk to SourceBuffer:', err);
+      }
+    }
+  }
+
+  public appendAudioChunk(chunk: Uint8Array) {
+    this.allAudioChunks.push(chunk);
+    if (this.sourceBuffer && !this.sourceBuffer.updating) {
+      try {
+        this.sourceBuffer.appendBuffer(chunk as any);
+      } catch {
+        this.pendingAudioChunks.push(chunk);
+      }
+    } else {
+      this.pendingAudioChunks.push(chunk);
+    }
+  }
+
+  public appendWordTimings(newWords: WordTiming[], newDuration: number) {
+    this.words = newWords;
+    if (newDuration > 0) {
+      this.duration = Math.max(this.duration, newDuration);
+    }
+    this.notify();
+  }
+
+  public finishStreamingSession(): Blob {
+    this.isStreaming = false;
+    if (this.mediaSource && this.mediaSource.readyState === 'open') {
+      try {
+        if (this.sourceBuffer && !this.sourceBuffer.updating) {
+          this.mediaSource.endOfStream();
+        } else if (this.sourceBuffer) {
+          this.sourceBuffer.addEventListener(
+            'updateend',
+            () => {
+              try {
+                if (this.mediaSource?.readyState === 'open') {
+                  this.mediaSource.endOfStream();
+                }
+              } catch {}
+            },
+            { once: true }
+          );
+        }
+      } catch {}
+    }
+
+    const blob = new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
+    if (!this.mediaSource && this.audio && this.allAudioChunks.length > 0) {
+      this.audio.src = URL.createObjectURL(blob);
+    }
+    this.notify();
+    return blob;
+  }
+
+  public isSpeechSynthesisSupported(): boolean {
+    return typeof window !== 'undefined' && 'speechSynthesis' in window && !!this.synth;
+  }
+
   // Load Browser On-Device Speech
-  public loadBrowserText(text: string, words: WordTiming[]) {
+  public loadBrowserText(text: string, words: WordTiming[]): boolean {
     this.stop();
     this.mode = 'browser';
     this.fullText = text;
@@ -211,6 +334,7 @@ export class SpeechEngine {
     this.duration = words.length > 0 && lastWord ? lastWord.end : 0;
     this.currentWordIdx = 0;
     this.notify();
+    return this.isSpeechSynthesisSupported();
   }
 
   // Update the word list/duration for instant display (e.g. the 0ms-latency
@@ -275,6 +399,7 @@ export class SpeechEngine {
         this.startSyncLoop();
       }).catch(console.error);
     } else if (this.mode === 'browser') {
+      if (!this.synth) return;
       this.isPlaying = true;
       this.notify();
       this.playBrowserFromWord(this.currentWordIdx);
@@ -300,11 +425,26 @@ export class SpeechEngine {
     if (this.mode === 'browser' && this.synth) {
       this.synth.cancel();
     }
+    if (this.mediaSource) {
+      try {
+        if (this.mediaSource.readyState === 'open') {
+          this.mediaSource.endOfStream();
+        }
+      } catch {}
+      this.mediaSource = null;
+      this.sourceBuffer = null;
+    }
+    this.pendingAudioChunks = [];
+    this.allAudioChunks = [];
+    this.isStreaming = false;
+    this.calibrated = false;
+
     if (this.audio) {
       this.audio.pause();
       this.audio.currentTime = 0;
       this.audio.src = '';
     }
+    this.lastAudioCurrentTime = -1;
     this.currentWordIdx = 0;
     this._currentTime = 0;
     this._progress = 0;
@@ -320,6 +460,7 @@ export class SpeechEngine {
 
     const targetTime = targetWord.start;
     this._currentTime = targetTime;
+    this.lastAudioCurrentTime = -1;
     this._progress = this.duration > 0 ? (targetTime / this.duration) * 100 : 0;
 
     if (this.mode === 'audio' && this.audio) {
@@ -340,17 +481,22 @@ export class SpeechEngine {
 
     let targetWordIdx = 0;
     if (this.words.length > 0) {
-      for (let i = 0; i < this.words.length; i++) {
-        if (targetTime >= this.words[i]!.start) {
-          targetWordIdx = i;
+      let low = 0;
+      let high = this.words.length - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (this.words[mid]!.start <= targetTime) {
+          targetWordIdx = mid;
+          low = mid + 1;
         } else {
-          break;
+          high = mid - 1;
         }
       }
     }
 
     this.currentWordIdx = targetWordIdx;
     this._currentTime = targetTime;
+    this.lastAudioCurrentTime = -1;
     this._progress = clampedPercent;
 
     if (this.mode === 'audio' && this.audio) {
@@ -364,20 +510,155 @@ export class SpeechEngine {
     }
   }
 
-  // Shared by the <audio> `ontimeupdate` handler and the rAF sync loop --
-  // both used to run the identical scan-for-active-word + push logic.
-  private syncFromAudioTick() {
-    if (!this.audio) return;
-    const curTime = this.audio.currentTime;
-    this.duration = this.audio.duration || this.duration || 1;
-    const progress = Math.min(100, (curTime / this.duration) * 100);
+  private lastAudioCurrentTime: number = -1;
 
-    let activeIdx = 0;
-    for (let i = 0; i < this.words.length; i++) {
-      if (curTime >= this.words[i]!.start) {
-        activeIdx = i;
-      } else {
-        break;
+  // How far the highlight may coast ahead of the audio element while the
+  // stream is stalled, in media seconds. Big enough that a dropped frame (or a
+  // `currentTime` that only ticks every ~50ms) does not visibly stutter the
+  // words, small enough that a listener never hears the voice fall behind them.
+  private static readonly STALL_COAST_SECONDS = 0.35;
+
+  // HTMLMediaElement.NETWORK_LOADING -- read as a literal because the DOM
+  // constant is absent under happy-dom in tests.
+  private static readonly NETWORK_LOADING = 2;
+
+  private calibrated: boolean = false;
+
+  // The word timeline `loadAudioUrl` is handed is an estimate (App.tsx builds
+  // it at a calibrated ~175 WPM): Soniox's REST endpoint streams raw MP3 and
+  // nothing in the response says when each word is actually spoken -- real
+  // character timestamps exist only on its WebSocket API. So once the element
+  // has the whole file and reports a real duration, stretch the estimate onto
+  // it. Without this the highlight drifts further from the voice with every
+  // sentence, at any speed.
+  private calibrateToAudioDuration() {
+    if (this.calibrated || !this.audio || this.mode !== 'audio') return;
+
+    const real = this.audio.duration;
+    if (!Number.isFinite(real) || real <= 0) return;
+
+    // A chunked MP3 with no Content-Length reports a *growing* duration
+    // estimate while it downloads, so only trust the number once the buffer
+    // actually covers it and the element has stopped pulling bytes.
+    const buffered = this.audio.buffered;
+    if (!buffered || buffered.length === 0) return;
+    if (buffered.end(buffered.length - 1) < real - 0.25) return;
+    if (this.audio.networkState === SpeechEngine.NETWORK_LOADING) return;
+
+    this.calibrated = true;
+
+    const lastWord = this.words[this.words.length - 1];
+    const estimated = lastWord ? lastWord.end : 0;
+    const scale = estimated > 0 ? real / estimated : 1;
+
+    // Guard the ratio: a wild scale means the estimate and the audio are not
+    // the same text (a stale load, a truncated synthesis), and stretching to
+    // match it would be worse than leaving the estimate alone. The band is
+    // wide because the estimate is genuinely bad on some text: measured
+    // against Soniox, prose needs ~1.0x with the recalibrated constants in
+    // App.tsx, but number- and acronym-heavy text needs ~2.15x (the voice
+    // reads "2026" as four digits with pauses, the heuristic sees one short
+    // token). A 2.5 ceiling silently refused to correct exactly the articles
+    // that needed it most.
+    if (estimated > 0 && scale > 0.3 && scale < 4.0 && Math.abs(scale - 1) > 0.02) {
+      this.words = this.words.map((w) => ({
+        ...w,
+        start: Number((w.start * scale).toFixed(3)),
+        end: Number((w.end * scale).toFixed(3)),
+      }));
+    }
+
+    this.duration = real;
+    this.notify();
+  }
+
+  // Shared by the rAF sync loop to run the active-word scan + push logic.
+  private syncFromAudioTick(dt: number = 0) {
+    if (!this.audio || this.mode !== 'audio') return;
+
+    const audioTime = this.audio.currentTime;
+
+    // Keep `duration` honest. This used to be pinned to the estimated word
+    // timeline's last `end` on every tick, so whenever that estimate ran short
+    // of the real audio the run below hit `curTime >= this.duration` and ended
+    // playback while Soniox was still talking.
+    const lastWord = this.words[this.words.length - 1];
+    const wordsDuration = lastWord ? lastWord.end : 0;
+    const realDuration =
+      Number.isFinite(this.audio.duration) && this.audio.duration > 0 ? this.audio.duration : 0;
+    this.duration = realDuration || wordsDuration || this.duration;
+
+    // The audio element is the clock, full stop. `currentTime` is media time
+    // and the word timings are media time too, so nothing here scales by
+    // `_rate`: at 2x the element already advances `currentTime` twice as fast
+    // per wall-clock second, which is exactly what the timeline expects.
+    const isAudioAdvancing =
+      !this.audio.paused &&
+      !this.audio.ended &&
+      !this.audio.seeking &&
+      audioTime !== this.lastAudioCurrentTime;
+
+    let curTime: number;
+    if (this.audio.seeking) {
+      // Mid-seek `currentTime` can still report the pre-seek position; hold.
+      curTime = this._currentTime;
+    } else if (isAudioAdvancing) {
+      curTime = audioTime;
+      this.lastAudioCurrentTime = audioTime;
+    } else {
+      // Stalled. Above 1x this is routine rather than exceptional, because
+      // playback drains the Soniox stream faster than it arrives. Coast a
+      // fraction of a second so a dropped frame does not freeze the words,
+      // and no further: the old code ran the timeline forward at the full
+      // selected rate while the voice stood still, and its `< 2.0s` drift
+      // gate then refused to ever re-lock onto the audio -- which is why the
+      // text raced permanently ahead of Soniox the moment the speed went up.
+      curTime = Math.min(
+        audioTime + SpeechEngine.STALL_COAST_SECONDS,
+        this._currentTime + dt * this._rate
+      );
+      curTime = Math.max(curTime, audioTime);
+
+      // The element pauses itself on a buffer underrun. Resume it once it has
+      // frames again, rather than seeking it to match our clock the way the
+      // old recovery path did -- that dragged the real audio around to fit an
+      // estimated timeline.
+      if (this.isPlaying && this.audio.paused && !this.audio.ended && this.audio.readyState >= 3) {
+        this.audio.play().catch(() => {});
+      }
+    }
+
+    if (this.duration > 0) {
+      curTime = Math.min(curTime, this.duration);
+    }
+
+    // Only the audio decides when playback is over. While a chunked stream is
+    // still arriving there is no real duration, and the estimate is not
+    // evidence of the end -- the highlight simply holds on the last word.
+    if (this.audio.ended || (realDuration > 0 && curTime >= realDuration - 0.05)) {
+      this.handleEnded();
+      return;
+    }
+
+    const progress = Math.min(100, (curTime / (this.duration || 1)) * 100);
+
+    let activeIdx = this.currentWordIdx;
+    if (activeIdx < this.words.length && curTime >= (this.words[activeIdx]?.start ?? 0)) {
+      while (activeIdx + 1 < this.words.length && curTime >= this.words[activeIdx + 1]!.start) {
+        activeIdx++;
+      }
+    } else if (this.words.length > 0) {
+      let low = 0;
+      let high = this.words.length - 1;
+      activeIdx = 0;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (this.words[mid]!.start <= curTime) {
+          activeIdx = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
       }
     }
     this.currentWordIdx = activeIdx;
@@ -397,11 +678,21 @@ export class SpeechEngine {
     }
   }
 
+  private lastLoopTimestamp: number = 0;
+
   private startSyncLoop() {
     this.stopSyncLoop();
-    const loop = () => {
-      if (this.audio && !this.audio.paused) {
-        this.syncFromAudioTick();
+    this.lastLoopTimestamp = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    const loop = (now: number) => {
+      if (this.isPlaying) {
+        const currentTimestamp = now || (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        const dt = Math.max(0, Math.min(0.1, (currentTimestamp - this.lastLoopTimestamp) / 1000));
+        this.lastLoopTimestamp = currentTimestamp;
+
+        if (this.mode === 'audio') {
+          this.syncFromAudioTick(dt);
+        }
       }
       this.animFrameId = requestAnimationFrame(loop);
     };
@@ -416,6 +707,12 @@ export class SpeechEngine {
   }
 
   private handleEnded() {
+    // Stop the element too. It used to keep playing whenever the estimated
+    // timeline ran out before the real audio did, leaving Soniox talking over
+    // a UI that had already reported the article finished.
+    if (this.mode === 'audio' && this.audio && !this.audio.paused) {
+      this.audio.pause();
+    }
     this.isPlaying = false;
     this._progress = 100;
     this._currentTime = this.duration;
