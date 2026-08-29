@@ -394,6 +394,83 @@ test('streaming without a supported source exposes degradation and loads the com
   }
 });
 
+// `audio_end` may arrive before MediaSource emits `sourceopen`. If buffer
+// creation then fails, cleanup revokes the source URL; the already-buffered
+// complete audio must replace it with one Blob URL, not remain unplayable.
+test('delayed source setup failure after audio end installs the completed Blob exactly once', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const created: Array<{ kind: string; value: any }> = [];
+  const revoked: string[] = [];
+
+  class DelayedFailingMediaSource {
+    static instances: DelayedFailingMediaSource[] = [];
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    private listeners = new Set<() => void>();
+
+    constructor() {
+      DelayedFailingMediaSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.listeners.add(listener);
+    }
+
+    removeEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.listeners.delete(listener);
+    }
+
+    addSourceBuffer() {
+      throw new Error('MP3 SourceBuffer creation failed');
+    }
+
+    endOfStream() {
+      this.readyState = 'ended';
+    }
+
+    open() {
+      this.readyState = 'open';
+      for (const listener of [...this.listeners]) listener();
+    }
+  }
+
+  (window as any).MediaSource = DelayedFailingMediaSource;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = (source: any) => {
+    const kind = source instanceof Blob ? 'blob' : 'media-source';
+    created.push({ kind, value: source });
+    return `blob:${kind}-${created.length}`;
+  };
+  URL.revokeObjectURL = (url: string) => revoked.push(url);
+
+  try {
+    const engine = new SpeechEngine();
+    engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([4, 5, 6]));
+    engine.finishStreamingSession();
+
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source']);
+
+    DelayedFailingMediaSource.instances[0]!.open();
+    DelayedFailingMediaSource.instances[0]!.open();
+
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
+    expect(revoked).toEqual(['blob:media-source-1']);
+    expect((engine as any).audio.src).toContain('blob:blob-2');
+    expect([
+      ...new Uint8Array(await (created[1]!.value as Blob).arrayBuffer()),
+    ]).toEqual([4, 5, 6]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  }
+});
+
 // Exact Soniox media-time coordinates must survive a later duration event;
 // calibrating them would globally stretch the very measurements we requested.
 test('authoritative streaming timings are never calibrated to audio duration', () => {

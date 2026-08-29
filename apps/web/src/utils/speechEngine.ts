@@ -36,6 +36,7 @@ export class SpeechEngine {
   private sourceOpenHandler: (() => void) | null = null;
   private sourceUpdateEndHandler: (() => void) | null = null;
   private streamFinishRequested: boolean = false;
+  private completedBlobPlaybackInstalled: boolean = false;
   private streamGeneration: number = 0;
   public isStreaming: boolean = false;
   public progressivePlaybackAvailable: boolean = false;
@@ -285,6 +286,9 @@ export class SpeechEngine {
             } catch (err) {
               this.progressivePlaybackAvailable = false;
               this.cleanupStreamingSource();
+              if (this.streamFinishRequested) {
+                this.installCompletedBlobPlayback();
+              }
               this.notify();
               console.warn('Failed to addSourceBuffer:', err);
             }
@@ -351,15 +355,26 @@ export class SpeechEngine {
     this.flushPendingChunks();
 
     const blob = new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
-    if (!this.mediaSource && this.audio && this.allAudioChunks.length > 0) {
-      this.revokeOwnedObjectUrl();
-      this.ownedObjectUrl = URL.createObjectURL(blob);
-      this.audio.src = this.ownedObjectUrl;
-      this.audio.playbackRate = this._rate;
-      this.audio.defaultPlaybackRate = this._rate;
-    }
+    this.installCompletedBlobPlayback(blob);
     this.notify();
     return blob;
+  }
+
+  private installCompletedBlobPlayback(blob?: Blob) {
+    if (
+      this.completedBlobPlaybackInstalled ||
+      this.mediaSource ||
+      !this.audio ||
+      this.allAudioChunks.length === 0
+    ) return;
+
+    const completedBlob = blob ?? new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
+    this.revokeOwnedObjectUrl();
+    this.ownedObjectUrl = URL.createObjectURL(completedBlob);
+    this.audio.src = this.ownedObjectUrl;
+    this.audio.playbackRate = this._rate;
+    this.audio.defaultPlaybackRate = this._rate;
+    this.completedBlobPlaybackInstalled = true;
   }
 
   public isSpeechSynthesisSupported(): boolean {
@@ -476,6 +491,7 @@ export class SpeechEngine {
     this.progressivePlaybackAvailable = false;
     this.authoritativeTimings = false;
     this.streamFinishRequested = false;
+    this.completedBlobPlaybackInstalled = false;
     this.calibrated = false;
 
     if (this.audio) {

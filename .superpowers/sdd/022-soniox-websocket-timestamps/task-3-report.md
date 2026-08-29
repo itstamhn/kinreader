@@ -139,3 +139,50 @@ The web suite still prints pre-existing React `act(...)` notices; the new asynch
 
 - No live Soniox session or physical iPhone/ManagedMediaSource playback was run in this task; transport and lifecycle coverage use protocol-faithful fakes and source doubles. Manual device verification remains advisable for actual MP3 append compatibility and time-to-first-audio.
 - Step 6 persistence/cache provenance remains intentionally out of scope; this task implements the requested first-play WebSocket path and fallback chain only.
+
+## Review fix round 1 — delayed MediaSource failure after audio end
+
+### Root cause
+
+`finishStreamingSession()` built the completed Blob but installed its URL only when
+`mediaSource` was already absent. If `audio_end` arrived while the source was still
+waiting for `sourceopen`, the method returned with only the MediaSource URL attached.
+A later `addSourceBuffer()` failure correctly cleaned up and revoked that URL, but the
+completed Blob was no longer available to that transition, leaving `audio.src` pointed
+at a revoked resource.
+
+### RED
+
+Added a delayed-source fake that accepts the MediaSource object URL, receives all audio
+and `audio_end`, then emits `sourceopen` and throws from `addSourceBuffer()`. It emits the
+event twice to verify Blob playback is installed exactly once.
+
+```sh
+cd apps/web && bun test src/utils/speechEngine.test.ts --test-name-pattern 'delayed source setup'
+```
+
+Result: **0 pass, 1 fail**. URL creation contained only `['media-source']`; the expected
+completed `blob` URL was absent after cleanup.
+
+### GREEN
+
+Added an idempotent completed-Blob installation helper. Normal no-source completion still
+uses it immediately. Delayed source-buffer failure uses the same helper after cleanup only
+when completion was already requested, reconstructing the retained bytes and attaching one
+playable Blob URL. The per-session installation guard resets in `stop()`, while existing
+source listener cleanup and stream generation checks remain unchanged.
+
+```sh
+cd apps/web && bun test src/utils/speechEngine.test.ts --test-name-pattern 'delayed source setup'
+```
+
+Result: **1 pass, 0 fail, 5 assertions**. The MediaSource URL was revoked, one Blob URL
+was installed, its bytes were `[4, 5, 6]`, and a repeated source event created no second
+Blob URL.
+
+```sh
+cd apps/web && bun test src/utils/speechEngine.test.ts src/App.test.tsx src/utils/sonioxStream.test.ts src/utils/wordTimings.test.ts
+```
+
+Result: **42 pass, 0 fail, 158 assertions**. Existing React `act(...)` notices and the
+intentional source-buffer warning remain non-failing diagnostics.
