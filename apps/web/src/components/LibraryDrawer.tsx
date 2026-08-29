@@ -147,19 +147,13 @@ export function LibraryDrawer({
   };
 
   return (
-    <div
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-0 sm:p-6 select-none"
-    >
-      <div className="w-full sm:max-w-5xl h-full sm:h-[92vh] sm:max-h-[780px] bg-[#0B0C10] sm:border sm:border-white/10 sm:rounded-3xl shadow-2xl flex flex-col sm:flex-row overflow-hidden relative pt-safe pb-safe">
-        {/* 1. Left Sidebar Navigation (Desktop only - Design 1b) */}
-        <div className="w-52 shrink-0 border-r border-white/5 p-5 hidden md:flex flex-col gap-2">
-          {/* Logo */}
-          <div className="font-serif font-medium text-2xl tracking-tight text-[#F4F0E6] px-2 pb-4">
-            Kinreader<span className="text-[#F2A33C]">.</span>
-          </div>
+    <div className="fixed inset-0 z-50 w-full h-[100dvh] max-h-[100dvh] bg-[#0B0C10] text-[#ECEAE4] flex flex-col md:flex-row overflow-hidden select-none animate-fade-in pt-safe pb-safe">
+      {/* 1. Left Sidebar Navigation (Desktop only - Design 1b) */}
+      <div className="w-[230px] shrink-0 border-r border-white/5 p-6 hidden md:flex flex-col gap-2 bg-[#0B0C10]">
+        {/* Logo */}
+        <div className="font-serif font-medium text-2xl tracking-tight text-[#F4F0E6] px-2 pb-4">
+          Kinreader<span className="text-[#F2A33C]">.</span>
+        </div>
 
           <button
             onClick={() => setCurrentTab('queue')}
@@ -594,6 +588,5 @@ export function LibraryDrawer({
           )}
         </div>
       </div>
-    </div>
   );
 }
