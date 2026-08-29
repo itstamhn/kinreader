@@ -9,6 +9,12 @@ import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer
 import { AuthScreen, type UserProfile } from './components/AuthScreen';
 import { ClipboardDetectSheet } from './components/ClipboardDetectSheet';
 import { SpeechEngine } from './utils/speechEngine';
+import {
+  openSonioxStream,
+  SonioxTemporaryKeyExpiredError,
+  type OpenSonioxStreamOptions,
+} from './utils/sonioxStream';
+import { createWordTimingAccumulator } from './utils/wordTimings';
 import { SAMPLE_ARTICLE, SAMPLE_TIMINGS, SAMPLE_DURATION } from './data/sampleData';
 import {
   getSavedArticles,
@@ -44,10 +50,18 @@ type PlaybackStatus =
   | 'degraded' // synthesis failed; on-device speech instead
   | 'error'; // nothing playable
 
-export function App() {
+export interface AppProps {
+  streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
+  requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
+}
+
+export function App({
+  streamingTransport = openSonioxStream,
+  requestTemporaryKey,
+}: AppProps = {}) {
   const crpc = useCRPC();
   const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
-  const synthesizeTtsMutation = useMutation(crpc.routers.tts.synthesize.mutationOptions());
+  const temporaryKeyMutation = useMutation(crpc.routers.tts.temporaryKey.mutationOptions());
   const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
   const addToPlaylistMutation = useMutation(crpc.routers.users.addToPlaylist.mutationOptions());
   const deleteUserArticleMutation = useMutation(crpc.routers.users.deleteUserArticle.mutationOptions());
@@ -107,6 +121,7 @@ export function App() {
   // Monotonically increasing load identifier to discard stale responses from
   // in-flight synthesis requests if the user switches articles rapidly (plan 019).
   const loadIdRef = useRef(0);
+  const activeStreamRef = useRef<{ cancel(): void } | null>(null);
 
   // The engine is constructed once, lazily, on the first render rather than
   // inside an effect: `useSyncExternalStore` needs `subscribe`/`getSnapshot`
@@ -163,10 +178,10 @@ export function App() {
   const loadArticleContent = async (art: ArticleData, eng: SpeechEngine, currSettings: ReaderSettings) => {
     const currentLoadId = ++loadIdRef.current;
 
+    activeStreamRef.current?.cancel();
+    activeStreamRef.current = null;
     eng.stop();
     eng.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
-
-    const articleKey = art.sourceUrl || art.title;
 
     if (art.title === SAMPLE_ARTICLE.title) {
       try {
@@ -212,18 +227,130 @@ export function App() {
 
     const totalDuration = Number(curTime.toFixed(3));
     eng.setWordTimings(initialWordTimings, totalDuration);
+    setPlaybackStatus('synthesizing');
 
-    try {
-      // 2. Direct Soniox HTTP Audio Streaming (0ms waiting, 100% Soniox neural voice)
-      const streamUrl = `/api/tts/stream?text=${encodeURIComponent(art.content)}&voice=${encodeURIComponent(currSettings.sonioxVoice || 'Adrian')}&speed=1.0`;
-      eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration);
-      setPlaybackStatus('ready');
-    } catch {
-      if (loadIdRef.current === currentLoadId) {
-        const hasDeviceSpeech = eng.loadBrowserText(art.content, initialWordTimings);
-        setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
+    const isCurrentLoad = () => loadIdRef.current === currentLoadId;
+    const cancelCurrentStream = () => {
+      activeStreamRef.current?.cancel();
+      activeStreamRef.current = null;
+    };
+    const useBrowserFallback = () => {
+      if (!isCurrentLoad()) return;
+      const hasDeviceSpeech = eng.loadBrowserText(art.content, initialWordTimings);
+      setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
+    };
+    const useRestFallback = () => {
+      if (!isCurrentLoad()) return;
+      cancelCurrentStream();
+      eng.stop();
+      try {
+        // REST has no timestamp envelope, so this deliberately keeps the
+        // estimated/calibrated timeline. Speed remains client-side only.
+        const streamUrl = `/api/tts/stream?text=${encodeURIComponent(art.content)}&voice=${encodeURIComponent(currSettings.sonioxVoice || 'Adrian')}&speed=1.0`;
+        eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration, useBrowserFallback);
+        setPlaybackStatus('degraded');
+      } catch {
+        useBrowserFallback();
       }
-    }
+    };
+    const mergeAuthoritativePrefix = (exactWords: WordTiming[]): WordTiming[] => {
+      if (exactWords.length >= initialWordTimings.length) {
+        return exactWords.slice(0, initialWordTimings.length);
+      }
+      const lastExactEnd = exactWords.at(-1)?.end ?? 0;
+      const estimatedSuffix = initialWordTimings.slice(exactWords.length);
+      const estimatedJoin = estimatedSuffix[0]?.start ?? lastExactEnd;
+      const shift = lastExactEnd - estimatedJoin;
+      return [
+        ...exactWords,
+        ...estimatedSuffix.map((word) => ({
+          ...word,
+          start: Number((word.start + shift).toFixed(3)),
+          end: Number((word.end + shift).toFixed(3)),
+        })),
+      ];
+    };
+
+    const runWebSocketAttempt = async (retryCount: number): Promise<void> => {
+      try {
+        const clientId = getOrCreateClientId();
+        const temporaryKey = await (requestTemporaryKey
+          ? requestTemporaryKey(clientId)
+          : temporaryKeyMutation.mutateAsync({ clientId }));
+        if (!isCurrentLoad()) return;
+
+        const accumulator = createWordTimingAccumulator(art.content.trim());
+        const exactWords: WordTiming[] = [];
+        let audioFinished = false;
+        let attemptActive = true;
+        const progressivePlayback = eng.startStreamingSession(initialWordTimings, totalDuration);
+        setPlaybackStatus(progressivePlayback ? 'synthesizing' : 'degraded');
+
+        const finalizeTimings = () => {
+          if (!attemptActive || !isCurrentLoad()) return;
+          exactWords.push(...accumulator.flush());
+          if (exactWords.length !== initialWordTimings.length) {
+            attemptActive = false;
+            useRestFallback();
+            return;
+          }
+          const exactDuration = exactWords.at(-1)?.end ?? 0;
+          eng.appendWordTimings(exactWords, exactDuration, { authoritative: true });
+          attemptActive = false;
+          activeStreamRef.current = null;
+          setPlaybackStatus(eng.progressivePlaybackAvailable ? 'ready' : 'degraded');
+        };
+
+        const stream = streamingTransport({
+          apiKey: temporaryKey.apiKey,
+          text: art.content.trim(),
+          voice: currSettings.sonioxVoice || 'Adrian',
+          handlers: {
+            onAudio: (chunk) => {
+              if (!attemptActive || !isCurrentLoad()) return;
+              eng.appendAudioChunk(chunk);
+            },
+            onTimestamps: (batch) => {
+              if (!attemptActive || !isCurrentLoad()) return;
+              exactWords.push(...accumulator.append(batch));
+              if (exactWords.length === 0 || exactWords.length > initialWordTimings.length) return;
+              const merged = mergeAuthoritativePrefix(exactWords);
+              eng.appendWordTimings(merged, merged.at(-1)?.end ?? totalDuration, { authoritative: true });
+            },
+            onDone: () => {
+              if (!attemptActive || !isCurrentLoad()) return;
+              audioFinished = true;
+              eng.finishStreamingSession();
+            },
+            onTerminated: () => {
+              if (!attemptActive || !isCurrentLoad()) return;
+              if (!audioFinished) eng.finishStreamingSession();
+              finalizeTimings();
+            },
+            onError: (error) => {
+              if (!attemptActive || !isCurrentLoad()) return;
+              attemptActive = false;
+              cancelCurrentStream();
+              if (error instanceof SonioxTemporaryKeyExpiredError && retryCount === 0) {
+                eng.stop();
+                void runWebSocketAttempt(1);
+                return;
+              }
+              useRestFallback();
+            },
+          },
+        });
+        if (attemptActive && isCurrentLoad() && eng.isStreaming) {
+          activeStreamRef.current = stream;
+        } else {
+          stream.cancel();
+        }
+      } catch {
+        useRestFallback();
+      }
+    };
+
+    void runWebSocketAttempt(0);
   };
 
   const effectiveSavedArticles: SavedArticleItem[] = useMemo(() => {
@@ -379,6 +506,9 @@ export function App() {
     }
 
     return () => {
+      loadIdRef.current += 1;
+      activeStreamRef.current?.cancel();
+      activeStreamRef.current = null;
       engine.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount

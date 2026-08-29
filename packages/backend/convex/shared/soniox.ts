@@ -1,57 +1,16 @@
 const MAX_SONIOX_CHUNK_CHARS = 450;
 
 /**
- * Break text into Soniox real-time messages without applying the REST
- * fallback's historic 900-character cap. Sentence boundaries keep the
- * generated speech natural; overlong sentences fall back to word boundaries.
+ * Break text into bounded Soniox real-time messages without applying the REST
+ * fallback's historic 900-character cap. Chunks are contiguous slices: Soniox
+ * reconstructs streamed text by direct concatenation, so separators must stay
+ * in one of the adjacent messages instead of being trimmed and re-inserted.
  */
 export function splitTextIntoSonioxChunks(fullText: string, maxChunkSize = MAX_SONIOX_CHUNK_CHARS): string[] {
   const textToSynthesize = fullText.trim();
-
-  if (textToSynthesize.length <= maxChunkSize) {
-    return [textToSynthesize];
-  }
-
   const chunks: string[] = [];
-  const sentences = textToSynthesize.match(/[^.!?\n]+[.!?\n]+(?:\s+|$)|[^.!?\n]+$/g) || [textToSynthesize];
-  let curChunk = '';
-
-  for (const rawSent of sentences) {
-    const sent = rawSent.trim();
-    if (!sent) continue;
-
-    if ((curChunk + ' ' + sent).trim().length <= maxChunkSize) {
-      curChunk = curChunk ? curChunk + ' ' + sent : sent;
-    } else {
-      if (curChunk) {
-        chunks.push(curChunk.trim());
-        curChunk = '';
-      }
-      if (sent.length <= maxChunkSize) {
-        curChunk = sent;
-      } else {
-        const words = sent.split(/\s+/);
-        for (const word of words) {
-          if (word.length > maxChunkSize) {
-            if (curChunk) {
-              chunks.push(curChunk.trim());
-              curChunk = '';
-            }
-            for (let start = 0; start < word.length; start += maxChunkSize) {
-              chunks.push(word.slice(start, start + maxChunkSize));
-            }
-            continue;
-          }
-          if ((curChunk + ' ' + word).trim().length <= maxChunkSize) {
-            curChunk = curChunk ? curChunk + ' ' + word : word;
-          } else {
-            if (curChunk) chunks.push(curChunk.trim());
-            curChunk = word;
-          }
-        }
-      }
-    }
+  for (let start = 0; start < textToSynthesize.length; start += maxChunkSize) {
+    chunks.push(textToSynthesize.slice(start, start + maxChunkSize));
   }
-  if (curChunk) chunks.push(curChunk.trim());
-  return chunks.filter(Boolean);
+  return chunks;
 }

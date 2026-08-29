@@ -15,10 +15,13 @@ export interface PlaybackSnapshot {
   rate: number;
   mode: 'browser' | 'audio';
   isStreaming: boolean;
+  progressivePlaybackAvailable: boolean;
+  authoritativeTimings: boolean;
 }
 
 export class SpeechEngine {
   private audio: HTMLAudioElement | null = null;
+  private audioErrorHandler: (() => void) | null = null;
   private synth: SpeechSynthesis | null = null;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private fullText: string = '';
@@ -29,7 +32,14 @@ export class SpeechEngine {
   private sourceBuffer: SourceBuffer | null = null;
   private pendingAudioChunks: Uint8Array[] = [];
   private allAudioChunks: Uint8Array[] = [];
+  private ownedObjectUrl: string | null = null;
+  private sourceOpenHandler: (() => void) | null = null;
+  private sourceUpdateEndHandler: (() => void) | null = null;
+  private streamFinishRequested: boolean = false;
+  private streamGeneration: number = 0;
   public isStreaming: boolean = false;
+  public progressivePlaybackAvailable: boolean = false;
+  public authoritativeTimings: boolean = false;
 
   // Playback position/progress, updated at every point the old code used to
   // push them out via `onProgressChange`. Cached rather than derived from
@@ -55,6 +65,9 @@ export class SpeechEngine {
       this.audio.preload = 'auto';
       this.audio.onerror = (e) => {
         console.error('[SpeechEngine] Audio element error:', this.audio?.error);
+        const handler = this.audioErrorHandler;
+        this.audioErrorHandler = null;
+        handler?.();
       };
       this.audio.onended = () => this.handleEnded();
       // The real audio duration only becomes knowable once enough of the
@@ -170,6 +183,8 @@ export class SpeechEngine {
       rate: this._rate,
       mode: this.mode,
       isStreaming: this.isStreaming,
+      progressivePlaybackAvailable: this.progressivePlaybackAvailable,
+      authoritativeTimings: this.authoritativeTimings,
     };
   }
 
@@ -201,8 +216,9 @@ export class SpeechEngine {
   }
 
   // Load Audio from direct URL or local asset
-  public loadAudioUrl(url: string, words: WordTiming[], duration: number) {
+  public loadAudioUrl(url: string, words: WordTiming[], duration: number, onError?: () => void) {
     this.stop();
+    this.audioErrorHandler = onError ?? null;
     this.mode = 'audio';
     this.words = words;
     this.duration = duration;
@@ -218,45 +234,75 @@ export class SpeechEngine {
 
   // --- Real-Time Audio Streaming (Soniox WebSocket) -----------------------
 
-  public startStreamingSession(initialWords: WordTiming[], estimatedDuration: number) {
+  public startStreamingSession(initialWords: WordTiming[], estimatedDuration: number): boolean {
     this.stop();
+    const generation = ++this.streamGeneration;
     this.mode = 'audio';
     this.isStreaming = true;
+    this.progressivePlaybackAvailable = false;
+    this.authoritativeTimings = false;
+    this.streamFinishRequested = false;
     this.words = initialWords;
     this.duration = estimatedDuration;
     this.pendingAudioChunks = [];
     this.allAudioChunks = [];
 
-    if (typeof window !== 'undefined' && 'MediaSource' in window && MediaSource.isTypeSupported('audio/mpeg')) {
-      try {
-        this.mediaSource = new MediaSource();
-        if (this.audio) {
-          this.audio.src = URL.createObjectURL(this.mediaSource);
-          this.audio.playbackRate = this._rate;
-          this.audio.defaultPlaybackRate = this._rate;
-        }
+    if (typeof window !== 'undefined') {
+      const standardSource = (window as any).MediaSource;
+      const managedSource = (window as any).ManagedMediaSource;
+      const SourceConstructor =
+        typeof standardSource === 'function' && standardSource.isTypeSupported?.('audio/mpeg')
+          ? standardSource
+          : typeof managedSource === 'function' && managedSource.isTypeSupported?.('audio/mpeg')
+            ? managedSource
+            : null;
 
-        this.mediaSource.addEventListener('sourceopen', () => {
-          if (!this.mediaSource || this.mediaSource.readyState !== 'open') return;
-          try {
-            this.sourceBuffer = this.mediaSource.addSourceBuffer('audio/mpeg');
-            this.sourceBuffer.addEventListener('updateend', () => {
-              this.flushPendingChunks();
-            });
-            this.flushPendingChunks();
-          } catch (err) {
-            console.warn('Failed to addSourceBuffer:', err);
+      if (SourceConstructor) {
+        try {
+          const mediaSource = new SourceConstructor() as MediaSource;
+          this.mediaSource = mediaSource;
+          this.progressivePlaybackAvailable = true;
+          if (this.audio) {
+            this.ownedObjectUrl = URL.createObjectURL(mediaSource);
+            this.audio.src = this.ownedObjectUrl;
+            this.audio.playbackRate = this._rate;
+            this.audio.defaultPlaybackRate = this._rate;
           }
-        });
-      } catch (err) {
-        console.warn('MediaSource creation error:', err);
+
+          this.sourceOpenHandler = () => {
+            if (
+              generation !== this.streamGeneration ||
+              this.mediaSource !== mediaSource ||
+              mediaSource.readyState !== 'open'
+            ) return;
+            try {
+              this.sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+              this.sourceUpdateEndHandler = () => {
+                this.flushPendingChunks();
+              };
+              this.sourceBuffer.addEventListener('updateend', this.sourceUpdateEndHandler);
+              this.flushPendingChunks();
+            } catch (err) {
+              this.progressivePlaybackAvailable = false;
+              this.cleanupStreamingSource();
+              this.notify();
+              console.warn('Failed to addSourceBuffer:', err);
+            }
+          };
+          mediaSource.addEventListener('sourceopen', this.sourceOpenHandler);
+        } catch (err) {
+          this.progressivePlaybackAvailable = false;
+          this.cleanupStreamingSource();
+          console.warn('MediaSource creation error:', err);
+        }
       }
     }
     this.notify();
+    return this.progressivePlaybackAvailable;
   }
 
   private flushPendingChunks() {
-    if (!this.sourceBuffer || this.sourceBuffer.updating || this.pendingAudioChunks.length === 0) {
+    if (!this.sourceBuffer || this.sourceBuffer.updating) {
       return;
     }
     const chunk = this.pendingAudioChunks.shift();
@@ -264,57 +310,53 @@ export class SpeechEngine {
       try {
         this.sourceBuffer.appendBuffer(chunk as any);
       } catch (err) {
+        this.pendingAudioChunks.unshift(chunk);
         console.warn('Error appending chunk to SourceBuffer:', err);
       }
+      return;
+    }
+
+    if (this.streamFinishRequested && this.mediaSource?.readyState === 'open') {
+      try {
+        this.mediaSource.endOfStream();
+      } catch {}
     }
   }
 
   public appendAudioChunk(chunk: Uint8Array) {
+    if (!this.isStreaming) return;
     this.allAudioChunks.push(chunk);
-    if (this.sourceBuffer && !this.sourceBuffer.updating) {
-      try {
-        this.sourceBuffer.appendBuffer(chunk as any);
-      } catch {
-        this.pendingAudioChunks.push(chunk);
-      }
-    } else {
-      this.pendingAudioChunks.push(chunk);
-    }
+    this.pendingAudioChunks.push(chunk);
+    this.flushPendingChunks();
   }
 
-  public appendWordTimings(newWords: WordTiming[], newDuration: number) {
+  public appendWordTimings(
+    newWords: WordTiming[],
+    newDuration: number,
+    options: { authoritative?: boolean } = {}
+  ) {
     this.words = newWords;
+    if (options.authoritative) {
+      this.authoritativeTimings = true;
+    }
     if (newDuration > 0) {
-      this.duration = Math.max(this.duration, newDuration);
+      this.duration = options.authoritative ? newDuration : Math.max(this.duration, newDuration);
     }
     this.notify();
   }
 
   public finishStreamingSession(): Blob {
     this.isStreaming = false;
-    if (this.mediaSource && this.mediaSource.readyState === 'open') {
-      try {
-        if (this.sourceBuffer && !this.sourceBuffer.updating) {
-          this.mediaSource.endOfStream();
-        } else if (this.sourceBuffer) {
-          this.sourceBuffer.addEventListener(
-            'updateend',
-            () => {
-              try {
-                if (this.mediaSource?.readyState === 'open') {
-                  this.mediaSource.endOfStream();
-                }
-              } catch {}
-            },
-            { once: true }
-          );
-        }
-      } catch {}
-    }
+    this.streamFinishRequested = true;
+    this.flushPendingChunks();
 
     const blob = new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
     if (!this.mediaSource && this.audio && this.allAudioChunks.length > 0) {
-      this.audio.src = URL.createObjectURL(blob);
+      this.revokeOwnedObjectUrl();
+      this.ownedObjectUrl = URL.createObjectURL(blob);
+      this.audio.src = this.ownedObjectUrl;
+      this.audio.playbackRate = this._rate;
+      this.audio.defaultPlaybackRate = this._rate;
     }
     this.notify();
     return blob;
@@ -425,18 +467,15 @@ export class SpeechEngine {
     if (this.mode === 'browser' && this.synth) {
       this.synth.cancel();
     }
-    if (this.mediaSource) {
-      try {
-        if (this.mediaSource.readyState === 'open') {
-          this.mediaSource.endOfStream();
-        }
-      } catch {}
-      this.mediaSource = null;
-      this.sourceBuffer = null;
-    }
+    this.streamGeneration += 1;
+    this.cleanupStreamingSource();
+    this.audioErrorHandler = null;
     this.pendingAudioChunks = [];
     this.allAudioChunks = [];
     this.isStreaming = false;
+    this.progressivePlaybackAvailable = false;
+    this.authoritativeTimings = false;
+    this.streamFinishRequested = false;
     this.calibrated = false;
 
     if (this.audio) {
@@ -449,6 +488,42 @@ export class SpeechEngine {
     this._currentTime = 0;
     this._progress = 0;
     this.notify();
+  }
+
+  private cleanupStreamingSource() {
+    if (this.sourceBuffer && this.sourceUpdateEndHandler) {
+      try {
+        this.sourceBuffer.removeEventListener('updateend', this.sourceUpdateEndHandler);
+      } catch {}
+    }
+    if (this.sourceBuffer && this.mediaSource?.readyState === 'open') {
+      try {
+        this.sourceBuffer.abort();
+      } catch {}
+    }
+    if (this.mediaSource && this.sourceOpenHandler) {
+      try {
+        this.mediaSource.removeEventListener('sourceopen', this.sourceOpenHandler);
+      } catch {}
+    }
+    if (this.mediaSource?.readyState === 'open') {
+      try {
+        this.mediaSource.endOfStream();
+      } catch {}
+    }
+    this.mediaSource = null;
+    this.sourceBuffer = null;
+    this.sourceOpenHandler = null;
+    this.sourceUpdateEndHandler = null;
+    this.revokeOwnedObjectUrl();
+  }
+
+  private revokeOwnedObjectUrl() {
+    if (!this.ownedObjectUrl) return;
+    try {
+      URL.revokeObjectURL(this.ownedObjectUrl);
+    } catch {}
+    this.ownedObjectUrl = null;
   }
 
   public seekToWordIndex(wordIndex: number) {
@@ -532,7 +607,7 @@ export class SpeechEngine {
   // it. Without this the highlight drifts further from the voice with every
   // sentence, at any speed.
   private calibrateToAudioDuration() {
-    if (this.calibrated || !this.audio || this.mode !== 'audio') return;
+    if (this.calibrated || this.authoritativeTimings || !this.audio || this.mode !== 'audio') return;
 
     const real = this.audio.duration;
     if (!Number.isFinite(real) || real <= 0) return;

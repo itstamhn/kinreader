@@ -285,3 +285,176 @@ test('rescaling waits for a duration the buffer actually covers', () => {
 
   expect(engine.words[9]!.end).toBe(10); // untouched
 });
+
+// Removing the standard-source preference would make browsers with both MSE
+// variants select ManagedMediaSource, whose lifecycle is controlled by iOS.
+// This test also catches losing the explicit progressive-playback signal.
+test('streaming prefers MediaSource and exposes progressive playback availability', () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const created: string[] = [];
+
+  class FakeMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  class FakeManagedMediaSource extends FakeMediaSource {}
+
+  (window as any).MediaSource = FakeMediaSource;
+  (window as any).ManagedMediaSource = FakeManagedMediaSource;
+  URL.createObjectURL = (source: any) => {
+    created.push(source.constructor.name);
+    return `blob:${source.constructor.name}`;
+  };
+
+  try {
+    const engine = new SpeechEngine();
+    const progressive = engine.startStreamingSession(evenWords(2), 2);
+
+    expect(progressive).toBe(true);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
+    expect(created).toEqual(['FakeMediaSource']);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+// iOS exposes ManagedMediaSource without standard MediaSource. Removing this
+// guarded fallback turns a progressively playable stream into a completed-Blob
+// wait even though the browser supports an MSE-compatible source.
+test('streaming uses ManagedMediaSource when it is the only supported source', () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const created: string[] = [];
+
+  class FakeManagedMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = FakeManagedMediaSource;
+  URL.createObjectURL = (source: any) => {
+    created.push(source.constructor.name);
+    return 'blob:managed-source';
+  };
+
+  try {
+    const engine = new SpeechEngine();
+
+    expect(engine.startStreamingSession(evenWords(1), 1)).toBe(true);
+    expect(created).toEqual(['FakeManagedMediaSource']);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+// Without MSE, finish must still make the complete bytes playable. A missing
+// Blob URL here is the iPhone Safari silent-playback failure from the plan.
+test('streaming without a supported source exposes degradation and loads the completed Blob', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  let completedBlob: Blob | undefined;
+
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = (source: any) => {
+    if (source instanceof Blob) completedBlob = source;
+    return 'blob:completed-audio';
+  };
+
+  try {
+    const engine = new SpeechEngine();
+    const progressive = engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([1, 2]));
+    engine.appendAudioChunk(new Uint8Array([3]));
+
+    const blob = engine.finishStreamingSession();
+
+    expect(progressive).toBe(false);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(completedBlob).toBe(blob);
+    expect((engine as any).audio.src).toContain('blob:completed-audio');
+    expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([1, 2, 3]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+// Exact Soniox media-time coordinates must survive a later duration event;
+// calibrating them would globally stretch the very measurements we requested.
+test('authoritative streaming timings are never calibrated to audio duration', () => {
+  const engine = new SpeechEngine();
+  const exact = [
+    { text: 'one', start: 0.25, end: 0.7 },
+    { text: 'two', start: 0.9, end: 1.4 },
+  ];
+  const audio = fakeAudio({
+    duration: 4,
+    networkState: 1,
+    buffered: { length: 1, end: () => 4 },
+  });
+  attach(engine, audio, evenWords(2));
+
+  engine.appendWordTimings(exact, 1.4, { authoritative: true });
+  (engine as any).calibrateToAudioDuration();
+
+  expect(engine.words).toEqual(exact);
+  expect(engine.getSnapshot().authoritativeTimings).toBe(true);
+});
+
+// stop() owns every streaming resource. Missing any one of these leaves a
+// stale source callback or object URL able to outlive its article.
+test('stopping a stream aborts source work, revokes its URL, and ignores later chunks', () => {
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const revoked: string[] = [];
+  URL.revokeObjectURL = (url: string) => revoked.push(url);
+
+  const sourceBuffer = {
+    updating: true,
+    abortCalls: 0,
+    abort() { this.abortCalls += 1; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const mediaSource = {
+    readyState: 'open',
+    endOfStream() {},
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  try {
+    const engine = new SpeechEngine();
+    (engine as any).sourceBuffer = sourceBuffer;
+    (engine as any).mediaSource = mediaSource;
+    (engine as any).ownedObjectUrl = 'blob:streaming-source';
+    engine.isStreaming = true;
+    engine.appendAudioChunk(new Uint8Array([1]));
+
+    engine.stop();
+    engine.appendAudioChunk(new Uint8Array([9]));
+    const blob = engine.finishStreamingSession();
+
+    expect(sourceBuffer.abortCalls).toBe(1);
+    expect(revoked).toEqual(['blob:streaming-source']);
+    expect(blob.size).toBe(0);
+    expect((engine as any).mediaSource).toBeNull();
+    expect((engine as any).sourceBuffer).toBeNull();
+  } finally {
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  }
+});

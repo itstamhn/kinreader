@@ -10,6 +10,8 @@ export interface SonioxStreamHandlers {
   onAudio(chunk: Uint8Array): void;
   onTimestamps(timestamps: SonioxTimestamps): void;
   onDone(): void;
+  /** All trailing timestamp messages have arrived and the session is closed. */
+  onTerminated?(): void;
   onError(error: Error): void;
 }
 
@@ -97,6 +99,13 @@ export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxSt
   let cancelled = false;
   let failed = false;
   let audioEnded = false;
+  let terminated = false;
+
+  const finishTermination = () => {
+    if (terminated) return;
+    terminated = true;
+    handlers.onTerminated?.();
+  };
 
   const fail = (error: Error) => {
     if (cancelled || failed) return;
@@ -190,6 +199,7 @@ export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxSt
         if (typeof payload.terminated !== 'boolean') throw new SonioxProtocolError('Soniox sent malformed terminated');
         if (payload.terminated) {
           if (!audioEnded) throw new SonioxProtocolError('Soniox terminated before audio end');
+          finishTermination();
           socket?.close();
         }
       }
@@ -203,6 +213,8 @@ export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxSt
   socket.onclose = () => {
     if (!cancelled && !failed && !audioEnded) {
       fail(new SonioxProtocolError('Soniox WebSocket closed before audio completed'));
+    } else if (!cancelled && !failed && audioEnded) {
+      finishTermination();
     }
   };
 

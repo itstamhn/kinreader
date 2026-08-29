@@ -60,19 +60,23 @@ function handlers() {
   const timestamps: Array<{ characters: string[]; starts: number[]; ends: number[] }> = [];
   const errors: Error[] = [];
   let done = 0;
+  let terminated = 0;
   return {
-    values: { audio, timestamps, errors, get done() { return done; } },
+    values: { audio, timestamps, errors, get done() { return done; }, get terminated() { return terminated; } },
     handlers: {
       onAudio: (chunk: Uint8Array) => audio.push(chunk),
       onTimestamps: (batch: { characters: string[]; starts: number[]; ends: number[] }) => timestamps.push(batch),
       onDone: () => { done += 1; },
+      onTerminated: () => { terminated += 1; },
       onError: (error: Error) => errors.push(error),
     },
   };
 }
 
 test('sends the required configuration before ordered chunks and marks only the last text message complete', () => {
-  const text = Array.from({ length: 230 }, (_, index) => `word${index}`).join(' ');
+  const text = Array.from({ length: 230 }, (_, index) =>
+    `word${index}${index < 229 ? indexWithWhitespace(index) : ''}`
+  ).join('');
   const received = handlers();
   openSonioxStream({ apiKey: 'temporary-key', text, voice: 'Adrian', handlers: received.handlers });
   const socket = FakeWebSocket.instances[0]!;
@@ -94,12 +98,16 @@ test('sends the required configuration before ordered chunks and marks only the 
   expect(config.speed).toBeUndefined();
   expect(typeof config.stream_id).toBe('string');
   expect(texts.length).toBeGreaterThan(1);
-  expect(texts.map((message) => message.text).join(' ')).toBe(text);
+  expect(texts.map((message) => message.text).join('')).toBe(text.trim());
   expect(texts.slice(0, -1).every((message) => message.text_end === false)).toBe(true);
   expect(texts.filter((message) => message.text_end === true)).toHaveLength(1);
   expect(texts.at(-1)?.text_end).toBe(true);
   expect(texts.every((message) => message.stream_id === config.stream_id)).toBe(true);
 });
+
+function indexWithWhitespace(index: number): string {
+  return index % 3 === 0 ? '\n\n' : index % 2 === 0 ? '   ' : ' ';
+}
 
 test('delivers independent audio and timestamp messages then completes exactly once at audio end', () => {
   const received = handlers();
@@ -133,6 +141,7 @@ test('delivers independent audio and timestamp messages then completes exactly o
     { characters: ['!'], starts: [0.26], ends: [0.3] },
   ]);
   expect(received.values.done).toBe(1);
+  expect(received.values.terminated).toBe(1);
   expect(received.values.errors).toEqual([]);
   expect(socket.closeCount).toBe(1);
 });
@@ -200,5 +209,6 @@ test('cancel closes the socket and suppresses all later events', () => {
   expect(received.values.audio).toEqual([]);
   expect(received.values.timestamps).toEqual([]);
   expect(received.values.done).toBe(0);
+  expect(received.values.terminated).toBe(0);
   expect(received.values.errors).toEqual([]);
 });

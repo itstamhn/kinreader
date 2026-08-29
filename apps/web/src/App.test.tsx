@@ -4,11 +4,26 @@ import { ConvexReactClient } from 'convex/react';
 import { App } from './App';
 import { ConvexAppProvider } from './lib/convex';
 import { SpeechEngine } from './utils/speechEngine';
+import {
+  SonioxTemporaryKeyExpiredError,
+  type OpenSonioxStreamOptions,
+} from './utils/sonioxStream';
 
-function renderApp() {
+type TestAppProps = {
+  streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
+  requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
+};
+
+function renderApp(props: TestAppProps = {}) {
   return render(
     <ConvexAppProvider>
-      <App />
+      <App
+        streamingTransport={props.streamingTransport}
+        requestTemporaryKey={
+          props.requestTemporaryKey ??
+          (() => Promise.reject(new Error('temporary keys are disabled in non-streaming App tests')))
+        }
+      />
     </ConvexAppProvider>
   );
 }
@@ -271,5 +286,208 @@ test('opening library drawer updates the browser URL with ?view=queue', async ()
   if (playlistButton) {
     fireEvent.click(playlistButton);
     expect(window.location.search).toContain('view=queue');
+  }
+});
+
+async function narrateRawText(container: HTMLElement, text: string) {
+  const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
+  fireEvent.click(addButton);
+  const textTabButton = Array.from(container.querySelectorAll('button')).find((button) =>
+    button.textContent?.includes('Paste Raw Text')
+  ) as HTMLButtonElement;
+  fireEvent.click(textTabButton);
+  fireEvent.change(container.querySelector('textarea') as HTMLTextAreaElement, { target: { value: text } });
+  const narrateButton = Array.from(container.querySelectorAll('button')).find((button) =>
+    button.textContent?.includes('Narrate now')
+  ) as HTMLButtonElement;
+  fireEvent.click(narrateButton);
+}
+
+function timestampBatch(text: string, start = 0.1) {
+  const characters = [...text];
+  return {
+    characters,
+    starts: characters.map((_, index) => Number((start + index * 0.05).toFixed(3))),
+    ends: characters.map((_, index) => Number((start + (index + 1) * 0.05).toFixed(3))),
+  };
+}
+
+function fakeStreamingTransport() {
+  const streams: Array<{
+    options: OpenSonioxStreamOptions;
+    cancelCalls: number;
+  }> = [];
+  return {
+    streams,
+    open(options: OpenSonioxStreamOptions) {
+      const stream = { options, cancelCalls: 0 };
+      streams.push(stream);
+      return { cancel: () => { stream.cancelCalls += 1; } };
+    },
+  };
+}
+
+test('exact timestamp batches replace the estimated prefix and reach the engine authoritatively', async () => {
+  const transport = fakeStreamingTransport();
+  const originalAppend = SpeechEngine.prototype.appendWordTimings;
+  const updates: Array<{ words: any[]; authoritative: boolean }> = [];
+  SpeechEngine.prototype.appendWordTimings = function (words, duration, options) {
+    updates.push({ words, authoritative: options?.authoritative === true });
+    return originalAppend.call(this, words, duration, options);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: '2026-08-29T12:00:00Z' }),
+    });
+    await narrateRawText(container, 'Exact timing');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+
+    act(() => transport.streams[0]!.options.handlers.onTimestamps(timestampBatch('Exact timing')));
+    expect(updates.at(-1)).toEqual({
+      authoritative: true,
+      words: [
+        { text: 'Exact', start: 0.1, end: 0.35 },
+        { text: 'timing', start: 0.35, end: 0.728 },
+      ],
+    });
+
+    act(() => {
+      transport.streams[0]!.options.handlers.onAudio(new Uint8Array([1, 2, 3]));
+      transport.streams[0]!.options.handlers.onDone();
+      transport.streams[0]!.options.handlers.onTerminated?.();
+    });
+
+    await waitFor(() => {
+      const final = updates.at(-1)!;
+      expect(final.authoritative).toBe(true);
+      expect(final.words).toEqual([
+        { text: 'Exact', start: 0.1, end: 0.35 },
+        { text: 'timing', start: 0.4, end: 0.7 },
+      ]);
+    });
+  } finally {
+    SpeechEngine.prototype.appendWordTimings = originalAppend;
+  }
+});
+
+test('switching articles cancels the old socket and ignores all of its later callbacks', async () => {
+  const transport = fakeStreamingTransport();
+  const originalAppendAudio = SpeechEngine.prototype.appendAudioChunk;
+  const appendedBytes: number[][] = [];
+  SpeechEngine.prototype.appendAudioChunk = function (chunk) {
+    appendedBytes.push([...chunk]);
+    return originalAppendAudio.call(this, chunk);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: '2026-08-29T12:00:00Z' }),
+    });
+    await narrateRawText(container, 'First article');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+    await narrateRawText(container, 'Second article');
+    await waitFor(() => expect(transport.streams).toHaveLength(2));
+
+    expect(transport.streams[0]!.cancelCalls).toBe(1);
+    act(() => {
+      transport.streams[0]!.options.handlers.onAudio(new Uint8Array([9]));
+      transport.streams[0]!.options.handlers.onTimestamps(timestampBatch('First article'));
+      transport.streams[1]!.options.handlers.onAudio(new Uint8Array([2]));
+    });
+
+    expect(appendedBytes).toEqual([[2]]);
+  } finally {
+    SpeechEngine.prototype.appendAudioChunk = originalAppendAudio;
+  }
+});
+
+test('unmount invalidates pending key issuance so it cannot open a late socket', async () => {
+  const transport = fakeStreamingTransport();
+  let resolveKey!: (key: { apiKey: string; expiresAt: string }) => void;
+  const pendingKey = new Promise<{ apiKey: string; expiresAt: string }>((resolve) => {
+    resolveKey = resolve;
+  });
+  const rendered = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: () => pendingKey,
+  });
+
+  await narrateRawText(rendered.container, 'Unmount before key issuance');
+  rendered.unmount();
+  resolveKey({ apiKey: 'late-key', expiresAt: '2026-08-29T12:00:00Z' });
+  await act(async () => { await Promise.resolve(); });
+
+  expect(transport.streams).toHaveLength(0);
+});
+
+test('temporary-key expiry resets the session, retries once, then uses REST without a third key', async () => {
+  const transport = fakeStreamingTransport();
+  let keyRequests = 0;
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  const restUrls: string[] = [];
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration) {
+    if (url.startsWith('/api/tts/stream')) restUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({
+        apiKey: `temporary-key-${++keyRequests}`,
+        expiresAt: '2026-08-29T12:00:00Z',
+      }),
+    });
+    await narrateRawText(container, 'Retry this article once');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+    act(() => transport.streams[0]!.options.handlers.onError(new SonioxTemporaryKeyExpiredError()));
+    await waitFor(() => expect(transport.streams).toHaveLength(2));
+    act(() => transport.streams[1]!.options.handlers.onError(new SonioxTemporaryKeyExpiredError()));
+
+    await waitFor(() => expect(restUrls).toHaveLength(1));
+    expect(keyRequests).toBe(2);
+    expect(transport.streams).toHaveLength(2);
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
+
+test('a WebSocket failure falls back to REST and reports degraded playback', async () => {
+  const transport = fakeStreamingTransport();
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  const originalLoadBrowserText = SpeechEngine.prototype.loadBrowserText;
+  const restUrls: string[] = [];
+  const browserFallbackTexts: string[] = [];
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    if (url.startsWith('/api/tts/stream')) restUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+  SpeechEngine.prototype.loadBrowserText = function (text, words) {
+    browserFallbackTexts.push(text);
+    return originalLoadBrowserText.call(this, text, words);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: '2026-08-29T12:00:00Z' }),
+    });
+    await narrateRawText(container, 'Fallback through REST');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+    act(() => transport.streams[0]!.options.handlers.onError(new Error('socket blocked')));
+
+    await waitFor(() => {
+      expect(restUrls).toHaveLength(1);
+      expect(container.textContent).toContain('Neural voice unavailable');
+    });
+
+    act(() => (window as any).__engine.audio.onerror(new Event('error')));
+    await waitFor(() => expect(browserFallbackTexts).toContain('Fallback through REST'));
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+    SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
   }
 });
