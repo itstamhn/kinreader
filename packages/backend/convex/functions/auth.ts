@@ -1,5 +1,7 @@
 import { convex } from 'kitcn/auth';
+import { magicLink } from 'better-auth/plugins';
 import { getEnv } from '../lib/get-env';
+import { renderMagicLinkEmail, renderWelcomeEmail, sendEmail } from '../lib/email';
 import authConfig from './auth.config';
 import { defineAuth } from './generated/auth';
 
@@ -13,10 +15,47 @@ export default defineAuth(() => ({
       clientSecret: getEnv().GOOGLE_CLIENT_SECRET || 'dummy-google-client-secret',
     },
   },
+  databaseHooks: {
+    user: {
+      create: {
+        after: async (user) => {
+          if (user.email) {
+            try {
+              const { subject, html, text } = renderWelcomeEmail({
+                email: user.email,
+                name: user.name,
+                appUrl: getEnv().SITE_URL || 'https://app.kinreader.com',
+              });
+              await sendEmail({
+                to: user.email,
+                subject,
+                html,
+                text,
+              });
+            } catch (err) {
+              console.error('Failed to dispatch welcome email:', err);
+            }
+          }
+        },
+      },
+    },
+  },
   baseURL: getEnv().SITE_URL,
   plugins: [
+    magicLink({
+      sendMagicLink: async ({ email, url }) => {
+        const { subject, html, text } = renderMagicLinkEmail({ email, url });
+        await sendEmail({
+          to: email,
+          subject,
+          html,
+          text,
+        });
+      },
+    }),
     convex({
       authConfig,
+      jwks: process.env.JWKS,
     }),
   ],
   session: {
@@ -31,3 +70,4 @@ export default defineAuth(() => ({
     'https://kinreader.com',
   ],
 }));
+

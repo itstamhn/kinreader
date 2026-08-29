@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
-import { render, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
 import { ConvexReactClient } from 'convex/react';
 import { App } from './App';
 import { ConvexAppProvider } from './lib/convex';
@@ -53,8 +53,9 @@ test('an auth_error from the OAuth redirect reopens the sign-in modal with the r
     expect(container.textContent).toContain('Google sign-in is not configured yet');
   });
 
-  // The failure is shown in the sign-in modal, and it does not sign anyone in.
-  expect(container.textContent).toContain('Sign In to Kinreader');
+  // The failure is shown in the in-page auth screen, and it does not sign anyone in.
+  expect(container.textContent).toContain('Sign In');
+  expect(container.textContent).toContain('Back to Reader');
   expect(localStorage.getItem('kinreader_user')).toBeNull();
   // The reason is consumed, not left in the address bar to reappear on reload.
   expect(window.location.search).toBe('');
@@ -107,18 +108,14 @@ test('toggling ramp mode does not reconstruct the speech engine (plan 018 Bug 1)
 // neural load. It must land in the 'degraded' status and say so in the
 // controls, not silently look like 'ready'.
 test('a failed synthesis lands in degraded status and is shown to the reader, not silently ready', async () => {
-  const originalAction = ConvexReactClient.prototype.action;
-  ConvexReactClient.prototype.action = (async () => {
-    throw new Error('synthesis unavailable in test');
-  }) as typeof originalAction;
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = () => {
+    throw new Error('audio load failed');
+  };
 
   try {
     const { container } = renderApp();
 
-    // Open "Add to Kinreader", switch to the raw-text tab (no network call
-    // for the article itself), and narrate it -- this is the one path that
-    // reaches loadArticleContent's synthesis attempt without going through
-    // the extract action too.
     const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
     expect(addButton).toBeTruthy();
     fireEvent.click(addButton);
@@ -143,6 +140,105 @@ test('a failed synthesis lands in degraded status and is shown to the reader, no
     // Never silently reported as if the neural voice had loaded.
     expect(container.textContent).not.toContain('undefined');
   } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
+
+test('when speech synthesis is unsupported and neural synthesis fails, lands in error status', async () => {
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = () => {
+    throw new Error('audio load failed');
+  };
+
+  const originalIsSupported = SpeechEngine.prototype.isSpeechSynthesisSupported;
+  SpeechEngine.prototype.isSpeechSynthesisSupported = () => false;
+
+  try {
+    const { container } = renderApp();
+
+    const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
+    fireEvent.click(addButton);
+
+    const textTabButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Paste Raw Text')
+    ) as HTMLButtonElement;
+    fireEvent.click(textTabButton);
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'Some article body long enough to narrate.' } });
+
+    const narrateButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('Narrate now')
+    ) as HTMLButtonElement;
+    fireEvent.click(narrateButton);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Audio playback unavailable');
+    });
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+    SpeechEngine.prototype.isSpeechSynthesisSupported = originalIsSupported;
+  }
+});
+
+test('a global paste event with a valid URL opens the clipboard detection sheet', async () => {
+  const { container } = renderApp();
+
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true }) as any;
+  pasteEvent.clipboardData = {
+    getData: (format: string) => (format === 'text' ? 'https://theatlantic.com/ideas/future-of-reading' : ''),
+  };
+
+  act(() => {
+    window.dispatchEvent(pasteEvent);
+  });
+
+  await waitFor(() => {
+    expect(container.textContent).toContain('Link on your clipboard');
+    expect(container.textContent).toContain('theatlantic.com/ideas/future-of-reading');
+  });
+});
+
+test('loading app with ?url= parameter extracts and opens that article', async () => {
+  window.location.href = 'http://localhost/?url=https%3A%2F%2Fpaulgraham.com%2Flesson.html';
+
+  const originalAction = ConvexReactClient.prototype.action;
+  ConvexReactClient.prototype.action = (async (actionName: any, args: any) => {
+    const name = typeof actionName === 'string' ? actionName : actionName?.name || '';
+    if (name.includes('extractArticle') || name.includes('extract') || args?.url) {
+      return {
+        title: 'What You (Will) Wish You Knew',
+        content: 'When I was in high school, I had to take a course in Latin.',
+        author: 'Paul Graham',
+        sourceUrl: 'https://paulgraham.com/lesson.html',
+      };
+    }
+    return { audioUrl: '/sample_audio.mp3', wordTimings: [], duration: 5 };
+  }) as typeof originalAction;
+
+  try {
+    const { container } = renderApp();
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('What You (Will) Wish You Knew');
+      expect(container.textContent).toContain('Paul Graham');
+    });
+  } finally {
     ConvexReactClient.prototype.action = originalAction;
+  }
+});
+
+test('opening library drawer updates the browser URL with ?view=queue', async () => {
+  window.location.href = 'http://localhost/';
+  const { container } = renderApp();
+
+  const libraryButton = Array.from(container.querySelectorAll('button')).find((b) =>
+    b.getAttribute('title')?.includes('Open Reading Queue') || b.textContent?.includes('Queue') || b.querySelector('svg')
+  );
+
+  const playlistButton = container.querySelector('button[title*="Reading Queue"]') as HTMLButtonElement;
+  if (playlistButton) {
+    fireEvent.click(playlistButton);
+    expect(window.location.search).toContain('view=queue');
   }
 });

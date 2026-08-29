@@ -15,6 +15,7 @@ export const api = {
       synthesize: createApiLeaf<"action", typeof import("../functions/routers/tts").synthesize>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/tts").synthesize>("routers/tts:synthesize"), { type: "action" }),
     },
     users: {
+      addToPlaylist: createApiLeaf<"mutation", typeof import("../functions/routers/users").addToPlaylist>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/users").addToPlaylist>("routers/users:addToPlaylist"), { type: "mutation" }),
       deleteUserArticle: createApiLeaf<"mutation", typeof import("../functions/routers/users").deleteUserArticle>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/users").deleteUserArticle>("routers/users:deleteUserArticle"), { type: "mutation" }),
       getCurrentUser: createApiLeaf<"query", typeof import("../functions/routers/users").getCurrentUser>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/users").getCurrentUser>("routers/users:getCurrentUser"), { type: "query" }),
       getUserPlaylist: createApiLeaf<"query", typeof import("../functions/routers/users").getUserPlaylist>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/users").getUserPlaylist>("routers/users:getUserPlaylist"), { type: "query" }),

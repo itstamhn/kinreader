@@ -1,7 +1,7 @@
-import React from 'react';
-import { Settings, PlusCircle, ChevronLeft, Zap } from 'lucide-react';
+import React, { useState } from 'react';
+import { Settings, PlusCircle, ChevronLeft, Zap, Share2, Check } from 'lucide-react';
 import type { ArticleData } from '../types';
-import type { UserProfile } from './AuthModal';
+import type { UserProfile } from './AuthScreen';
 
 interface HeaderProps {
   article: ArticleData | null;
@@ -32,6 +32,35 @@ export function Header({
   isRampEnabled = false,
   onToggleRamp,
 }: HeaderProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleShare = async () => {
+    if (typeof window === 'undefined') return;
+
+    let shareUrl = window.location.href;
+    if (article?.sourceUrl) {
+      const u = new URL(window.location.origin);
+      u.searchParams.set('url', article.sourceUrl);
+      shareUrl = u.toString();
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = shareUrl;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
   return (
     <header className="w-full flex flex-col z-10 select-none bg-[#0B0C10]/70 backdrop-blur-md">
       {/* Minimal Top Header Bar */}
@@ -55,10 +84,19 @@ export function Header({
             <div className="flex items-center gap-1.5 text-[11px] text-[#ECEAE4]/40 font-sans truncate">
               <span>{article?.author || 'The Atlantic'}</span>
               <span>·</span>
-              <span>14 min →</span>
-              <span className="text-[#F2A33C] font-medium">
-                {(14 / (speed > 0 ? speed : 1)).toFixed(0)} min
-              </span>
+              {(() => {
+                const words = article?.content ? article.content.split(/\s+/).filter(Boolean).length : 0;
+                const baseMin = Math.max(1, Math.ceil(words / 200));
+                const speedMin = Math.max(1, Math.ceil(baseMin / (speed > 0 ? speed : 1)));
+                return (
+                  <>
+                    <span>{baseMin} min →</span>
+                    <span className="text-[#F2A33C] font-medium">
+                      {speedMin} min
+                    </span>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -112,7 +150,20 @@ export function Header({
             <PlusCircle className="w-4 h-4" />
           </button>
 
-          {/* 4. Settings */}
+          {/* 4. Share Article */}
+          <button
+            onClick={handleShare}
+            className="w-[30px] h-[30px] rounded-full bg-white/[0.06] hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95 relative"
+            title={copied ? 'Link copied!' : 'Share article link'}
+          >
+            {copied ? (
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Share2 className="w-3.5 h-3.5" />
+            )}
+          </button>
+
+          {/* 5. Settings */}
           <button
             onClick={onOpenSettings}
             className="w-[30px] h-[30px] rounded-full bg-white/[0.06] hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"

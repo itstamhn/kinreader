@@ -8,7 +8,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "none"
   },
   "vars": {
     "APP_ORIGIN": "https://app.kinreader.com"

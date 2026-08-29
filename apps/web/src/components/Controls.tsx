@@ -28,6 +28,7 @@ interface ControlsProps {
   onToggleViewMode?: () => void;
   isSynthesizing?: boolean;
   isDegraded?: boolean;
+  isError?: boolean;
 }
 
 const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
@@ -48,6 +49,7 @@ export function Controls({
   onToggleViewMode,
   isSynthesizing = false,
   isDegraded = false,
+  isError = false,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -91,12 +93,12 @@ export function Controls({
     };
 
     const handlePointerUp = () => {
-      el.removeEventListener('pointermove', handlePointerMove as any);
+      el.removeEventListener('pointermove', handlePointerMove);
       el.removeEventListener('pointerup', handlePointerUp);
       el.removeEventListener('pointercancel', handlePointerUp);
     };
 
-    el.addEventListener('pointermove', handlePointerMove as any);
+    el.addEventListener('pointermove', handlePointerMove);
     el.addEventListener('pointerup', handlePointerUp);
     el.addEventListener('pointercancel', handlePointerUp);
   };
@@ -142,9 +144,9 @@ export function Controls({
           {/* Big Play / Pause Button (52px Orange Amber Gradient) */}
           <button
             onClick={onTogglePlay}
-            disabled={isSynthesizing}
-            className="w-[46px] h-[46px] sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shrink-0 transition-all duration-150 active:scale-95 glow-amber-btn shadow-lg"
-            title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+            disabled={isSynthesizing || isError}
+            className="w-[46px] h-[46px] sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shrink-0 transition-all duration-150 active:scale-95 glow-amber-btn shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
+            title={isError ? 'Audio unavailable' : isPlaying ? 'Pause (Space)' : 'Play (Space)'}
           >
             {isSynthesizing ? (
               <Loader2 className="w-5 h-5 text-[#16130B] animate-spin" />
@@ -306,13 +308,18 @@ export function Controls({
         </div>
       </div>
 
-      {/* Synthesis / Degraded Notice Banner */}
-      {isDegraded && (
+      {/* Synthesis / Degraded / Error Notice Banner */}
+      {isError ? (
+        <div className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-400">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <span>Audio playback unavailable on this device.</span>
+        </div>
+      ) : isDegraded ? (
         <div className="w-full bg-[#F2A33C]/10 border-t border-[#F2A33C]/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#F2A33C]">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           <span>Neural voice unavailable (using on-device speech).</span>
         </div>
-      )}
+      ) : null}
     </footer>
   );
 }

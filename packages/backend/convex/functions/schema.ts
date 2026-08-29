@@ -15,6 +15,10 @@ export default defineSchema({
     banReason: v.optional(v.string()),
     banExpires: v.optional(v.number()),
     tier: v.optional(v.union(v.literal('free'), v.literal('pro'))),
+    welcomeEmailSentAt: v.optional(v.number()),
+    emailBounced: v.optional(v.boolean()),
+    emailComplained: v.optional(v.boolean()),
+    digestOptOut: v.optional(v.boolean()),
   }).index('email', ['email']),
 
   // 2. Better Auth: Session Table
@@ -63,6 +67,8 @@ export default defineSchema({
     publicKey: v.string(),
     privateKey: v.string(),
     createdAt: v.number(),
+    alg: v.optional(v.string()),
+    updatedAt: v.optional(v.number()),
   }),
 
   // 6. Saved / Extracted Articles

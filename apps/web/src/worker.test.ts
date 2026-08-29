@@ -35,39 +35,55 @@ test('POST /api/extract returns 404 (moved to Convex)', async () => {
   expect(res.status).toBe(404);
 });
 
-test('POST /api/tts returns 404 (moved to Convex)', async () => {
-  const res = await worker.fetch(
-    new Request('http://localhost/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    }),
-    mockEnv
-  );
+test('/api/tts/* proxies to Convex HTTP router and preserves security headers', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      return new Response('audio-stream-bytes', {
+        status: 200,
+        headers: {
+          'Content-Type': 'audio/mpeg',
+        },
+      });
+    }) as any;
 
-  expect(res.status).toBe(404);
+    const res = await worker.fetch(
+      new Request('http://localhost/api/tts/stream?text=hello'),
+      mockEnv
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('audio/mpeg');
+    expect(res.headers.get('Strict-Transport-Security')).toBeDefined();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test('POST /api/auth/* returns 404 (handled by Better Auth on Convex)', async () => {
-  const res1 = await worker.fetch(
-    new Request('http://localhost/api/auth/magic-link', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'test@example.com' }),
-    }),
-    mockEnv
-  );
-  expect(res1.status).toBe(404);
+test('/api/auth/* proxies to Convex HTTP router and preserves security headers', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': 'better-auth.session_token=test-token; Path=/',
+        },
+      });
+    }) as any;
 
-  const res2 = await worker.fetch(
-    new Request('http://localhost/api/auth/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'test@example.com', code: '123456' }),
-    }),
-    mockEnv
-  );
-  expect(res2.status).toBe(404);
+    const res = await worker.fetch(
+      new Request('http://localhost/api/auth/get-session'),
+      mockEnv
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Strict-Transport-Security')).toBeDefined();
+    expect(res.headers.get('Set-Cookie')).toContain('better-auth.session_token');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('GET / serves SPA assets from env.ASSETS', async () => {
@@ -78,7 +94,7 @@ test('GET / serves SPA assets from env.ASSETS', async () => {
   expect(res.headers.get('Content-Security-Policy')).toBeDefined();
 });
 
-const DEAD_ROUTES = ['api/extract', 'api/tts', 'api/og', '/r/', 'api/auth'];
+const DEAD_ROUTES = ['api/extract', 'api/og', '/r/'];
 
 test('no file under src/ references a route that moved away from this Worker', async () => {
   const glob = new Bun.Glob('**/*.{ts,tsx}');

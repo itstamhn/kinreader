@@ -43,6 +43,21 @@ export declare const api: {
       >;
     };
     users: {
+      addToPlaylist: FunctionReference<
+        "mutation",
+        "public",
+        {
+          author?: string;
+          authorAvatar?: string;
+          authorHandle?: string;
+          content: string;
+          image?: string;
+          sourceType?: "article" | "x" | "text";
+          title: string;
+          url: string;
+        },
+        any
+      >;
       deleteUserArticle: FunctionReference<
         "mutation",
         "public",
@@ -228,6 +243,21 @@ export declare const internal: {
     };
   };
   routers: {
+    digest: {
+      getWeeklyDigestRecipients: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        any
+      >;
+      sendWeeklyDigests: FunctionReference<"action", "internal", {}, any>;
+      unsubscribeDigest: FunctionReference<
+        "mutation",
+        "internal",
+        { email: string },
+        any
+      >;
+    };
     ttsInternal: {
       consumeTtsRateLimit: FunctionReference<
         "mutation",
@@ -264,6 +294,32 @@ export declare const internal: {
           voice: string;
           words: Array<{ end: number; start: number; text: string }>;
         },
+        any
+      >;
+    };
+    users: {
+      markEmailBounced: FunctionReference<
+        "mutation",
+        "internal",
+        { email: string },
+        any
+      >;
+      markEmailComplained: FunctionReference<
+        "mutation",
+        "internal",
+        { email: string },
+        any
+      >;
+      recordWelcomeEmailSent: FunctionReference<
+        "mutation",
+        "internal",
+        { email: string },
+        any
+      >;
+      sendWelcomeEmailIfNew: FunctionReference<
+        "action",
+        "internal",
+        { email: string; name?: string },
         any
       >;
     };

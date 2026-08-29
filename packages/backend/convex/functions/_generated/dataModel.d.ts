@@ -140,14 +140,22 @@ export type DataModel = {
   };
   jwks: {
     document: {
+      alg?: string;
       createdAt: number;
       privateKey: string;
       publicKey: string;
+      updatedAt?: number;
       _id: Id<"jwks">;
       _creationTime: number;
     };
     fieldPaths:
-      "_creationTime" | "_id" | "createdAt" | "privateKey" | "publicKey";
+      | "_creationTime"
+      | "_id"
+      | "alg"
+      | "createdAt"
+      | "privateKey"
+      | "publicKey"
+      | "updatedAt";
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
@@ -226,13 +234,17 @@ export type DataModel = {
       banReason?: string;
       banned?: boolean;
       createdAt: number;
+      digestOptOut?: boolean;
       email: string;
+      emailBounced?: boolean;
+      emailComplained?: boolean;
       emailVerified: boolean;
       image?: string;
       name: string;
       role?: string;
       tier?: "free" | "pro";
       updatedAt: number;
+      welcomeEmailSentAt?: number;
       _id: Id<"user">;
       _creationTime: number;
     };
@@ -243,13 +255,17 @@ export type DataModel = {
       | "banned"
       | "banReason"
       | "createdAt"
+      | "digestOptOut"
       | "email"
+      | "emailBounced"
+      | "emailComplained"
       | "emailVerified"
       | "image"
       | "name"
       | "role"
       | "tier"
-      | "updatedAt";
+      | "updatedAt"
+      | "welcomeEmailSentAt";
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];

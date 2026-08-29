@@ -14,4 +14,14 @@ const nativeFetchGlobals = {
 
 GlobalRegistrator.register();
 
+if (typeof window !== 'undefined' && !window.speechSynthesis) {
+  (window as any).speechSynthesis = {
+    speak: () => {},
+    cancel: () => {},
+    pause: () => {},
+    resume: () => {},
+    getVoices: () => [],
+  };
+}
+
 Object.assign(globalThis, nativeFetchGlobals);

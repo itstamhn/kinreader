@@ -17,6 +17,16 @@ interface RhythmicCard {
   words: WordTiming[];
 }
 
+const SYNTACTIC_CONNECTORS = new Set([
+  'and', 'or', 'but', 'nor', 'for', 'yet', 'so',
+  'because', 'although', 'since', 'unless', 'while', 'whereas',
+  'that', 'which', 'who', 'whom', 'whose', 'where', 'when',
+  'with', 'without', 'through', 'into', 'under', 'between',
+]);
+
+const TERMINAL_PUNCT_REGEX = /[.!?]$/;
+const CLAUSE_PUNCT_REGEX = /[,;:]|—|–/;
+
 export function KineticDisplay({
   words,
   currentWordIndex,
@@ -37,18 +47,11 @@ export function KineticDisplay({
     const targetWords = clauseLength;
     const maxCharsPerLine = clauseLength <= 4 ? 32 : clauseLength <= 6 ? 44 : 56;
 
-    const SYNTACTIC_CONNECTORS = new Set([
-      'and', 'or', 'but', 'nor', 'for', 'yet', 'so',
-      'because', 'although', 'since', 'unless', 'while', 'whereas',
-      'that', 'which', 'who', 'whom', 'whose', 'where', 'when',
-      'with', 'without', 'through', 'into', 'under', 'between',
-    ]);
-
     for (let i = 0; i < words.length; i++) {
       const w = words[i]!;
       const text = w.text.trim();
-      const hasTerminalPunct = /[.!?]$/.test(text);
-      const hasClausePunct = /[,;:]$/.test(text) || text.includes('—') || text.includes('–');
+      const hasTerminalPunct = TERMINAL_PUNCT_REGEX.test(text);
+      const hasClausePunct = CLAUSE_PUNCT_REGEX.test(text);
 
       // Check if we should break before a syntactic connector
       const isNextWordConnector =
@@ -127,18 +130,18 @@ export function KineticDisplay({
     lg: 'text-[38px] sm:text-[48px] lg:text-[52px]',
   }[fontSize];
 
-  // 1. Centered Typographic Cadence (Matching Kinreader Web UI 1a & 3a)
+  // 1. Left-Aligned Typographic Cadence
   if (viewMode === 'kinetic') {
     return (
-      <div className="flex-1 flex flex-col justify-center items-center px-6 sm:px-16 select-none max-w-4xl mx-auto w-full relative min-h-0 text-center">
-        <div className="w-full flex flex-col items-center justify-center gap-5 sm:gap-6">
+      <div className="flex-1 flex flex-col justify-center items-start px-6 sm:px-16 select-none max-w-4xl mx-auto w-full relative min-h-0 text-left">
+        <div className="w-full flex flex-col items-start justify-center gap-5 sm:gap-6">
           {/* Slot 1: Past Clause 2 (font: 300 24px/1.35 Newsreader, opacity 16%) */}
-          <div className="w-full h-8 flex items-center justify-center overflow-hidden">
+          <div className="w-full h-8 flex items-center justify-start overflow-hidden">
             {prevCard2 ? (
               <div
                 onClick={() => onSelectWord(prevCard2.startIndex)}
                 title="Tap to re-read from here"
-                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/16 hover:text-[#ECEAE4]/60 cursor-pointer transition-all duration-200 text-center max-w-[760px] text-pretty truncate"
+                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/16 hover:text-[#ECEAE4]/60 cursor-pointer transition-all duration-200 text-left max-w-[760px] text-pretty truncate"
               >
                 {prevCard2.words.map((w) => w.text).join(' ')}
               </div>
@@ -150,12 +153,12 @@ export function KineticDisplay({
           </div>
 
           {/* Slot 2: Past Clause 1 (font: 300 24px/1.35 Newsreader, opacity 32%) */}
-          <div className="w-full h-8 flex items-center justify-center overflow-hidden">
+          <div className="w-full h-8 flex items-center justify-start overflow-hidden">
             {prevCard1 ? (
               <div
                 onClick={() => onSelectWord(prevCard1.startIndex)}
                 title="Tap to re-read from here"
-                className="font-serif font-light text-[19px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/32 hover:text-[#ECEAE4]/75 cursor-pointer transition-all duration-200 text-center max-w-[760px] text-pretty truncate"
+                className="font-serif font-light text-[19px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/32 hover:text-[#ECEAE4]/75 cursor-pointer transition-all duration-200 text-left max-w-[760px] text-pretty truncate"
               >
                 {prevCard1.words.map((w) => w.text).join(' ')}
               </div>
@@ -167,10 +170,10 @@ export function KineticDisplay({
           </div>
 
           {/* Slot 3: Center Focal Active Clause (font: 400 46px/1.2 Newsreader, letter-spacing: -.01em) */}
-          <div className="w-full min-h-[76px] sm:min-h-[110px] flex items-center justify-center overflow-visible relative my-1">
+          <div className="w-full min-h-[76px] sm:min-h-[110px] flex items-center justify-start overflow-visible relative my-1">
             <div
               key={activeCard?.id ?? 0}
-              className={`w-full font-serif font-normal ${activeFontSize} leading-[1.2] tracking-[-0.01em] text-pretty max-w-[760px] text-center transition-all duration-150`}
+              className={`w-full font-serif font-normal ${activeFontSize} leading-[1.2] tracking-[-0.01em] text-pretty max-w-[760px] text-left transition-all duration-150`}
             >
               {activeCard?.words.map((word, idx) => {
                 const globalIdx = activeCard.startIndex + idx;
@@ -181,7 +184,7 @@ export function KineticDisplay({
                   <span
                     key={`${activeCard.id}-${idx}-${word.text}`}
                     onClick={() => onSelectWord(globalIdx)}
-                    className={`inline-block cursor-pointer mx-1 sm:mx-1.5 select-none transition-all duration-150 ${
+                    className={`inline-block cursor-pointer mr-2 sm:mr-3 select-none transition-all duration-150 ${
                       isActive
                         ? 'text-[#FFF7EA] word-active-luminous font-medium scale-[1.02]'
                         : isPast
@@ -202,11 +205,11 @@ export function KineticDisplay({
           </div>
 
           {/* Slot 4: Next Clause Preview (font: 300 24px/1.35 Newsreader, opacity 14%) */}
-          <div className="w-full h-8 flex items-center justify-center overflow-hidden">
+          <div className="w-full h-8 flex items-center justify-start overflow-hidden">
             {nextCard1 ? (
               <div
                 onClick={() => onSelectWord(nextCard1.startIndex)}
-                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/14 hover:text-[#ECEAE4]/50 cursor-pointer transition-all duration-200 text-center max-w-[760px] text-pretty truncate"
+                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/14 hover:text-[#ECEAE4]/50 cursor-pointer transition-all duration-200 text-left max-w-[760px] text-pretty truncate"
               >
                 {nextCard1.words.map((w) => w.text).join(' ')}
               </div>

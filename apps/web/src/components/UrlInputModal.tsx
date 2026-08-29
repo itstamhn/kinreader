@@ -72,8 +72,8 @@ export function UrlInputModal({
         onLoadArticle(data);
       }
       onClose();
-    } catch (err: any) {
-      setError(err.message || 'Could not load article');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not load article');
     } finally {
       setLoading(false);
     }
@@ -97,12 +97,18 @@ export function UrlInputModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none">
-      <div className="w-full max-w-[520px] rounded-3xl bg-[#14151C] border border-white/10 shadow-[0_30px_80px_rgba(0,0,0,0.6)] p-6 sm:p-7 flex flex-col gap-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="url-input-title"
+        className="w-full max-w-[520px] rounded-3xl bg-[#14151C] border border-white/10 shadow-[0_30px_80px_rgba(0,0,0,0.6)] p-6 sm:p-7 flex flex-col gap-4"
+      >
         {/* Header */}
         <div className="flex items-center justify-between">
-          <span className="font-serif font-medium text-xl text-[#F4F0E6]">Add to Kinreader</span>
+          <span id="url-input-title" className="font-serif font-medium text-xl text-[#F4F0E6]">Add to Kinreader</span>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="p-1 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition"
           >
             <X className="w-4 h-4" />
@@ -138,6 +144,7 @@ export function UrlInputModal({
               <Link2 className="w-4 h-4 text-[#F2A33C] shrink-0" />
               <input
                 type="url"
+                aria-label="Article or post URL"
                 placeholder="theatlantic.com/ideas/why-we-stopped-reading"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}

@@ -15,7 +15,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import type { ArticleData, ReaderSettings } from '../types';
-import type { UserProfile } from './AuthModal';
+import type { UserProfile } from './AuthScreen';
 
 export interface SavedArticleItem {
   id: string;
@@ -82,22 +82,15 @@ export function LibraryDrawer({
   const [filter, setFilter] = useState<'All' | 'Substack' | 'X threads' | 'Web'>('All');
   const [fastUrl, setFastUrl] = useState('');
 
-  // Local settings state
-  const [defaultRate, setDefaultRate] = useState(settings.defaultRate || 1.5);
-  const [fontSize, setFontSize] = useState<'sm' | 'md' | 'lg'>(settings.fontSize || 'md');
-  const [sonioxVoice, setSonioxVoice] = useState(settings.sonioxVoice || 'Adrian');
-
   useEffect(() => {
     setCurrentTab(initialTab);
   }, [initialTab, isOpen]);
 
-  useEffect(() => {
-    setDefaultRate(settings.defaultRate || 1.5);
-    setFontSize(settings.fontSize || 'md');
-    setSonioxVoice(settings.sonioxVoice || 'Adrian');
-  }, [settings]);
-
   if (!isOpen) return null;
+
+  const currentFontSize = settings.fontSize || 'md';
+  const currentDefaultRate = settings.defaultRate || 1.5;
+  const currentSonioxVoice = settings.sonioxVoice || 'Adrian';
 
   const handleUpdateSettings = (updates: Partial<ReaderSettings>) => {
     const updated = { ...settings, ...updates };
@@ -507,11 +500,10 @@ export function LibraryDrawer({
                   <button
                     key={opt.id}
                     onClick={() => {
-                      setFontSize(opt.id);
                       handleUpdateSettings({ fontSize: opt.id });
                     }}
                     className={`p-4 rounded-2xl border flex flex-col items-center gap-1.5 transition ${
-                      fontSize === opt.id
+                      currentFontSize === opt.id
                         ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F2A33C] shadow-[0_0_20px_rgba(242,163,60,0.15)]'
                         : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
                     }`}
@@ -530,7 +522,7 @@ export function LibraryDrawer({
                   Default Playback Tempo
                 </label>
                 <span className="font-mono text-xs sm:text-sm font-bold text-[#F2A33C] px-3 py-1 rounded-lg bg-[#F2A33C]/10 border border-[#F2A33C]/30">
-                  {defaultRate.toFixed(1)}×
+                  {currentDefaultRate.toFixed(1)}×
                 </span>
               </div>
 
@@ -538,14 +530,13 @@ export function LibraryDrawer({
                 <span className="font-mono text-xs text-[#ECEAE4]/40">0.8×</span>
                 <input
                   type="range"
+                  aria-label="Default Playback Tempo"
                   min="0.8"
                   max="3.5"
                   step="0.1"
-                  value={defaultRate}
+                  value={currentDefaultRate}
                   onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    setDefaultRate(val);
-                    handleUpdateSettings({ defaultRate: val });
+                    handleUpdateSettings({ defaultRate: parseFloat(e.target.value) });
                   }}
                   className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#F2A33C]"
                 />
@@ -564,18 +555,17 @@ export function LibraryDrawer({
                   <button
                     key={v.id}
                     onClick={() => {
-                      setSonioxVoice(v.id);
                       handleUpdateSettings({ sonioxVoice: v.id });
                     }}
                     className={`p-4 rounded-2xl border text-left flex flex-col gap-1.5 transition ${
-                      sonioxVoice === v.id
+                      currentSonioxVoice === v.id
                         ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F4F0E6] shadow-[0_0_20px_rgba(242,163,60,0.15)]'
                         : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-sans font-bold text-sm text-[#F4F0E6]">{v.name}</span>
-                      {sonioxVoice === v.id && <Check className="w-4 h-4 text-[#F2A33C]" />}
+                      {currentSonioxVoice === v.id && <Check className="w-4 h-4 text-[#F2A33C]" />}
                     </div>
                     <span className="font-sans text-xs text-[#ECEAE4]/50">{v.desc}</span>
                   </button>

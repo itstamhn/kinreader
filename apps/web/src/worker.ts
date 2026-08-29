@@ -33,7 +33,7 @@ export default {
       });
     }
 
-    // 3. Handle Worker API routes directly without external framework
+    // 3. Handle Worker API routes & Proxy Better Auth to Convex
     let response: Response;
     if (url.pathname === '/api/health') {
       response = new Response(
@@ -46,6 +46,47 @@ export default {
           headers: { 'Content-Type': 'application/json' },
         }
       );
+    } else if (url.pathname.startsWith('/api/auth') || url.pathname.startsWith('/api/tts')) {
+      // Proxy Better Auth & TTS streaming endpoints directly to Convex HTTP router
+      const convexSiteOrigin = 'https://notable-camel-807.convex.site';
+      const targetUrl = `${convexSiteOrigin}${url.pathname}${url.search}`;
+
+      const forwardedHeaders = new Headers(request.headers);
+      forwardedHeaders.delete('host');
+
+      const backendRes = await fetch(targetUrl, {
+        method: request.method,
+        headers: forwardedHeaders,
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+        redirect: 'manual',
+      });
+
+      const responseHeaders = new Headers();
+      for (const [key, value] of backendRes.headers.entries()) {
+        if (key.toLowerCase() !== 'set-cookie') {
+          responseHeaders.set(key, value);
+        }
+      }
+
+      // Preserve all Set-Cookie headers without collapsing or overriding
+      const cookies = typeof backendRes.headers.getSetCookie === 'function'
+        ? backendRes.headers.getSetCookie()
+        : [backendRes.headers.get('set-cookie')].filter(Boolean) as string[];
+
+      for (const cookie of cookies) {
+        responseHeaders.append('Set-Cookie', cookie);
+      }
+
+      responseHeaders.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+      responseHeaders.set('X-Content-Type-Options', 'nosniff');
+      responseHeaders.set('X-Frame-Options', 'SAMEORIGIN');
+      responseHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+      return new Response(backendRes.body, {
+        status: backendRes.status,
+        statusText: backendRes.statusText,
+        headers: responseHeaders,
+      });
     } else if (url.pathname.startsWith('/api')) {
       // Dead API route check (all API data operations live on Convex)
       response = new Response(
@@ -60,6 +101,10 @@ export default {
     } else {
       // Serve static SPA assets from dist/
       response = await env.ASSETS.fetch(request);
+      if (response.status === 404 && request.method === 'GET') {
+        const indexUrl = new URL('/index.html', request.url);
+        response = await env.ASSETS.fetch(new Request(indexUrl.toString(), request));
+      }
     }
 
     // 4. Attach Security & HSTS Headers
@@ -70,7 +115,7 @@ export default {
     newHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     newHeaders.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud ws: wss:; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
     );
 
     return new Response(response.body, {

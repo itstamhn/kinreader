@@ -7,6 +7,7 @@ import {
   getQueryClientSingleton,
 } from 'kitcn/react';
 import { ConvexAuthProvider } from 'kitcn/auth/client';
+import { NuqsAdapter } from 'nuqs/adapters/react';
 import { api } from '@kinreader/backend/api';
 import { authClient } from './auth-client';
 
@@ -29,15 +30,17 @@ export function ConvexAppProvider({ children }: { children: ReactNode }) {
   const convexQueryClient = getConvexQueryClientSingleton({ convex, queryClient });
 
   return (
-    <ConvexAuthProvider
-      client={convex}
-      authClient={authClient}
-    >
-      <QueryClientProvider client={queryClient}>
-        <CRPCProvider convexClient={convex} convexQueryClient={convexQueryClient}>
-          {children}
-        </CRPCProvider>
-      </QueryClientProvider>
-    </ConvexAuthProvider>
+    <NuqsAdapter>
+      <ConvexAuthProvider
+        client={convex}
+        authClient={authClient}
+      >
+        <QueryClientProvider client={queryClient}>
+          <CRPCProvider convexClient={convex} convexQueryClient={convexQueryClient}>
+            {children}
+          </CRPCProvider>
+        </QueryClientProvider>
+      </ConvexAuthProvider>
+    </NuqsAdapter>
   );
 }

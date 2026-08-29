@@ -109,6 +109,23 @@ export const insertAudioTrack = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('audioTracks')
+      .withIndex('by_article_voice_speed', (q) =>
+        q.eq('articleId', args.articleId).eq('voice', args.voice).eq('speed', args.speed)
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        storageId: args.storageId,
+        duration: args.duration,
+        words: args.words,
+        createdAt: Date.now(),
+      });
+      return existing._id;
+    }
+
     return await ctx.db.insert('audioTracks', {
       articleId: args.articleId,
       voice: args.voice,

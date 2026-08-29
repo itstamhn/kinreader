@@ -175,3 +175,59 @@ test('cross-user isolation: Bob cannot view or modify Alice playlist', async () 
   expect(bobPlaylistAfter.length).toBe(1);
   expect(bobPlaylistAfter[0]!.progress).toBe(10);
 });
+
+test('authenticated user can addToPlaylist and have it appear in their cloud queue', async () => {
+  const t = convexTest(schema, modules);
+
+  await t.run(async (ctx) => {
+    return await ctx.db.insert('user', {
+      name: 'Alice',
+      email: 'alice@example.com',
+      emailVerified: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  });
+
+  const alice = t.withIdentity({
+    name: 'Alice',
+    email: 'alice@example.com',
+    tokenIdentifier: 'test|alice@example.com',
+  });
+
+  const result = await alice.mutation(api.routers.users.addToPlaylist, {
+    url: 'https://theatlantic.com/ideas/why-reading-matters',
+    title: 'Why Reading Matters',
+    content: 'Long form reading text content here.',
+    author: 'Derek Thompson',
+    sourceType: 'article',
+  });
+
+  expect(result.articleId).toBeTruthy();
+  expect(result.article.title).toBe('Why Reading Matters');
+
+  const playlist = await alice.query(api.routers.users.getUserPlaylist, {});
+  expect(playlist.length).toBe(1);
+  expect(playlist[0]!.article.title).toBe('Why Reading Matters');
+  expect(playlist[0]!.article.author).toBe('Derek Thompson');
+
+  // Saving progress by URL string works cleanly
+  await alice.mutation(api.routers.users.saveUserProgress, {
+    articleId: 'https://theatlantic.com/ideas/why-reading-matters',
+    progress: 45,
+    lastWordIndex: 12,
+    currentTime: 18,
+    isCompleted: false,
+  });
+
+  const updatedPlaylist = await alice.query(api.routers.users.getUserPlaylist, {});
+  expect(updatedPlaylist[0]!.progress).toBe(45);
+
+  // Deleting by URL string works cleanly
+  await alice.mutation(api.routers.users.deleteUserArticle, {
+    articleId: 'https://theatlantic.com/ideas/why-reading-matters',
+  });
+
+  const deletedPlaylist = await alice.query(api.routers.users.getUserPlaylist, {});
+  expect(deletedPlaylist.length).toBe(0);
+});

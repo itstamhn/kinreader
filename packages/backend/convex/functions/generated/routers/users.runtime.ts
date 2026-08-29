@@ -14,6 +14,7 @@ import type { ActionCtx, MutationCtx, QueryCtx } from '../server';
 import type { OrmTriggerContext } from 'kitcn/orm';
 
 const procedureRegistry = {
+  "addToPlaylist": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/users").addToPlaylist>("routers/users:addToPlaylist"), () => (require("../../routers/users") as Record<string, unknown>)["addToPlaylist"])],
   "deleteUserArticle": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/users").deleteUserArticle>("routers/users:deleteUserArticle"), () => (require("../../routers/users") as Record<string, unknown>)["deleteUserArticle"])],
   "getCurrentUser": ["query", typedProcedureResolver(createGeneratedFunctionReference<"query", "public", typeof import("../../routers/users").getCurrentUser>("routers/users:getCurrentUser"), () => (require("../../routers/users") as Record<string, unknown>)["getCurrentUser"])],
   "getUserPlaylist": ["query", typedProcedureResolver(createGeneratedFunctionReference<"query", "public", typeof import("../../routers/users").getUserPlaylist>("routers/users:getUserPlaylist"), () => (require("../../routers/users") as Record<string, unknown>)["getUserPlaylist"])],

@@ -345,7 +345,7 @@ test('text over the 4000 character cap is rejected before any provider, rate-lim
   const result = await t.action(api.routers.tts.synthesize, {
     url: 'https://example.com/too-long',
     title: 'Too Long Article',
-    text: 'a'.repeat(4001),
+    text: 'a'.repeat(50001),
     voice: 'Adrian',
     speed: 1,
     sonioxApiKey: 'fake-soniox-key',

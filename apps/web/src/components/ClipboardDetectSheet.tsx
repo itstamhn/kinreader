@@ -43,8 +43,8 @@ export function ClipboardDetectSheet({
         onNarrateNow(data);
       }
       onClose();
-    } catch (e: any) {
-      setError(e.message || 'Extraction failed');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Extraction failed');
     } finally {
       setLoading(false);
     }
@@ -52,7 +52,12 @@ export function ClipboardDetectSheet({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-sm animate-fade-in select-none">
-      <div className="w-full sm:max-w-md bg-[#14151C] border-t sm:border border-white/10 rounded-t-[28px] sm:rounded-3xl p-5 sm:p-6 pb-safe flex flex-col gap-4 shadow-[0_-20px_60px_rgba(0,0,0,0.6)] animate-slide-up">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="clipboard-detect-title"
+        className="w-full sm:max-w-md bg-[#14151C] border-t sm:border border-white/10 rounded-t-[28px] sm:rounded-3xl p-5 sm:p-6 pb-safe flex flex-col gap-4 shadow-[0_-20px_60px_rgba(0,0,0,0.6)] animate-slide-up"
+      >
         {/* Drag Pill Handle */}
         <div className="w-10 h-1.5 rounded-full bg-white/20 self-center sm:hidden" />
 
@@ -60,10 +65,11 @@ export function ClipboardDetectSheet({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-[#F2A33C]">
             <Clipboard className="w-4 h-4" />
-            <span className="font-sans font-semibold text-xs">Link on your clipboard</span>
+            <span id="clipboard-detect-title" className="font-sans font-semibold text-xs">Link on your clipboard</span>
           </div>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="p-1 rounded-full text-white/40 hover:text-white transition"
           >
             <X className="w-4 h-4" />

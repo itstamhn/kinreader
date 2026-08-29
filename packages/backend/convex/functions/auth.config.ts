@@ -6,3 +6,5 @@ export default {
     getAuthConfigProvider(),
   ],
 } satisfies AuthConfig;
+
+
