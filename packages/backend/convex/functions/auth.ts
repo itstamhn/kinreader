@@ -43,6 +43,7 @@ export default defineAuth(() => ({
   baseURL: getEnv().SITE_URL,
   plugins: [
     magicLink({
+      expiresIn: 15 * 60,
       sendMagicLink: async ({ email, url }) => {
         const { subject, html, text } = renderMagicLinkEmail({ email, url });
         await sendEmail({
@@ -70,4 +71,3 @@ export default defineAuth(() => ({
     'https://kinreader.com',
   ],
 }));
-

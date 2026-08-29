@@ -468,12 +468,20 @@ export function App() {
     }
   }, [article?.title, playback.isPlaying]);
 
-  // Check URL on mount for a failure reported by OAuth redirect
+  // Check URL on mount for a failure reported by an auth redirect.
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const urlParams = new URLSearchParams(window.location.search);
-    const failure = urlParams.get('auth_error');
+    const betterAuthError = urlParams.get('error');
+    const failure =
+      urlParams.get('auth_error') ??
+      urlParams.get('error_description') ??
+      (betterAuthError === 'INVALID_TOKEN'
+        ? 'This sign-in link is invalid or has expired. Request a new link and try again.'
+        : betterAuthError
+          ? 'Sign-in failed. Request a new link and try again.'
+          : null);
 
     if (failure) {
       window.history.replaceState({}, document.title, window.location.pathname);

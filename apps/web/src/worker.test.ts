@@ -86,6 +86,38 @@ test('/api/auth/* proxies to Convex HTTP router and preserves security headers',
   }
 });
 
+test('auth redirects keep cookies and location without downloadable entity headers', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': '0',
+          Location: 'https://app.kinreader.com/',
+          'Set-Cookie': 'better-auth.session_token=test-token; Path=/; Secure; HttpOnly',
+        },
+      });
+    }) as any;
+
+    const res = await worker.fetch(
+      new Request(
+        'http://localhost/api/auth/magic-link/verify?token=test&callbackURL=http%3A%2F%2Flocalhost'
+      ),
+      mockEnv
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('https://app.kinreader.com/');
+    expect(res.headers.get('Set-Cookie')).toContain('better-auth.session_token');
+    expect(res.headers.get('Content-Type')).toBeNull();
+    expect(res.headers.get('Content-Length')).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('GET / serves SPA assets from env.ASSETS', async () => {
   const res = await worker.fetch(new Request('http://localhost/'), mockEnv);
   expect(res.status).toBe(200);

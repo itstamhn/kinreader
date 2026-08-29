@@ -61,6 +61,23 @@ test('an auth_error from the OAuth redirect reopens the sign-in modal with the r
   expect(window.location.search).toBe('');
 });
 
+test('an invalid Better Auth magic link opens sign-in with a recovery message', async () => {
+  window.location.href = 'http://localhost/?error=INVALID_TOKEN';
+
+  const { container } = renderApp();
+
+  await waitFor(() => {
+    expect(container.textContent).toContain(
+      'This sign-in link is invalid or has expired. Request a new link and try again.'
+    );
+  });
+
+  expect(container.textContent).toContain('Sign In');
+  expect(container.textContent).toContain('Back to Reader');
+  expect(localStorage.getItem('kinreader_user')).toBeNull();
+  expect(window.location.search).toBe('');
+});
+
 // Regression test for plan 018 Bug 1: the engine-construction effect used to
 // depend on `[isRampEnabled]`, so toggling ramp mode from the header tore
 // down the live SpeechEngine and reconstructed a fresh one -- which

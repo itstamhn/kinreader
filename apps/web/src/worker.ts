@@ -68,6 +68,14 @@ export default {
         }
       }
 
+      // Better Auth emits empty redirects with JSON entity headers. Desktop
+      // browsers generally ignore them, but mobile mail webviews can classify
+      // the navigation as a downloadable JSON file before following Location.
+      if (backendRes.status >= 300 && backendRes.status < 400) {
+        responseHeaders.delete('Content-Type');
+        responseHeaders.delete('Content-Length');
+      }
+
       // Preserve all Set-Cookie headers without collapsing or overriding
       const cookies = typeof backendRes.headers.getSetCookie === 'function'
         ? backendRes.headers.getSetCookie()
