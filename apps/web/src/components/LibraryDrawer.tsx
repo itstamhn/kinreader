@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Play, Pause, Clock, Sparkles, Trash2, ArrowRight, Link as LinkIcon, Compass, Archive, History, Settings, ExternalLink } from 'lucide-react';
 import type { ArticleData } from '../types';
 import type { UserProfile } from './AuthModal';
@@ -84,8 +84,21 @@ export function LibraryDrawer({
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-0 sm:p-6 select-none">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-0 sm:p-6 select-none"
+    >
       <div className="w-full sm:max-w-5xl h-full sm:h-[92vh] sm:max-h-[780px] bg-[#0B0C10] sm:border sm:border-white/10 sm:rounded-3xl shadow-2xl flex flex-col sm:flex-row overflow-hidden relative pt-safe pb-safe">
         {/* 1. Left Sidebar Navigation (Desktop only) */}
         <div className="w-56 shrink-0 border-r border-white/5 p-5 hidden md:flex flex-col gap-2">
@@ -207,6 +220,15 @@ export function LibraryDrawer({
               ) : (
                 'JD'
               )}
+            </button>
+
+            {/* Desktop Close Button */}
+            <button
+              onClick={onClose}
+              className="hidden sm:flex w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 items-center justify-center text-white/50 hover:text-white transition shrink-0"
+              title="Close Library (Esc)"
+            >
+              <X className="w-4 h-4" />
             </button>
           </div>
 

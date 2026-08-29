@@ -27,12 +27,10 @@ interface ControlsProps {
   viewMode?: 'kinetic' | 'full';
   onToggleViewMode?: () => void;
   isSynthesizing?: boolean;
-  // Neural synthesis failed and playback fell back to the on-device voice.
-  // Surfaced explicitly rather than silently -- see plan 018, Step 4.
   isDegraded?: boolean;
 }
 
-const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.2, 2.5, 3.0, 3.5];
+const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
 
 export function Controls({
   isPlaying,
@@ -103,248 +101,226 @@ export function Controls({
     el.addEventListener('pointercancel', handlePointerUp);
   };
 
+  const cycleSpeed = () => {
+    const currentIndex = SPEED_OPTIONS.findIndex((s) => Math.abs(s - speed) < 0.05);
+    const nextIndex = (currentIndex + 1) % SPEED_OPTIONS.length;
+    onSpeedChange(SPEED_OPTIONS[nextIndex]!);
+  };
+
   return (
-    <div className="w-full pb-safe pt-2 select-none border-t border-white/5 bg-[#0B0C10]/90 backdrop-blur-lg z-20">
-      {isDegraded && (
-        <div className="flex items-center justify-center gap-1.5 px-4 pb-1.5 text-[10.5px] font-sans text-[#ECEAE4]/45">
-          <AlertCircle className="w-3 h-3 shrink-0" />
-          <span>Neural voice unavailable — using your device&apos;s voice instead</span>
-        </div>
-      )}
-      {/* ── MOBILE CONTROLS (Design 3a: Thumb Zone) ── */}
-      <div className="flex sm:hidden flex-col gap-3 px-4 pb-2">
-        {/* Row 1: Timestamps & Waveform Seeker */}
-        <div className="flex items-center gap-3 w-full">
-          <span className="font-mono text-[10.5px] text-[#ECEAE4]/40 shrink-0 min-w-[36px]">
-            {formattedCurrent}
-          </span>
-
-          <div
-            onPointerDown={handleTimelinePointerDown}
-            className="flex-1 relative h-6 rounded cursor-pointer overflow-hidden group select-none touch-none"
-          >
-            <div className="absolute inset-0 waveform-mask-base pointer-events-none" />
-            <div
-              className="absolute top-0 bottom-0 left-0 waveform-mask-active transition-all duration-75 pointer-events-none"
-              style={{ width: `${progress}%` }}
-            />
-            <div
-              className="absolute top-0 bottom-0 w-0.5 bg-[#FFF7EA] shadow-[0_0_10px_rgba(242,163,60,0.9)] transition-all duration-75 pointer-events-none"
-              style={{ left: `${progress}%` }}
-            />
-          </div>
-
-          <span className="font-mono text-[10.5px] text-[#ECEAE4]/40 shrink-0 min-w-[40px] text-right">
-            {formattedRemaining}
-          </span>
-        </div>
-
-        {/* Row 2: -15s, 62px Play Button, +15s, Speed Pill */}
-        <div className="flex items-center justify-center gap-6 relative pt-1">
-          {/* -15s Skip */}
+    <footer className="w-full flex flex-col z-20 select-none border-t border-white/5 bg-[#0B0C10]/80 backdrop-blur-lg pb-safe">
+      {/* Primary Playback Bar (Matching Design 1a & 1b) */}
+      <div className="w-full flex items-center gap-3 sm:gap-5 py-3.5 px-4 sm:px-6">
+        {/* Left: Playback Controls (15s Rewind, Play/Pause, 15s Skip) */}
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          {/* 15s Back */}
           <button
             onClick={() => handleSkip(-15)}
-            className="relative w-9 h-9 rounded-full hover:bg-white/10 flex items-center justify-center text-white/75 hover:text-white transition active:scale-95"
-            title="Rewind 15s"
+            className="relative w-7 h-7 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
+            title="Rewind 15 seconds"
           >
-            <RotateCcw className="w-5 h-5" />
-            <span className="absolute text-[8px] font-sans font-bold pt-0.5">15</span>
+            <svg width="24" height="24" viewBox="0 0 30 30" fill="none">
+              <path
+                d="M15 4a11 11 0 1 1-8.6 4.1"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <path
+                d="M6.5 2.5v6h6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="absolute font-sans font-semibold text-[8px] pt-0.5 text-white/80">
+              15
+            </span>
           </button>
 
-          {/* 62px Amber Glow Play/Pause Circle */}
-          {isSynthesizing ? (
-            <div className="w-[62px] h-[62px] rounded-full glow-amber-btn flex items-center justify-center animate-pulse">
-              <Loader2 className="w-6 h-6 animate-spin text-[#16130B]" />
-            </div>
-          ) : (
-            <button
-              onClick={onTogglePlay}
-              className="w-[62px] h-[62px] rounded-full glow-amber-btn flex items-center justify-center transition active:scale-95 shadow-[0_0_30px_rgba(242,163,60,0.4)]"
-              title="Play / Pause"
-            >
-              {isPlaying ? (
-                <Pause className="w-6 h-6 fill-[#16130B] text-[#16130B]" />
-              ) : (
-                <Play className="w-6 h-6 fill-[#16130B] text-[#16130B] ml-0.5" />
-              )}
-            </button>
-          )}
-
-          {/* +15s Skip */}
+          {/* Big Play / Pause Button (52px Orange Amber Gradient) */}
           <button
-            onClick={() => handleSkip(15)}
-            className="relative w-9 h-9 rounded-full hover:bg-white/10 flex items-center justify-center text-white/75 hover:text-white transition active:scale-95"
-            title="Forward 15s"
+            onClick={onTogglePlay}
+            disabled={isSynthesizing}
+            className="w-[46px] h-[46px] sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shrink-0 transition-all duration-150 active:scale-95 glow-amber-btn shadow-lg"
+            title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
           >
-            <RotateCw className="w-5 h-5" />
-            <span className="absolute text-[8px] font-sans font-bold pt-0.5">15</span>
-          </button>
-
-          {/* Speed Pill on Mobile */}
-          <div className="absolute right-0 top-1/2 -translate-y-1/2">
-            <button
-              onClick={() => setShowSpeedMenu(!showSpeedMenu)}
-              className="h-8 px-2.5 rounded-full glow-amber-badge flex items-center justify-center font-mono font-semibold text-xs transition active:scale-95"
-            >
-              <span>{safeSpeed.toFixed(1)}×</span>
-            </button>
-
-            {showSpeedMenu && (
-              <div className="absolute bottom-11 right-0 bg-[#15161D] border border-white/10 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 z-30 min-w-[90px]">
-                {SPEED_OPTIONS.map((rate) => (
-                  <button
-                    key={rate}
-                    onClick={() => {
-                      onSpeedChange(rate);
-                      setShowSpeedMenu(false);
-                    }}
-                    className={`px-3 py-1.5 text-xs font-mono rounded-xl transition text-left flex items-center justify-between ${
-                      Math.abs(safeSpeed - rate) < 0.05
-                        ? 'bg-[#F2A33C] text-[#16130B] font-bold'
-                        : 'text-white/70 hover:bg-white/10'
-                    }`}
-                  >
-                    <span>{rate.toFixed(1)}×</span>
-                    {Math.abs(safeSpeed - rate) < 0.05 && <span className="w-1.5 h-1.5 rounded-full bg-[#16130B]" />}
-                  </button>
-                ))}
-              </div>
+            {isSynthesizing ? (
+              <Loader2 className="w-5 h-5 text-[#16130B] animate-spin" />
+            ) : isPlaying ? (
+              <svg width="16" height="20" viewBox="0 0 22 26">
+                <rect x="3" y="2" width="5.5" height="22" rx="2.2" fill="#16130B" />
+                <rect x="13.5" y="2" width="5.5" height="22" rx="2.2" fill="#16130B" />
+              </svg>
+            ) : (
+              <svg width="18" height="20" viewBox="0 0 12 14" className="translate-x-0.5">
+                <path
+                  d="M2 2v10c0 .8.9 1.3 1.6.9l8-5c.6-.4.6-1.4 0-1.8l-8-5C2.9.7 2 1.2 2 2z"
+                  fill="#16130B"
+                />
+              </svg>
             )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── DESKTOP CONTROLS (Design 1a) ── */}
-      <div className="hidden sm:flex items-center justify-between gap-5 px-6 py-2">
-        {/* Left: Jump -15s, Play/Pause, Jump +15s */}
-        <div className="flex items-center gap-3 shrink-0">
-          <button
-            onClick={() => handleSkip(-15)}
-            className="relative w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
-            title="Rewind 15s (←)"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span className="absolute text-[7px] font-mono font-bold pt-0.5">15</span>
           </button>
 
-          {isSynthesizing ? (
-            <div className="w-12 h-12 rounded-full glow-amber-btn flex items-center justify-center animate-pulse">
-              <Loader2 className="w-5 h-5 animate-spin text-[#16130B]" />
-            </div>
-          ) : (
-            <button
-              onClick={onTogglePlay}
-              className="w-12 h-12 rounded-full glow-amber-btn flex items-center justify-center transition active:scale-95 shadow-lg"
-              title="Play / Pause (Space)"
-            >
-              {isPlaying ? (
-                <Pause className="w-5 h-5 fill-[#16130B] text-[#16130B]" />
-              ) : (
-                <Play className="w-5 h-5 fill-[#16130B] text-[#16130B] ml-0.5" />
-              )}
-            </button>
-          )}
-
+          {/* 15s Forward */}
           <button
             onClick={() => handleSkip(15)}
-            className="relative w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
-            title="Forward 15s (→)"
+            className="relative w-7 h-7 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
+            title="Fast forward 15 seconds"
           >
-            <RotateCw className="w-4 h-4" />
-            <span className="absolute text-[7px] font-mono font-bold pt-0.5">15</span>
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 30 30"
+              fill="none"
+              style={{ transform: 'scaleX(-1)' }}
+            >
+              <path
+                d="M15 4a11 11 0 1 1-8.6 4.1"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <path
+                d="M6.5 2.5v6h6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="absolute font-sans font-semibold text-[8px] pt-0.5 text-white/80">
+              15
+            </span>
           </button>
         </div>
 
-        {/* Center: Timestamp, Waveform Bar, Remaining */}
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <span className="font-mono text-[11px] text-[#ECEAE4]/40 shrink-0 min-w-[36px]">
-            {formattedCurrent}
-          </span>
+        {/* Elapsed Timestamp */}
+        <span className="font-mono font-medium text-[11px] text-[#ECEAE4]/40 shrink-0 select-none">
+          {formattedCurrent}
+        </span>
 
+        {/* Center: Striated Waveform Scrubber (Design 1a) */}
+        <div
+          onPointerDown={handleTimelinePointerDown}
+          className="flex-1 relative h-[26px] rounded overflow-hidden cursor-pointer touch-none select-none bg-white/[0.03]"
+          title="Drag to seek anywhere in the audio article"
+        >
+          {/* Base Inactive Waveform */}
+          <div className="absolute inset-0 waveform-mask-base pointer-events-none" />
+
+          {/* Active Played Waveform */}
           <div
-            onPointerDown={handleTimelinePointerDown}
-            className="flex-1 relative h-6 rounded cursor-pointer overflow-hidden group select-none touch-none"
-          >
-            <div className="absolute inset-0 waveform-mask-base group-hover:opacity-80 transition pointer-events-none" />
-            <div
-              className="absolute top-0 bottom-0 left-0 waveform-mask-active transition-all duration-75 pointer-events-none"
-              style={{ width: `${progress}%` }}
-            />
-            <div
-              className="absolute top-0 bottom-0 w-0.5 bg-[#FFF7EA] shadow-[0_0_10px_rgba(242,163,60,0.9)] transition-all duration-75 pointer-events-none"
-              style={{ left: `${progress}%` }}
-            />
-          </div>
+            className="absolute top-0 bottom-0 left-0 waveform-mask-active pointer-events-none"
+            style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+          />
 
-          <span className="font-mono text-[11px] text-[#ECEAE4]/40 shrink-0 min-w-[45px] text-right">
-            {formattedRemaining}
-          </span>
+          {/* Glowing Amber Playhead Needle */}
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none transition-transform duration-75"
+            style={{
+              left: `${Math.max(0, Math.min(100, progress))}%`,
+              width: '2px',
+              backgroundColor: '#FFF7EA',
+              boxShadow: '0 0 10px rgba(242,163,60,0.9)',
+            }}
+          />
         </div>
 
-        {/* Right: Speed Badge & Keyboard Shortcuts */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Remaining Timestamp */}
+        <span className="font-mono font-medium text-[11px] text-[#ECEAE4]/40 shrink-0 select-none">
+          {formattedRemaining}
+        </span>
+
+        {/* Right: Tempo Pill & View Toggles */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0 relative">
+          {/* Tempo Pill Button */}
           <div className="relative">
             <button
               onClick={() => setShowSpeedMenu(!showSpeedMenu)}
-              className="min-w-[54px] h-8 px-2.5 rounded-full glow-amber-badge flex items-center justify-center font-mono font-semibold text-xs transition active:scale-95"
-              title="Audio Speed (↑ / ↓)"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                cycleSpeed();
+              }}
+              className="min-w-[48px] sm:min-w-[52px] h-8 px-2 rounded-full font-mono font-semibold text-[12px] sm:text-[13px] text-[#F2A33C] bg-[#F2A33C]/15 border border-[#F2A33C]/35 flex items-center justify-center transition active:scale-95"
+              title="Change Tempo (Click to select, right-click or ↑/↓ to cycle)"
             >
-              <span>{safeSpeed.toFixed(1)}×</span>
+              {speed.toFixed(1)}×
             </button>
 
+            {/* Speed Selector Popover */}
             {showSpeedMenu && (
-              <div className="absolute bottom-11 right-0 bg-[#15161D] border border-white/10 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 z-30 min-w-[90px]">
-                {SPEED_OPTIONS.map((rate) => (
+              <div className="absolute bottom-11 right-0 bg-[#16171E] border border-white/10 rounded-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 w-24 animate-fade-in">
+                {SPEED_OPTIONS.map((s) => (
                   <button
-                    key={rate}
+                    key={s}
                     onClick={() => {
-                      onSpeedChange(rate);
+                      onSpeedChange(s);
                       setShowSpeedMenu(false);
                     }}
-                    className={`px-3 py-1.5 text-xs font-mono rounded-xl transition text-left flex items-center justify-between ${
-                      Math.abs(safeSpeed - rate) < 0.05
+                    className={`h-7 rounded-lg text-xs font-mono font-medium transition flex items-center justify-between px-2.5 ${
+                      Math.abs(s - speed) < 0.05
                         ? 'bg-[#F2A33C] text-[#16130B] font-bold'
-                        : 'text-white/70 hover:bg-white/10'
+                        : 'text-[#ECEAE4]/70 hover:bg-white/5 hover:text-white'
                     }`}
                   >
-                    <span>{rate.toFixed(1)}×</span>
-                    {Math.abs(safeSpeed - rate) < 0.05 && <span className="w-1.5 h-1.5 rounded-full bg-[#16130B]" />}
+                    <span>{s.toFixed(1)}×</span>
+                    {Math.abs(s - speed) < 0.05 && <span>✓</span>}
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Full Reading Mode Toggle */}
+          {/* Full Article Text Toggle */}
           {onToggleViewMode && (
             <button
               onClick={onToggleViewMode}
-              className={`h-8 px-3 rounded-full text-xs font-sans font-medium flex items-center gap-1.5 transition active:scale-95 ${
+              className={`h-8 px-3 rounded-full flex items-center gap-1.5 font-sans font-medium text-xs border transition ${
                 viewMode === 'full'
-                  ? 'bg-white text-black font-semibold'
-                  : 'bg-white/5 hover:bg-white/10 text-white/70'
+                  ? 'bg-white/15 text-white border-white/20'
+                  : 'bg-white/5 text-[#ECEAE4]/60 border-white/10 hover:text-white'
               }`}
-              title="Toggle Article Mode"
+              title={viewMode === 'kinetic' ? 'Show Full Article Text' : 'Return to Kinetic Reader'}
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">{viewMode === 'full' ? 'Kinetic' : 'Full Text'}</span>
+              <span className="hidden sm:inline">
+                {viewMode === 'kinetic' ? 'Full Text' : 'Kinetic'}
+              </span>
             </button>
           )}
 
-          {/* Original Source Link */}
+          {/* Source Link */}
           {sourceUrl && (
             <a
               href={sourceUrl}
               target="_blank"
-              rel="noreferrer"
-              className="h-8 w-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/50 hover:text-white transition"
-              title="Open Original Source"
+              rel="noopener noreferrer"
+              className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white/50 hover:text-white transition"
+              title="Open Original Source Article"
             >
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           )}
+
+          {/* Desktop Keyboard Shortcuts Badges (Design 1a) */}
+          <div className="hidden xl:flex items-center gap-1.5 font-mono text-[10px] text-[#ECEAE4]/30 pl-1">
+            <span className="px-1.5 py-0.5 border border-white/10 rounded">Space</span>
+            <span className="px-1.5 py-0.5 border border-white/10 rounded">←</span>
+            <span className="px-1.5 py-0.5 border border-white/10 rounded">→</span>
+            <span className="px-1.5 py-0.5 border border-white/10 rounded">⇧+</span>
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* Synthesis / Degraded Notice Banner */}
+      {isDegraded && (
+        <div className="w-full bg-[#F2A33C]/10 border-t border-[#F2A33C]/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#F2A33C]">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <span>Neural voice unavailable (using on-device speech).</span>
+        </div>
+      )}
+    </footer>
   );
 }

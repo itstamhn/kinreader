@@ -359,6 +359,7 @@ export function App() {
         user={user}
         onOpenAuth={() => setIsAuthOpen(true)}
         speed={playback.rate}
+        progress={playback.progress}
         isVoiceEnabled={isVoiceEnabled}
         onToggleVoice={() => setIsVoiceEnabled(!isVoiceEnabled)}
         isRampEnabled={isRampEnabled}
@@ -366,16 +367,6 @@ export function App() {
         clauseLength={clauseLength}
         onChangeClauseLength={(len) => setClauseLength(len)}
       />
-
-      {/* 2. Top Progress Line */}
-      <div className="w-full px-4 sm:px-6">
-        <div className="h-[2px] w-full rounded-full bg-white/10 overflow-hidden">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-[#B87718] to-[#F2A33C] shadow-[0_0_8px_rgba(242,163,60,0.5)] transition-all duration-75"
-            style={{ width: `${playback.progress}%` }}
-          />
-        </div>
-      </div>
 
       {/* 3. Kinetic Display (Design 3a mobile scale & desktop) */}
       <KineticDisplay

@@ -25,7 +25,7 @@ export function KineticDisplay({
   fontSize = 'md',
   clauseLength = 6,
 }: KineticDisplayProps) {
-  // Advanced Syntactic & Ergonomic Clause Segmentation (Single-Line RSVP Glance)
+  // Advanced Syntactic & Ergonomic Clause Segmentation
   const cards = useMemo(() => {
     if (!words || words.length === 0) return [];
     const result: RhythmicCard[] = [];
@@ -41,20 +41,21 @@ export function KineticDisplay({
       'and', 'or', 'but', 'nor', 'for', 'yet', 'so',
       'because', 'although', 'since', 'unless', 'while', 'whereas',
       'that', 'which', 'who', 'whom', 'whose', 'where', 'when',
-      'with', 'without', 'through', 'into', 'under', 'between'
+      'with', 'without', 'through', 'into', 'under', 'between',
     ]);
 
     for (let i = 0; i < words.length; i++) {
       const w = words[i]!;
       const text = w.text.trim();
-      const cleanWord = text.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
       const hasTerminalPunct = /[.!?]$/.test(text);
       const hasClausePunct = /[,;:]$/.test(text) || text.includes('—') || text.includes('–');
 
       // Check if we should break before a syntactic connector
-      const isNextWordConnector = i < words.length - 1 && SYNTACTIC_CONNECTORS.has(
-        words[i + 1]!.text.trim().replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
-      );
+      const isNextWordConnector =
+        i < words.length - 1 &&
+        SYNTACTIC_CONNECTORS.has(
+          words[i + 1]!.text.trim().replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+        );
 
       cur.push(w);
       curCharLen += text.length + 1;
@@ -65,19 +66,19 @@ export function KineticDisplay({
 
       let shouldBreak = false;
 
-      // 1. Terminal sentence break (period, exclamation, question mark)
+      // 1. Terminal sentence break
       if (hasTerminalPunct) {
         shouldBreak = true;
       }
-      // 2. Natural punctuation break (comma, semicolon, dash) if at least 2 words
+      // 2. Natural punctuation break
       else if (hasClausePunct && (isLongEnough || curCharLen >= 20)) {
         shouldBreak = true;
       }
-      // 3. Syntactic boundary split (before "and", "because", "that") if sufficient length
+      // 3. Syntactic boundary split
       else if (isNextWordConnector && (isLongEnough || curCharLen >= 26)) {
         shouldBreak = true;
       }
-      // 4. Character / Word capacity ceiling (Guarantees no multi-line wrapping jitter)
+      // 4. Capacity ceiling
       else if (isOverCharLimit || (isOverWordTarget && cur.length >= targetWords + 1)) {
         shouldBreak = true;
       }
@@ -120,24 +121,24 @@ export function KineticDisplay({
   }
 
   // Font sizing styles based on preferences
-  const fontSizeClasses = {
-    sm: 'text-[26px] sm:text-[36px] lg:text-[40px]',
-    md: 'text-[30px] sm:text-[42px] lg:text-[46px]',
-    lg: 'text-[34px] sm:text-[48px] lg:text-[52px]',
+  const activeFontSize = {
+    sm: 'text-[32px] sm:text-[40px] lg:text-[42px]',
+    md: 'text-[34px] sm:text-[44px] lg:text-[46px]',
+    lg: 'text-[38px] sm:text-[48px] lg:text-[52px]',
   }[fontSize];
 
-  // 1. Stable Left-Aligned Fixed-Baseline Kinetic Reading Experience (Zero Eye Wandering)
+  // 1. Centered Typographic Cadence (Matching Kinreader Web UI 1a & 3a)
   if (viewMode === 'kinetic') {
     return (
-      <div className="flex-1 flex flex-col justify-center items-start px-6 sm:px-14 select-none max-w-4xl mx-auto w-full relative min-h-0">
-        <div className="w-full flex flex-col items-start gap-2.5 sm:gap-3.5">
-          {/* Slot 1: Past Clause 2 (Fixed height: 30px, 18% opacity, Left Aligned) */}
-          <div className="w-full h-7 sm:h-8 flex items-center justify-start overflow-hidden">
+      <div className="flex-1 flex flex-col justify-center items-center px-6 sm:px-16 select-none max-w-4xl mx-auto w-full relative min-h-0 text-center">
+        <div className="w-full flex flex-col items-center justify-center gap-5 sm:gap-6">
+          {/* Slot 1: Past Clause 2 (font: 300 24px/1.35 Newsreader, opacity 16%) */}
+          <div className="w-full h-8 flex items-center justify-center overflow-hidden">
             {prevCard2 ? (
               <div
                 onClick={() => onSelectWord(prevCard2.startIndex)}
                 title="Tap to re-read from here"
-                className="font-serif font-light text-[16px] sm:text-[19px] leading-tight text-[#ECEAE4]/20 hover:text-[#ECEAE4]/60 cursor-pointer transition-all duration-200 truncate text-left max-w-3xl"
+                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/16 hover:text-[#ECEAE4]/60 cursor-pointer transition-all duration-200 text-center max-w-[760px] text-pretty truncate"
               >
                 {prevCard2.words.map((w) => w.text).join(' ')}
               </div>
@@ -148,13 +149,13 @@ export function KineticDisplay({
             )}
           </div>
 
-          {/* Slot 2: Past Clause 1 (Fixed height: 30px, 35% opacity, Left Aligned) */}
-          <div className="w-full h-7 sm:h-8 flex items-center justify-start overflow-hidden">
+          {/* Slot 2: Past Clause 1 (font: 300 24px/1.35 Newsreader, opacity 32%) */}
+          <div className="w-full h-8 flex items-center justify-center overflow-hidden">
             {prevCard1 ? (
               <div
                 onClick={() => onSelectWord(prevCard1.startIndex)}
                 title="Tap to re-read from here"
-                className="font-serif font-light text-[17px] sm:text-[20px] leading-tight text-[#ECEAE4]/35 hover:text-[#ECEAE4]/75 cursor-pointer transition-all duration-200 truncate text-left max-w-3xl"
+                className="font-serif font-light text-[19px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/32 hover:text-[#ECEAE4]/75 cursor-pointer transition-all duration-200 text-center max-w-[760px] text-pretty truncate"
               >
                 {prevCard1.words.map((w) => w.text).join(' ')}
               </div>
@@ -165,11 +166,11 @@ export function KineticDisplay({
             )}
           </div>
 
-          {/* Slot 3: Fixed Optical Baseline Focal Stage (Left Aligned Fixed Starting Guide) */}
-          <div className="w-full h-[72px] sm:h-[90px] flex items-center justify-start overflow-visible relative">
+          {/* Slot 3: Center Focal Active Clause (font: 400 46px/1.2 Newsreader, letter-spacing: -.01em) */}
+          <div className="w-full min-h-[76px] sm:min-h-[110px] flex items-center justify-center overflow-visible relative my-1">
             <div
               key={activeCard?.id ?? 0}
-              className={`w-full font-serif font-normal ${fontSizeClasses} leading-none tracking-[-0.015em] text-nowrap whitespace-nowrap overflow-visible max-w-4xl flex items-center justify-start flex-nowrap text-left transition-all duration-150`}
+              className={`w-full font-serif font-normal ${activeFontSize} leading-[1.2] tracking-[-0.01em] text-pretty max-w-[760px] text-center transition-all duration-150`}
             >
               {activeCard?.words.map((word, idx) => {
                 const globalIdx = activeCard.startIndex + idx;
@@ -180,16 +181,17 @@ export function KineticDisplay({
                   <span
                     key={`${activeCard.id}-${idx}-${word.text}`}
                     onClick={() => onSelectWord(globalIdx)}
-                    className={`inline-block cursor-pointer mr-2.5 sm:mr-3 select-none transform shrink-0 ${
+                    className={`inline-block cursor-pointer mx-1 sm:mx-1.5 select-none transition-all duration-150 ${
                       isActive
-                        ? 'text-[#FFF7EA] font-medium scale-[1.02] word-active-luminous'
+                        ? 'text-[#FFF7EA] word-active-luminous font-medium scale-[1.02]'
                         : isPast
-                        ? 'text-[rgba(240,238,232,0.92)]'
-                        : 'text-[rgba(236,234,228,0.4)] hover:text-[#ECEAE4]/80'
+                        ? 'text-[rgba(240,238,232,0.9)]'
+                        : 'text-[rgba(236,234,228,0.55)] hover:text-[#ECEAE4]/80'
                     }`}
                     style={{
-                      textShadow: isActive ? '0 0 26px rgba(242,163,60,0.6)' : 'none',
-                      transition: 'color .12s, text-shadow .12s, transform .12s',
+                      textShadow: isActive
+                        ? '0 0 26px rgba(242,163,60,0.55), 0 0 8px rgba(242,163,60,0.85)'
+                        : 'none',
                     }}
                   >
                     {word.text}
@@ -199,12 +201,12 @@ export function KineticDisplay({
             </div>
           </div>
 
-          {/* Slot 4: Next Clause Preview (Fixed height: 30px, 16% opacity, Left Aligned) */}
-          <div className="w-full h-7 sm:h-8 flex items-center justify-start overflow-hidden">
+          {/* Slot 4: Next Clause Preview (font: 300 24px/1.35 Newsreader, opacity 14%) */}
+          <div className="w-full h-8 flex items-center justify-center overflow-hidden">
             {nextCard1 ? (
               <div
                 onClick={() => onSelectWord(nextCard1.startIndex)}
-                className="font-serif font-light text-[17px] sm:text-[20px] leading-tight text-[#ECEAE4]/18 hover:text-[#ECEAE4]/50 cursor-pointer transition-all duration-200 truncate text-left max-w-3xl"
+                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/14 hover:text-[#ECEAE4]/50 cursor-pointer transition-all duration-200 text-center max-w-[760px] text-pretty truncate"
               >
                 {nextCard1.words.map((w) => w.text).join(' ')}
               </div>
@@ -217,7 +219,7 @@ export function KineticDisplay({
         </div>
 
         {/* Keyboard Interaction Subtitle Hint */}
-        <div className="absolute bottom-3 left-6 sm:left-14 font-mono text-[10.5px] text-[#ECEAE4]/30 pointer-events-none hidden sm:block">
+        <div className="absolute bottom-3 font-mono text-[10px] text-[#ECEAE4]/30 pointer-events-none hidden sm:block">
           Space play · ←→ clauses (tap dimmed lines to re-read) · ↑↓ tempo
         </div>
       </div>
