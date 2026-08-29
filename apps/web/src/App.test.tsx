@@ -78,6 +78,20 @@ test('an invalid Better Auth magic link opens sign-in with a recovery message', 
   expect(window.location.search).toBe('');
 });
 
+test('a Better Auth error description is shown and consumed after redirect', async () => {
+  window.location.href =
+    'http://localhost/?error=INVALID_TOKEN&error_description=This%20link%20was%20already%20used';
+
+  const { container } = renderApp();
+
+  await waitFor(() => {
+    expect(container.textContent).toContain('This link was already used');
+  });
+
+  expect(localStorage.getItem('kinreader_user')).toBeNull();
+  expect(window.location.search).toBe('');
+});
+
 // Regression test for plan 018 Bug 1: the engine-construction effect used to
 // depend on `[isRampEnabled]`, so toggling ramp mode from the header tore
 // down the live SpeechEngine and reconstructed a fresh one -- which

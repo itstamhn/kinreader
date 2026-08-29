@@ -194,7 +194,7 @@ export function AuthScreen({
               </p>
 
               <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/5 text-xs text-[#ECEAE4]/50 mb-6 text-left space-y-1.5">
-                <p>• The link will stay active for 30 minutes.</p>
+                <p>• The link will stay active for 15 minutes.</p>
                 <p>• No password needed — clicking logs you in immediately.</p>
                 <p>• Check your spam or promotions folder if you don't see it.</p>
               </div>
