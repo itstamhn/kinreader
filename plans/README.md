@@ -435,11 +435,17 @@ are not re-audited from scratch next session.
   `astro check` reports 0 errors, both apps build.
 
   **What is NOT done, and needs credentials this environment does not have:** Step 7's
-  cutover (registering the new redirect URI in the Google Cloud console, pointing the
-  DNS/custom domains, deploying the two Workers) and Step 9 (the optional `localStorage`
-  bridge, which is a product call on how many users have a library on the apex today).
-  Nothing has changed in production; the branch is safe to hold until someone does the
-  cutover in the order Step 7 specifies — **console first, DNS last**.
+  cutover — registering the new redirect URI in the Google Cloud console, pointing the
+  custom domains, and deploying the two Workers. `wrangler` is installed here but
+  unauthenticated, and `wrangler login` is an interactive browser flow a remote session
+  cannot complete; a `CLOUDFLARE_API_TOKEN` in the environment would be enough to change
+  that. Nothing has changed in production; the branch is safe to hold until someone does
+  the cutover in the order Step 7 specifies — **console first, deploy before DNS**.
+
+  **Step 9 (the `localStorage` migration bridge) was deleted, not skipped.** The owner
+  confirmed they are the only user with data on the apex, so the bridge would have relaxed
+  `frame-ancestors` — a header plan 012 added deliberately — to migrate one person's
+  library. The cost of not having it is one sign-in.
 
   Deviations found during execution, all verified:
   1. **Astro is on 7.2.9 and `docs.astro.build` is blocked by the egress proxy**, so the

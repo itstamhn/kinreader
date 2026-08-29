@@ -94,11 +94,15 @@ Two Cloudflare Workers, one Convex deployment, one repo.
 
 Read this before Step 7. Each item has a step; none of them is optional to *think* about.
 
-1. **`localStorage` does not cross origins.** `kinreader_user`, `kinetic_saved_articles_v2`,
-   `kinetic_reader_settings` and `kinreader_client_id` all live on `kinreader.com`. On
-   `app.kinreader.com` every existing user is signed out with an empty library. Step 9 is
-   an optional one-time bridge; the alternative is accepting it. **This is a product
-   decision, not a technical one — confirm with the owner before cutover.**
+1. **`localStorage` does not cross origins — ACCEPTED, no migration.** `kinreader_user`,
+   `kinetic_saved_articles_v2`, `kinetic_reader_settings` and `kinreader_client_id` all
+   live on `kinreader.com`, and on `app.kinreader.com` they are simply not there. The
+   owner confirmed they are the only user with data on the apex, so the cost is one person
+   signing in again and losing a library they can rebuild. A one-time iframe +
+   `postMessage` bridge was specified here and **deliberately deleted**: it would have
+   required relaxing `frame-ancestors` on the apex, a header plan 012 added on purpose, to
+   migrate a single person's data. If this ever needs revisiting for real users, the
+   history has the design.
 2. **Installed PWAs point at the apex.** `manifest.json` has `"start_url": "/"` and
    `"display": "standalone"`, so an iOS home-screen install opens `kinreader.com/` and will
    land on the marketing page. Step 2 adds a standalone-mode redirect on the apex, which
@@ -278,25 +282,6 @@ where this step earns its keep:
 the console — on the landing page, a blog post, and `/r/x?t=Test`. A single violation here
 means the redirect script or a hydration island is dead.
 
-### Step 9 (optional): One-time `localStorage` migration
-
-Skip this entirely if the answer to "how many people have a library on the apex today?" is
-"nobody who would notice". Do not build it on the assumption that they exist.
-
-If they do: on first load, `app.kinreader.com` opens a hidden iframe to a small
-`kinreader.com/migrate` page, which `postMessage`s the four `localStorage` keys to a
-`targetOrigin` of exactly `https://app.kinreader.com`. The app writes them if its own
-storage is empty, then sets a flag so it never runs again.
-
-This requires relaxing `frame-ancestors` on the apex to allow the app origin, which is a
-deliberate weakening of a header plan 012 added on purpose. So: **give it an expiry**.
-Put the removal date in a comment and in the plan log, and delete the bridge and restore
-`frame-ancestors 'self'` after it.
-
-**Verify**: with data seeded on the apex, a first load of the app origin adopts it; a
-second load does not re-run; the `postMessage` handler rejects any `event.origin` other
-than the apex.
-
 ## Test plan
 
 - The four `/r/:id` escaping tests and the two `/api/og` tests move to `apps/marketing`
@@ -336,7 +321,6 @@ than the apex.
   should make them pass trivially; if it does not, something is using `set:html` and that
   is a live XSS, not a test problem.
 - Anyone proposes to delete `src/server.ts` in this plan. Auth still lives there.
-- The `localStorage` bridge is requested without a removal date.
 
 ## Maintenance notes
 
