@@ -41,6 +41,12 @@ export declare const api: {
         },
         any
       >;
+      temporaryKey: FunctionReference<
+        "action",
+        "public",
+        { clientId?: string },
+        any
+      >;
     };
     users: {
       addToPlaylist: FunctionReference<
@@ -262,7 +268,7 @@ export declare const internal: {
       consumeTtsRateLimit: FunctionReference<
         "mutation",
         "internal",
-        { key: string },
+        { key: string; purpose?: "synthesize" | "temporaryKey" },
         { ok: boolean }
       >;
       findCachedTrackByUrl: FunctionReference<

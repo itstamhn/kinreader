@@ -122,6 +122,81 @@ function splitTextIntoSonioxChunks(fullText: string, maxChunkSize = MAX_SONIOX_C
   return chunks.filter(Boolean);
 }
 
+type TemporaryKeyResult = { apiKey: string; expiresAt: string };
+
+function isTemporaryKeyResponse(value: unknown): value is { api_key: string; expires_at: string } {
+  if (!value || typeof value !== 'object') return false;
+  const response = value as Record<string, unknown>;
+  return (
+    typeof response.api_key === 'string' &&
+    response.api_key.length > 0 &&
+    typeof response.expires_at === 'string' &&
+    !Number.isNaN(Date.parse(response.expires_at))
+  );
+}
+
+export const temporaryKey = action
+  .input(z.object({ clientId: z.string().optional() }))
+  .action(async ({ ctx, input }): Promise<TemporaryKeyResult> => {
+    const sonioxApiKey = process.env.SONIOX_API_KEY;
+    if (!sonioxApiKey) {
+      throw new Error('SONIOX_API_KEY is not configured');
+    }
+
+    const identity = await ctx.auth?.getUserIdentity?.();
+    // Authenticated identities are server-derived; a caller-provided clientId
+    // remains only an anonymous attribution/fairness bucket. This preserves
+    // anonymous narration as an explicit product ruling.
+    const clientReferenceId = identity?.tokenIdentifier || input.clientId || 'anonymous';
+
+    const rateLimit: { ok: boolean } = await ctx.runMutation(internal.routers.ttsInternal.consumeTtsRateLimit, {
+      key: clientReferenceId,
+      purpose: 'temporaryKey',
+    });
+    if (!rateLimit.ok) {
+      throw new Error('Too many temporary key requests. Please try again in a minute.');
+    }
+
+    let response: Response;
+    try {
+      // Soniox's API reference index also names `/v1/create_temporary_api_key`,
+      // but that endpoint 404s; use this Step 0-verified spelling instead.
+      response = await fetch('https://api.soniox.com/v1/auth/temporary-api-key', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sonioxApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(10000),
+        body: JSON.stringify({
+          usage_type: 'tts_rt',
+          expires_in_seconds: 300,
+          max_session_duration_seconds: 900,
+          single_use: true,
+          client_reference_id: clientReferenceId,
+        }),
+      });
+    } catch {
+      throw new Error('Unable to reach Soniox while issuing a temporary key');
+    }
+
+    if (!response.ok) {
+      throw new Error(`Soniox rejected temporary key issuance (status ${response.status})`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new Error('Soniox returned an invalid temporary key response');
+    }
+    if (!isTemporaryKeyResponse(payload) || payload.api_key === sonioxApiKey) {
+      throw new Error('Soniox returned an invalid temporary key response');
+    }
+
+    return { apiKey: payload.api_key, expiresAt: payload.expires_at };
+  });
+
 export const synthesize = action
   .input(
     z.object({

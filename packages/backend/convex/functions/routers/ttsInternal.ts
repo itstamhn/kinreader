@@ -1,6 +1,11 @@
 import { v } from 'convex/values';
 import { internalMutation, internalQuery } from '../_generated/server';
-import { TTS_GLOBAL_KEY, ttsClientRateLimiter, ttsGlobalRateLimiter } from '../../lib/rateLimiter';
+import {
+  TTS_GLOBAL_KEY,
+  ttsClientRateLimiter,
+  ttsGlobalRateLimiter,
+  ttsTemporaryKeyClientRateLimiter,
+} from '../../lib/rateLimiter';
 
 // Plain (non-cRPC) internal functions backing convex/routers/tts.ts's
 // action. Actions cannot touch `ctx.db` directly -- these are the
@@ -16,13 +21,18 @@ import { TTS_GLOBAL_KEY, ttsClientRateLimiter, ttsGlobalRateLimiter } from '../.
 // bucket. Both are cache-miss-only -- the caller only reaches this after a
 // cache lookup has already missed.
 export const consumeTtsRateLimit = internalMutation({
-  args: { key: v.string() },
+  args: {
+    key: v.string(),
+    purpose: v.optional(v.union(v.literal('synthesize'), v.literal('temporaryKey'))),
+  },
   returns: v.object({ ok: v.boolean() }),
   handler: async (ctx, args) => {
     const global = await ttsGlobalRateLimiter(ctx).limit(TTS_GLOBAL_KEY);
     if (!global.success) return { ok: false };
 
-    const client = await ttsClientRateLimiter(ctx).limit(args.key);
+    const clientLimiter =
+      args.purpose === 'temporaryKey' ? ttsTemporaryKeyClientRateLimiter(ctx) : ttsClientRateLimiter(ctx);
+    const client = await clientLimiter.limit(args.key);
     return { ok: client.success };
   },
 });

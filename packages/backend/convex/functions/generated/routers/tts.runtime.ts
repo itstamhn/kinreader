@@ -15,6 +15,7 @@ import type { OrmTriggerContext } from 'kitcn/orm';
 
 const procedureRegistry = {
   "synthesize": ["action", typedProcedureResolver(createGeneratedFunctionReference<"action", "public", typeof import("../../routers/tts").synthesize>("routers/tts:synthesize"), () => (require("../../routers/tts") as Record<string, unknown>)["synthesize"])],
+  "temporaryKey": ["action", typedProcedureResolver(createGeneratedFunctionReference<"action", "public", typeof import("../../routers/tts").temporaryKey>("routers/tts:temporaryKey"), () => (require("../../routers/tts") as Record<string, unknown>)["temporaryKey"])],
 } as const;
 
   const handlerRegistry = procedureRegistry;

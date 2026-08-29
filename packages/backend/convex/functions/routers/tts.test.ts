@@ -401,3 +401,139 @@ test('internal.routers.ttsInternal.consumeTtsRateLimit is reachable through the 
   // internalMutation this action's rate-limit step calls.
   expect(internal.routers.ttsInternal.consumeTtsRateLimit).toBeDefined();
 });
+
+async function withSonioxServerKey<T>(run: () => Promise<T>): Promise<T> {
+  const originalKey = process.env.SONIOX_API_KEY;
+  process.env.SONIOX_API_KEY = 'long-lived-soniox-key-that-must-never-leave-the-server';
+  try {
+    return await run();
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.SONIOX_API_KEY;
+    } else {
+      process.env.SONIOX_API_KEY = originalKey;
+    }
+  }
+}
+
+test('temporaryKey posts the constrained Soniox request and returns only the temporary key', async () => {
+  const t = convexTest(schema, modules);
+  let request: RequestInit | undefined;
+
+  await withSonioxServerKey(async () => {
+    stubFetch((url, init) => {
+      expect(url).toBe('https://api.soniox.com/v1/auth/temporary-api-key');
+      request = init;
+      return new Response(
+        JSON.stringify({ api_key: 'temporary-soniox-key', expires_at: '2026-08-29T12:05:00.000Z' }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+
+    const result = await t.action(api.routers.tts.temporaryKey, { clientId: 'browser-client-123' });
+
+    expect(result).toEqual({ apiKey: 'temporary-soniox-key', expiresAt: '2026-08-29T12:05:00.000Z' });
+    expect(result.apiKey).not.toBe(process.env.SONIOX_API_KEY);
+  });
+
+  expect(request?.method).toBe('POST');
+  expect(request?.headers).toMatchObject({
+    Authorization: 'Bearer long-lived-soniox-key-that-must-never-leave-the-server',
+    'Content-Type': 'application/json',
+  });
+  expect(JSON.parse(String(request?.body))).toEqual({
+    usage_type: 'tts_rt',
+    expires_in_seconds: 300,
+    max_session_duration_seconds: 900,
+    single_use: true,
+    client_reference_id: 'browser-client-123',
+  });
+});
+
+test('temporaryKey uses authenticated identity for Soniox attribution ahead of clientId', async () => {
+  const t = convexTest(schema, modules);
+  const authenticated = t.withIdentity({
+    name: 'Key Owner',
+    email: 'owner@example.com',
+    tokenIdentifier: 'test|key-owner',
+  });
+  let clientReferenceId: string | undefined;
+
+  await withSonioxServerKey(async () => {
+    stubFetch((_url, init) => {
+      clientReferenceId = JSON.parse(String(init?.body)).client_reference_id;
+      return new Response(JSON.stringify({ api_key: 'temporary-key', expires_at: '2026-08-29T12:05:00.000Z' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    await authenticated.action(api.routers.tts.temporaryKey, { clientId: 'forgeable-browser-client' });
+  });
+
+  expect(clientReferenceId).toBe('test|key-owner');
+});
+
+test('temporaryKey rejects the sixth request for one client before calling Soniox', async () => {
+  const t = convexTest(schema, modules);
+
+  await withSonioxServerKey(async () => {
+    stubFetch(() =>
+      new Response(JSON.stringify({ api_key: 'temporary-key', expires_at: '2026-08-29T12:05:00.000Z' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    for (let request = 0; request < 5; request += 1) {
+      await expect(t.action(api.routers.tts.temporaryKey, { clientId: 'key-burst-client' })).resolves.toEqual({
+        apiKey: 'temporary-key',
+        expiresAt: '2026-08-29T12:05:00.000Z',
+      });
+    }
+
+    await expect(t.action(api.routers.tts.temporaryKey, { clientId: 'key-burst-client' })).rejects.toThrow(
+      'Too many temporary key requests'
+    );
+  });
+
+  expect(fetchCalls).toEqual([
+    'https://api.soniox.com/v1/auth/temporary-api-key',
+    'https://api.soniox.com/v1/auth/temporary-api-key',
+    'https://api.soniox.com/v1/auth/temporary-api-key',
+    'https://api.soniox.com/v1/auth/temporary-api-key',
+    'https://api.soniox.com/v1/auth/temporary-api-key',
+  ]);
+});
+
+test('temporaryKey fails clearly without a server key or a valid Soniox response', async () => {
+  const t = convexTest(schema, modules);
+  const originalKey = process.env.SONIOX_API_KEY;
+  delete process.env.SONIOX_API_KEY;
+
+  try {
+    stubFetch(() => {
+      throw new Error('missing server key must not call Soniox');
+    });
+    await expect(t.action(api.routers.tts.temporaryKey, {})).rejects.toThrow('SONIOX_API_KEY is not configured');
+    expect(fetchCalls).toEqual([]);
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.SONIOX_API_KEY;
+    } else {
+      process.env.SONIOX_API_KEY = originalKey;
+    }
+  }
+
+  await withSonioxServerKey(async () => {
+    stubFetch(() =>
+      new Response(JSON.stringify({ expires_at: '2026-08-29T12:05:00.000Z' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    await expect(t.action(api.routers.tts.temporaryKey, { clientId: 'malformed-response-client' })).rejects.toThrow(
+      'Soniox returned an invalid temporary key response'
+    );
+  });
+});

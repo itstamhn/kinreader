@@ -13,6 +13,7 @@ export const api = {
     },
     tts: {
       synthesize: createApiLeaf<"action", typeof import("../functions/routers/tts").synthesize>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/tts").synthesize>("routers/tts:synthesize"), { type: "action" }),
+      temporaryKey: createApiLeaf<"action", typeof import("../functions/routers/tts").temporaryKey>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/tts").temporaryKey>("routers/tts:temporaryKey"), { type: "action" }),
     },
     users: {
       addToPlaylist: createApiLeaf<"mutation", typeof import("../functions/routers/users").addToPlaylist>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/users").addToPlaylist>("routers/users:addToPlaylist"), { type: "mutation" }),
