@@ -91,3 +91,29 @@ test('a successful verify signs the user in using the response body, ignoring th
   expect(stored.name).not.toBe('UrlSuppliedName');
   expect(stored.email).toBe('victim@example.com');
 });
+
+// Every Google sign-in failure path redirects to `/?auth_error=...`, but
+// nothing on the client read it: the user landed back on an ordinary home
+// screen with no message, and on a phone -- collapsed address bar, no way to
+// see the query string -- "Continue with Google" simply looked dead.
+test('an auth_error from the Google redirect reopens the sign-in modal with the reason', async () => {
+  window.location.href =
+    'http://localhost/?auth_error=Google%20sign-in%20is%20not%20configured%20yet';
+
+  global.fetch = (async (input: any) => {
+    const url = typeof input === 'string' ? input : input?.url;
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  }) as any;
+
+  const { container } = renderApp();
+
+  await waitFor(() => {
+    expect(container.textContent).toContain('Google sign-in is not configured yet');
+  });
+
+  // The failure is shown in the sign-in modal, and it does not sign anyone in.
+  expect(container.textContent).toContain('Sign In to Kinreader');
+  expect(localStorage.getItem('kinreader_user')).toBeNull();
+  // The reason is consumed, not left in the address bar to reappear on reload.
+  expect(window.location.search).toBe('');
+});

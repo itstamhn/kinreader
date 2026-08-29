@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { X, Mail, Sparkles, ArrowRight, CheckCircle2, KeyRound, LogOut, ShieldCheck, CreditCard } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Mail, Sparkles, ArrowRight, CheckCircle2, KeyRound, LogOut, ShieldCheck, CreditCard, ExternalLink, Copy } from 'lucide-react';
+import { isEmbeddedBrowser } from '../lib/browser';
 
 export interface UserProfile {
   email: string;
@@ -14,26 +15,72 @@ interface AuthModalProps {
   onLoginSuccess: (user: UserProfile) => void;
   user?: UserProfile | null;
   onLogout?: () => void;
+  /** A failure reported by the redirect back from Google (`?auth_error=`). */
+  externalError?: string | null;
+  onDismissExternalError?: () => void;
 }
 
-export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: AuthModalProps) {
+export function AuthModal({
+  isOpen,
+  onClose,
+  onLoginSuccess,
+  user,
+  onLogout,
+  externalError,
+  onDismissExternalError,
+}: AuthModalProps) {
   const [email, setEmail] = useState('');
   const [step, setStep] = useState<'input' | 'verify'>('input');
   const [code, setCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [isEmbedded] = useState(() =>
+    typeof navigator === 'undefined' ? false : isEmbeddedBrowser(navigator.userAgent)
+  );
+
+  // Anything the Google round trip reported is the freshest news the modal
+  // has; a stale in-modal error must not hide it.
+  useEffect(() => {
+    if (externalError) setError(null);
+  }, [externalError]);
 
   if (!isOpen) return null;
+
+  const shownError = externalError || error;
+
+  const clearErrors = () => {
+    setError(null);
+    onDismissExternalError?.();
+  };
+
+  // An error raised in the modal replaces whatever the Google redirect
+  // reported, so a stale banner can never mask the live one.
+  const showError = (message: string) => {
+    onDismissExternalError?.();
+    setError(message);
+  };
+
+  const handleCopyLink = async () => {
+    const link = `${window.location.origin}/`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      showError(`Copy is blocked here — open ${link} in Safari or Chrome`);
+    }
+  };
 
   const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !email.includes('@')) {
-      setError('Please enter a valid email address');
+      showError('Please enter a valid email address');
       return;
     }
 
     setIsLoading(true);
-    setError(null);
+    clearErrors();
 
     try {
       const res = await fetch('/api/auth/magic-link', {
@@ -47,7 +94,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
 
       setStep('verify');
     } catch (err: any) {
-      setError(err.message || 'Something went wrong');
+      showError(err.message || 'Something went wrong');
     } finally {
       setIsLoading(false);
     }
@@ -56,12 +103,12 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
   const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (code.length < 6) {
-      setError('Please enter the 6-digit verification code');
+      showError('Please enter the 6-digit verification code');
       return;
     }
 
     setIsLoading(true);
-    setError(null);
+    clearErrors();
 
     try {
       const res = await fetch('/api/auth/verify', {
@@ -76,7 +123,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
       onLoginSuccess(data.user);
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Invalid or expired verification code');
+      showError(err.message || 'Invalid or expired verification code');
     } finally {
       setIsLoading(false);
     }
@@ -87,7 +134,10 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
       <div className="w-full max-w-sm bg-[#14151C] border border-white/10 rounded-3xl p-6 sm:p-7 shadow-[0_30px_80px_rgba(0,0,0,0.6)] relative animate-scale-up text-center">
         {/* Close Button */}
         <button
-          onClick={onClose}
+          onClick={() => {
+            clearErrors();
+            onClose();
+          }}
           className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/10 text-white/40 hover:text-white transition"
         >
           <X className="w-4 h-4" />
@@ -173,9 +223,30 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
               Sync your reading queue, audio progress, and custom speed presets across all your devices.
             </p>
 
-            {error && (
+            {shownError && (
               <div className="mb-4 p-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-sans">
-                {error}
+                {shownError}
+              </div>
+            )}
+
+            {isEmbedded && (
+              <div className="mb-4 p-3 rounded-2xl bg-[#F2A33C]/10 border border-[#F2A33C]/30 text-left">
+                <div className="flex items-center gap-1.5 text-[#F2A33C] font-sans text-[11px] font-semibold mb-1">
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                  <span>Google blocks sign-in inside in-app browsers</span>
+                </div>
+                <p className="font-sans text-[11px] text-[#ECEAE4]/60 leading-relaxed">
+                  You opened Kinreader from inside another app. Open it in Safari or Chrome to
+                  continue with Google — or sign in with email below, which works anywhere.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[#F2A33C]/40 hover:bg-[#F2A33C]/15 text-[#F2A33C] font-sans text-[11px] font-semibold transition active:scale-[0.98]"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>{copied ? 'Link copied' : 'Copy link'}</span>
+                </button>
               </div>
             )}
 
@@ -183,6 +254,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
             <button
               type="button"
               onClick={() => {
+                clearErrors();
                 window.location.href = '/api/auth/google';
               }}
               className="w-full bg-white hover:bg-gray-100 text-gray-900 font-sans font-semibold py-3 rounded-2xl text-xs transition shadow-md flex items-center justify-center gap-2.5 mb-3 select-none active:scale-[0.98]"
@@ -264,9 +336,9 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess, user, onLogout }: A
               We sent a 6-digit verification code to <strong className="text-[#F2A33C]">{email}</strong>
             </p>
 
-            {error && (
+            {shownError && (
               <div className="mb-4 p-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-sans">
-                {error}
+                {shownError}
               </div>
             )}
 

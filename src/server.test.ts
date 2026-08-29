@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { app, secureSixDigitCode } from './server';
+import { app, secureSixDigitCode, canonicalOrigin, readCookie, OAUTH_STATE_COOKIE } from './server';
 
 test('GET /api/health returns 200 with status ok', async () => {
   const res = await app.handle(new Request('http://localhost/api/health'));
@@ -322,4 +322,259 @@ test('secureSixDigitCode: 10,000 codes are all in range and mostly distinct', ()
   }
 
   expect(codes.size).toBeGreaterThanOrEqual(9000);
+});
+
+// --- Google OAuth: the mobile sign-in failures (redirect_uri, state, errors) ---
+
+function googleRequest(url: string, env: any, headers: Record<string, string> = {}): Request {
+  const request = new Request(url, { headers });
+  (request as any).env = env;
+  return request;
+}
+
+function locationOf(res: Response): URL {
+  return new URL(res.headers.get('Location') || '', 'http://localhost');
+}
+
+const GOOGLE_ENV = {
+  APP_ORIGIN: 'https://kinreader.com',
+  GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+  GOOGLE_CLIENT_SECRET: 'client-secret',
+};
+
+// The redirect_uri used to be built from the incoming request's origin, so a
+// visitor on www., on *.workers.dev, or on a preview URL sent Google a URI it
+// had never been told about and got a 400 redirect_uri_mismatch instead of a
+// consent screen.
+test('GET /api/auth/google sends Google the canonical redirect_uri, whatever host the user arrived on', async () => {
+  const res = await app.handle(
+    googleRequest('https://www.kinreader.com/api/auth/google', GOOGLE_ENV)
+  );
+
+  // First hop: onto the canonical origin, so the state cookie lands on the
+  // host that will receive the callback.
+  expect(res.status).toBe(302);
+  expect(res.headers.get('Location')).toBe('https://kinreader.com/api/auth/google?canonical=1');
+
+  const second = await app.handle(
+    googleRequest('https://kinreader.com/api/auth/google', GOOGLE_ENV)
+  );
+  const google = locationOf(second);
+  expect(google.origin).toBe('https://accounts.google.com');
+  expect(google.searchParams.get('redirect_uri')).toBe(
+    'https://kinreader.com/api/auth/google/callback'
+  );
+});
+
+test('GET /api/auth/google issues a state parameter matched by an HttpOnly SameSite=Lax cookie', async () => {
+  const res = await app.handle(
+    googleRequest('https://kinreader.com/api/auth/google', GOOGLE_ENV)
+  );
+
+  const state = locationOf(res).searchParams.get('state');
+  expect(typeof state).toBe('string');
+  expect(state!.length).toBeGreaterThan(10);
+
+  const cookie = res.headers.get('Set-Cookie') || '';
+  expect(cookie).toContain(`kr_oauth_state=${state}`);
+  expect(cookie).toContain('HttpOnly');
+  // Strict would be withheld on Google's redirect back and break every login.
+  expect(cookie).toContain('SameSite=Lax');
+  expect(cookie).toContain('Secure');
+});
+
+test('GET /api/auth/google with no client id configured redirects home with a readable auth_error', async () => {
+  const res = await app.handle(
+    googleRequest('https://kinreader.com/api/auth/google', { APP_ORIGIN: 'https://kinreader.com' })
+  );
+
+  expect(res.status).toBe(302);
+  const location = locationOf(res);
+  expect(location.origin).toBe('https://kinreader.com');
+  expect(location.searchParams.get('auth_error')).toContain('not configured');
+});
+
+test('GET /api/auth/google/callback rejects a callback whose state does not match the cookie', async () => {
+  const kv = createKvStub();
+  const res = await app.handle(
+    googleRequest(
+      'https://kinreader.com/api/auth/google/callback?code=abc&state=attacker-state',
+      { ...GOOGLE_ENV, AUTH_CODES: kv },
+      { Cookie: 'kr_oauth_state=real-state' }
+    )
+  );
+
+  expect(res.status).toBe(302);
+  expect(locationOf(res).searchParams.get('auth_error')).toBeTruthy();
+  // Nothing was signed in on the way past.
+  expect(kv.store.size).toBe(0);
+});
+
+test('GET /api/auth/google/callback rejects a callback with no state cookie at all', async () => {
+  const kv = createKvStub();
+  const res = await app.handle(
+    googleRequest('https://kinreader.com/api/auth/google/callback?code=abc&state=anything', {
+      ...GOOGLE_ENV,
+      AUTH_CODES: kv,
+    })
+  );
+
+  expect(locationOf(res).searchParams.get('auth_error')).toBeTruthy();
+  expect(kv.store.size).toBe(0);
+});
+
+test('GET /api/auth/google/callback reports a cancelled consent screen instead of "Missing Google credentials"', async () => {
+  const res = await app.handle(
+    googleRequest(
+      'https://kinreader.com/api/auth/google/callback?error=access_denied&state=s',
+      GOOGLE_ENV,
+      { Cookie: 'kr_oauth_state=s' }
+    )
+  );
+
+  expect(locationOf(res).searchParams.get('auth_error')).toBe('Google sign-in was cancelled');
+});
+
+test('GET /api/auth/google/callback signs in a verified Google account and hands back a real token', async () => {
+  const kv = createKvStub();
+  const realFetch = global.fetch;
+  global.fetch = (async (input: any) => {
+    const url = typeof input === 'string' ? input : input?.url;
+    if (url.includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ access_token: 'google-access-token' }), { status: 200 });
+    }
+    if (url.includes('googleapis.com/oauth2/v3/userinfo')) {
+      return new Response(
+        JSON.stringify({ email: 'Reader@Example.com', email_verified: true, name: 'Reader' }),
+        { status: 200 }
+      );
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  }) as any;
+
+  try {
+    const res = await app.handle(
+      googleRequest(
+        'https://kinreader.com/api/auth/google/callback?code=abc&state=s',
+        { ...GOOGLE_ENV, AUTH_CODES: kv },
+        { Cookie: 'kr_oauth_state=s' }
+      )
+    );
+
+    const location = locationOf(res);
+    expect(location.origin).toBe('https://kinreader.com');
+    expect(location.searchParams.get('email')).toBe('reader@example.com');
+    const token = location.searchParams.get('auth_token');
+    expect(typeof token).toBe('string');
+
+    // The token the browser was handed is the one the store will accept.
+    const record = JSON.parse(kv.store.get('auth:reader@example.com')!);
+    expect(record.token).toBe(token);
+    // The one-shot state cookie is spent.
+    expect(res.headers.get('Set-Cookie')).toContain('Max-Age=0');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+// A userinfo response with no email used to write a record under
+// `auth:undefined` and send the browser to `?email=undefined`, which then
+// failed verification with nothing shown to the user.
+test('GET /api/auth/google/callback refuses a Google profile with no email instead of writing auth:undefined', async () => {
+  const kv = createKvStub();
+  const realFetch = global.fetch;
+  global.fetch = (async (input: any) => {
+    const url = typeof input === 'string' ? input : input?.url;
+    if (url.includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ access_token: 'google-access-token' }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ name: 'No Email' }), { status: 200 });
+  }) as any;
+
+  try {
+    const res = await app.handle(
+      googleRequest(
+        'https://kinreader.com/api/auth/google/callback?code=abc&state=s',
+        { ...GOOGLE_ENV, AUTH_CODES: kv },
+        { Cookie: 'kr_oauth_state=s' }
+      )
+    );
+
+    const location = locationOf(res);
+    expect(location.searchParams.get('auth_token')).toBeNull();
+    expect(location.searchParams.get('auth_error')).toContain('email address');
+    expect(kv.store.size).toBe(0);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('GET /api/auth/google/callback refuses an unverified Google email', async () => {
+  const kv = createKvStub();
+  const realFetch = global.fetch;
+  global.fetch = (async (input: any) => {
+    const url = typeof input === 'string' ? input : input?.url;
+    if (url.includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ access_token: 'google-access-token' }), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({ email: 'unverified@example.com', email_verified: false }),
+      { status: 200 }
+    );
+  }) as any;
+
+  try {
+    const res = await app.handle(
+      googleRequest(
+        'https://kinreader.com/api/auth/google/callback?code=abc&state=s',
+        { ...GOOGLE_ENV, AUTH_CODES: kv },
+        { Cookie: 'kr_oauth_state=s' }
+      )
+    );
+
+    expect(locationOf(res).searchParams.get('auth_error')).toContain('not verified');
+    expect(kv.store.size).toBe(0);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('canonicalOrigin keeps localhost on its own origin so local dev still works', () => {
+  expect(canonicalOrigin({}, new Request('http://localhost:3000/api/auth/google'))).toBe(
+    'http://localhost:3000'
+  );
+  // An unconfigured production origin still gets a stable, registerable URI.
+  expect(canonicalOrigin({}, new Request('https://kinetic-reader.workers.dev/api/auth/google'))).toBe(
+    'https://kinreader.com'
+  );
+  expect(
+    canonicalOrigin({ APP_ORIGIN: 'https://staging.kinreader.com/' }, new Request('https://x.dev/'))
+  ).toBe('https://staging.kinreader.com');
+});
+
+test('readCookie picks its cookie out of a crowded header and ignores lookalikes', () => {
+  const header = `theme=dark; not_${OAUTH_STATE_COOKIE}=decoy; ${OAUTH_STATE_COOKIE}=abc123; other=1`;
+
+  expect(readCookie(header, OAUTH_STATE_COOKIE)).toBe('abc123');
+  expect(readCookie(header, 'missing')).toBeNull();
+  expect(readCookie(null, OAUTH_STATE_COOKIE)).toBeNull();
+  expect(readCookie('', OAUTH_STATE_COOKIE)).toBeNull();
+});
+
+// A dev proxy that rewrites `Host` (Vite's `changeOrigin: true`) makes the
+// canonical-origin bounce look permanently necessary; without the one-hop cap
+// the browser would ping-pong forever instead of reaching Google.
+test('GET /api/auth/google bounces to the canonical origin at most once', async () => {
+  const res = await app.handle(
+    googleRequest('http://localhost:3008/api/auth/google?canonical=1', {
+      ...GOOGLE_ENV,
+      APP_ORIGIN: 'http://localhost:3000',
+    })
+  );
+
+  const location = locationOf(res);
+  expect(location.origin).toBe('https://accounts.google.com');
+  expect(location.searchParams.get('redirect_uri')).toBe(
+    'http://localhost:3000/api/auth/google/callback'
+  );
 });

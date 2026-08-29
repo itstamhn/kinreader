@@ -10,6 +10,12 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
+  "vars": {
+    // The origin Google redirects OAuth back to. It must match a registered
+    // "Authorized redirect URI" in the Google Cloud console exactly:
+    // https://kinreader.com/api/auth/google/callback
+    "APP_ORIGIN": "https://kinreader.com"
+  },
   "kv_namespaces": [
     { "binding": "AUTH_CODES", "id": "7348870b7ec3415ea3c4e751a860022c" }
   ],

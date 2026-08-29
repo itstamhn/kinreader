@@ -84,6 +84,7 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [isClipOpen, setIsClipOpen] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [detectedClipboardUrl, setDetectedClipboardUrl] = useState<string>('');
@@ -306,13 +307,27 @@ export function App() {
     }
   }, [article?.title, isPlaying]);
 
-  // Check URL on mount for auth token
+  // Check URL on mount for an auth token, or for a failure reported by the
+  // redirect back from Google.
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('auth_token');
     const email = urlParams.get('email');
+    const failure = urlParams.get('auth_error');
+
+    // Every Google failure path redirects to `/?auth_error=...`. Nothing used
+    // to read it, so a failed sign-in landed the user back on an ordinary home
+    // screen with no explanation at all -- on a phone, where the address bar
+    // is collapsed, that is indistinguishable from the button doing nothing.
+    if (failure) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setAuthError(failure);
+      setIsAuthOpen(true);
+      return;
+    }
+
     if (!token || !email) return;
 
     // Strip the credentials from the address bar before any await.
@@ -467,10 +482,15 @@ export function App() {
 
       <AuthModal
         isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
+        onClose={() => {
+          setAuthError(null);
+          setIsAuthOpen(false);
+        }}
         onLoginSuccess={handleLoginSuccess}
         user={user}
         onLogout={handleLogout}
+        externalError={authError}
+        onDismissExternalError={() => setAuthError(null)}
       />
 
       <SettingsModal
