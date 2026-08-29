@@ -61,6 +61,7 @@ export const {
   getAuth,
   auth,
   count,
+  consumeOne,
   create,
   deleteMany,
   deleteOne,
@@ -69,5 +70,6 @@ export const {
   updateMany,
   updateOne,
   getLatestJwks,
+  incrementOne,
   rotateKeys,
 } = authRuntime;
