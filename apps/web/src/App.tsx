@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
@@ -30,6 +30,18 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   elevenVoiceId: '21m00Tcm4TlvDq8ikWAM',
   defaultRate: 1.5,
 };
+
+// The states article loading moves through. Replaces the old loading
+// boolean, which could only say "loading" or "not" and had no way to
+// represent a synthesis failure -- the reader could not tell a neural voice
+// from a silent fallback to the on-device one (plan 018, Step 4).
+type PlaybackStatus =
+  | 'idle' // sample article, nothing loaded
+  | 'timing' // instant word timings computed, audio not yet requested
+  | 'synthesizing' // waiting on the Convex TTS action
+  | 'ready' // neural audio loaded
+  | 'degraded' // synthesis failed; on-device speech instead
+  | 'error'; // nothing playable
 
 export function App() {
   const crpc = useCRPC();
@@ -70,14 +82,6 @@ export function App() {
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [isRampEnabled, setIsRampEnabled] = useState(false);
 
-  // Kinetic Words & Playback State
-  const [words, setWords] = useState<WordTiming[]>(SAMPLE_TIMINGS);
-  const [currentWordIndex, setCurrentWordIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(settings.defaultRate || 1.5);
-  const [progress, setProgress] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(SAMPLE_DURATION);
   const [viewMode, setViewMode] = useState<'kinetic' | 'full'>('kinetic');
 
   // Modals & Bottom Sheets State
@@ -87,62 +91,70 @@ export function App() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isClipOpen, setIsClipOpen] = useState(false);
-  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
   const [detectedClipboardUrl, setDetectedClipboardUrl] = useState<string>('');
 
+  // The engine is constructed once, lazily, on the first render rather than
+  // inside an effect: `useSyncExternalStore` needs `subscribe`/`getSnapshot`
+  // bound to a real instance starting with that very first render. This is
+  // the standard "lazy ref initialization" pattern and is StrictMode-safe --
+  // a duplicate instance from a double-render is simply discarded, never
+  // assigned to the ref.
   const engineRef = useRef<SpeechEngine | null>(null);
+  if (engineRef.current === null) {
+    engineRef.current = new SpeechEngine();
+  }
+  const engine = engineRef.current;
 
-  // Initialize Speech Engine on mount
+  // The engine owns playback state -- words, duration, isPlaying,
+  // currentWordIndex, progress, currentTime, rate, mode -- and React only
+  // subscribes to it. Any future `useState` that shadows one of these
+  // fields is plan 018's Bug 1 or Bug 2 returning.
+  const playback = useSyncExternalStore(engine.subscribe, engine.getSnapshot, engine.getServerSnapshot);
+
+  // `isRampEnabled` is read fresh from a ref (not a render-time closure) by
+  // the ramp effect below, so toggling it never has to be a dependency of
+  // an effect that would otherwise need to re-run for unrelated reasons.
+  const isRampEnabledRef = useRef(isRampEnabled);
   useEffect(() => {
-    const engine = new SpeechEngine();
-    engine.rate = speed;
-    engine.setCallbacks(
-      (wordIdx) => {
-        setCurrentWordIndex(wordIdx);
-        // Automatic ramp handling if enabled
-        if (isRampEnabled && wordIdx > 0 && wordIdx % 12 === 0) {
-          setSpeed((prev) => {
-            const nextSpeed = Math.min(3.5, Number((prev + 0.02).toFixed(2)));
-            engine.rate = nextSpeed;
-            return nextSpeed;
-          });
-        }
-      },
-      (prog, curT, dur) => {
-        setProgress(prog);
-        setCurrentTime(curT);
-        setDuration(dur);
-      },
-      (playing) => setIsPlaying(playing)
-    );
-    engineRef.current = engine;
-
-    // Pre-load Soniox sample audio asset
-    engine.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
-
-    return () => {
-      engine.stop();
-    };
+    isRampEnabledRef.current = isRampEnabled;
   }, [isRampEnabled]);
 
+  const handleTogglePlay = () => {
+    // Read play/pause state from the engine itself, not a React mirror --
+    // this is what lets the keyboard effect below subscribe once instead of
+    // needing playback state in its dependency array.
+    if (engine.isPlaying) {
+      engine.pause();
+    } else {
+      engine.play();
+    }
+  };
+
+  // The only place `engine.rate` is written (done criterion of plan 018).
+  const handleSpeedChange = (newSpeed: number) => {
+    const clamped = Math.max(0.8, Math.min(3.5, Number(newSpeed.toFixed(2))));
+    engine.rate = clamped;
+  };
+
+  const handleSeekProgress = (percent: number) => {
+    engine.seekToProgress(percent);
+  };
+
+  const handleSelectWord = (wordIndex: number) => {
+    engine.seekToWordIndex(wordIndex);
+  };
+
   // Load article audio with Soniox v2
-  const loadArticleContent = async (
-    art: ArticleData,
-    engine: SpeechEngine,
-    currSettings: ReaderSettings
-  ) => {
-    engine.stop();
-    setCurrentWordIndex(0);
-    setProgress(0);
-    engine.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
+  const loadArticleContent = async (art: ArticleData, eng: SpeechEngine, currSettings: ReaderSettings) => {
+    eng.stop();
+    eng.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
 
     const articleKey = art.sourceUrl || art.title;
 
     if (art.title === SAMPLE_ARTICLE.title) {
-      setWords(SAMPLE_TIMINGS);
-      setDuration(SAMPLE_DURATION);
-      engine.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
-      setIsLoadingAudio(false);
+      eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
+      setPlaybackStatus('ready');
       return;
     }
 
@@ -157,15 +169,15 @@ export function App() {
       return { text: w, start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) };
     });
 
-    setWords(initialWordTimings);
-    setDuration(Number(curTime.toFixed(3)));
-    setIsLoadingAudio(true);
+    eng.setWordTimings(initialWordTimings, Number(curTime.toFixed(3)));
+    setPlaybackStatus('timing');
 
     // 2. Synthesize via the Convex TTS action (Soniox v2 + Groq alignment,
     // server-side cached by articleId+voice+speed -- see
     // convex/routers/tts.ts). Bounded by the same ~9s budget the old
     // fetch's AbortSignal.timeout used, so a slow/unreachable deployment
     // still falls through to instant on-device speech below.
+    setPlaybackStatus('synthesizing');
     try {
       const result = await Promise.race([
         synthesizeTtsMutation.mutateAsync({
@@ -185,58 +197,26 @@ export function App() {
       ]);
 
       if ('audioUrl' in result && result.audioUrl && result.words && result.words.length > 0) {
-        setWords(result.words);
-        setDuration(result.duration || curTime);
-        engine.loadAudioUrl(result.audioUrl, result.words, result.duration || curTime);
-        setIsLoadingAudio(false);
+        eng.loadAudioUrl(result.audioUrl, result.words, result.duration || curTime);
+        setPlaybackStatus('ready');
         return;
       }
     } catch (err) {
       console.warn('Soniox neural synthesis fallback:', err);
     }
 
-    // 3. Fallback to device speech only if offline or synthesis fails
-    engine.loadBrowserText(art.content, initialWordTimings);
-    setIsLoadingAudio(false);
-  };
-
-  const handleTogglePlay = () => {
-    if (!engineRef.current) return;
-    if (isPlaying) {
-      engineRef.current.pause();
-    } else {
-      engineRef.current.play();
-    }
-  };
-
-  const handleSpeedChange = (newSpeed: number) => {
-    const clamped = Math.max(0.8, Math.min(3.5, Number(newSpeed.toFixed(2))));
-    setSpeed(clamped);
-    if (engineRef.current) {
-      engineRef.current.rate = clamped;
-    }
-  };
-
-  const handleSeekProgress = (percent: number) => {
-    if (engineRef.current) {
-      engineRef.current.seekToProgress(percent);
-    }
-  };
-
-  const handleSelectWord = (wordIndex: number) => {
-    if (engineRef.current) {
-      engineRef.current.seekToWordIndex(wordIndex);
-    }
+    // 3. Fallback to device speech only if offline or synthesis fails.
+    // Surfaced to the reader as 'degraded' rather than silently swapped --
+    // previously this was indistinguishable from a normal neural playback.
+    eng.loadBrowserText(art.content, initialWordTimings);
+    setPlaybackStatus('degraded');
   };
 
   const handleLoadNewArticle = (newArticle: ArticleData) => {
     setArticle(newArticle);
     saveArticleToLibrary(newArticle);
     setSavedArticles(getSavedArticles());
-
-    if (engineRef.current) {
-      loadArticleContent(newArticle, engineRef.current, settings);
-    }
+    loadArticleContent(newArticle, engine, settings);
   };
 
   const handleDeleteArticle = (id: string) => {
@@ -257,12 +237,52 @@ export function App() {
   const handleSaveSettings = (newSettings: ReaderSettings) => {
     setSettings(newSettings);
     localStorage.setItem('kinetic_reader_settings', JSON.stringify(newSettings));
-    if (newSettings.defaultRate && Math.abs(newSettings.defaultRate - speed) > 0.05) {
+    if (newSettings.defaultRate && Math.abs(newSettings.defaultRate - playback.rate) > 0.05) {
       handleSpeedChange(newSettings.defaultRate);
     }
   };
 
-  // Keyboard Shortcuts (Space play, ←/→ clauses, ↑/↓ tempo)
+  // Pre-load the sample audio once on mount. The engine itself is
+  // constructed above (once, lazily), so this effect only owns applying the
+  // user's saved default rate, the initial load, and the stop-on-unmount
+  // cleanup -- it never depends on anything that would otherwise tear the
+  // engine down (plan 018, Bug 1). The rate is applied through
+  // `handleSpeedChange` rather than written here directly, so
+  // `engine.rate` has exactly one call site in this file.
+  useEffect(() => {
+    handleSpeedChange(settings.defaultRate || 1.5);
+    engine.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
+    setPlaybackStatus('ready');
+    return () => {
+      engine.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on
+    // mount; `engine` is a stable ref-held singleton for the component's
+    // lifetime, and only the initial `settings` value should seed the rate.
+  }, [engine]);
+
+  // Automatic ramp handling: nudge the rate up every 12 words while ramp
+  // mode is on. Triggered by an actual word-index change -- matching the
+  // original in-engine-callback behavior exactly -- and reads the ramp flag
+  // fresh from the ref so toggling ramp on/off never itself fires a bump.
+  useEffect(() => {
+    if (!isRampEnabledRef.current) return;
+    const idx = playback.currentWordIndex;
+    if (idx > 0 && idx % 12 === 0) {
+      handleSpeedChange(Math.min(3.5, Number((engine.rate + 0.02).toFixed(2))));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
+    // keyed on the word index alone; ramp-enabled is read fresh from the ref.
+  }, [playback.currentWordIndex]);
+
+  // Keyboard Shortcuts (Space play, ←/→ seek, ↑/↓ tempo)
+  //
+  // This used to depend on `[isPlaying, currentTime, duration, speed]`.
+  // `currentTime` used to be pushed from the engine's rAF sync loop up to 60
+  // times a second while playing, so the listener was torn down and
+  // re-added on nearly every frame (plan 018, Bug 2). It only needs the
+  // current values at the moment a key is pressed, so read them from the
+  // engine instead of closing over React state, and subscribe exactly once.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -272,41 +292,44 @@ export function App() {
         handleTogglePlay();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
-        if (duration > 0) {
-          const newTime = Math.max(0, currentTime - 15 * speed);
-          handleSeekProgress((newTime / duration) * 100);
+        if (engine.duration > 0) {
+          const newTime = Math.max(0, engine.currentTime - 15 * engine.rate);
+          handleSeekProgress((newTime / engine.duration) * 100);
         }
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
-        if (duration > 0) {
-          const newTime = Math.min(duration, currentTime + 15 * speed);
-          handleSeekProgress((newTime / duration) * 100);
+        if (engine.duration > 0) {
+          const newTime = Math.min(engine.duration, engine.currentTime + 15 * engine.rate);
+          handleSeekProgress((newTime / engine.duration) * 100);
         }
       } else if (e.code === 'ArrowUp' || (e.shiftKey && (e.key === '+' || e.key === '='))) {
         e.preventDefault();
-        handleSpeedChange(Math.min(3.5, Number((speed + 0.25).toFixed(2))));
+        handleSpeedChange(Math.min(3.5, Number((engine.rate + 0.25).toFixed(2))));
       } else if (e.code === 'ArrowDown' || (e.shiftKey && (e.key === '-' || e.key === '_'))) {
         e.preventDefault();
-        handleSpeedChange(Math.max(0.8, Number((speed - 0.25).toFixed(2))));
+        handleSpeedChange(Math.max(0.8, Number((engine.rate - 0.25).toFixed(2))));
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, currentTime, duration, speed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
+    // subscribes once; everything it reads comes from the engine at call
+    // time, not from render-time closures.
+  }, []);
 
   // Dynamic Browser Tab Title
   useEffect(() => {
     if (typeof document !== 'undefined') {
       if (article?.title) {
-        document.title = isPlaying
+        document.title = playback.isPlaying
           ? `▶ ${article.title} • Kinreader`
           : `${article.title} • Kinreader`;
       } else {
         document.title = 'Kinreader — Made to Listen';
       }
     }
-  }, [article?.title, isPlaying]);
+  }, [article?.title, playback.isPlaying]);
 
   // Check URL on mount for a failure reported by OAuth redirect
   useEffect(() => {
@@ -322,7 +345,7 @@ export function App() {
     }
   }, []);
 
-  const remainingSeconds = Math.max(0, duration - currentTime);
+  const remainingSeconds = Math.max(0, playback.duration - playback.currentTime);
 
   return (
     <div className="flex flex-col justify-between h-[100dvh] max-h-[100dvh] w-full bg-kinreader-radial text-[#ECEAE4] select-none relative overflow-hidden font-sans">
@@ -335,7 +358,7 @@ export function App() {
         onOpenClip={() => setIsClipOpen(true)}
         user={user}
         onOpenAuth={() => setIsAuthOpen(true)}
-        speed={speed}
+        speed={playback.rate}
         isVoiceEnabled={isVoiceEnabled}
         onToggleVoice={() => setIsVoiceEnabled(!isVoiceEnabled)}
         isRampEnabled={isRampEnabled}
@@ -349,15 +372,15 @@ export function App() {
         <div className="h-[2px] w-full rounded-full bg-white/10 overflow-hidden">
           <div
             className="h-full rounded-full bg-gradient-to-r from-[#B87718] to-[#F2A33C] shadow-[0_0_8px_rgba(242,163,60,0.5)] transition-all duration-75"
-            style={{ width: `${progress}%` }}
+            style={{ width: `${playback.progress}%` }}
           />
         </div>
       </div>
 
       {/* 3. Kinetic Display (Design 3a mobile scale & desktop) */}
       <KineticDisplay
-        words={words}
-        currentWordIndex={currentWordIndex}
+        words={playback.words}
+        currentWordIndex={playback.currentWordIndex}
         onSelectWord={handleSelectWord}
         viewMode={viewMode}
         fontSize={settings.fontSize || 'md'}
@@ -366,20 +389,21 @@ export function App() {
 
       {/* 4. Bottom Controls (Design 3a mobile thumb zone & desktop bar) */}
       <Controls
-        isPlaying={isPlaying}
+        isPlaying={playback.isPlaying}
         onTogglePlay={handleTogglePlay}
-        speed={speed}
+        speed={playback.rate}
         onSpeedChange={handleSpeedChange}
-        progress={progress}
+        progress={playback.progress}
         onSeekProgress={handleSeekProgress}
-        currentTime={currentTime}
-        duration={duration}
+        currentTime={playback.currentTime}
+        duration={playback.duration}
         remainingSeconds={remainingSeconds}
         sourceUrl={article.sourceUrl}
         sourceType={article.sourceType}
         viewMode={viewMode}
         onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
-        isLoadingAudio={isLoadingAudio}
+        isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
+        isDegraded={playbackStatus === 'degraded'}
       />
 
       {/* Modals, Drawers, Clip Maker & Mobile Clipboard Sheet */}
@@ -398,8 +422,8 @@ export function App() {
         isOpen={isClipOpen}
         onClose={() => setIsClipOpen(false)}
         article={article}
-        currentWord={words[currentWordIndex]?.text}
-        speed={speed}
+        currentWord={playback.words[playback.currentWordIndex]?.text}
+        speed={playback.rate}
       />
 
       <LibraryDrawer
@@ -423,9 +447,9 @@ export function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         user={user}
         onOpenAuth={() => setIsAuthOpen(true)}
-        isPlaying={isPlaying}
+        isPlaying={playback.isPlaying}
         onTogglePlay={handleTogglePlay}
-        speed={speed}
+        speed={playback.rate}
       />
 
       <UrlInputModal
