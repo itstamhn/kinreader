@@ -1,6 +1,24 @@
 {
   "version": 1,
   "skills": {
+    "authentication": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "authentication/SKILL.md",
+      "computedHash": "5896f00650c291115461a830cb1db26568f4b2017215a752b6afc04c66025719"
+    },
+    "compliance": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "compliance/SKILL.md",
+      "computedHash": "a3b1c13003b57adde3d390cedc0319a8b5aecad0bd61359d77ce6a9fdbc4fb37"
+    },
+    "content": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "content/SKILL.md",
+      "computedHash": "0b3a1a300e58463f9dbcf006265558ddad653e06afda5a6e1b1db6f4f101491d"
+    },
     "convex": {
       "source": "get-convex/agent-skills",
       "sourceType": "github",
@@ -199,11 +217,83 @@
       "skillPath": "skills/convex-verify/SKILL.md",
       "computedHash": "dbe65a37ca2e9a5afa55669b8928ce1dc3ac765151452008f9105bde049228f7"
     },
+    "email-automation": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "email-automation/SKILL.md",
+      "computedHash": "9a37053eca8eb06c0c6063e3dd0ca5f05339eba2da6884f07e9824ceaef0c0da"
+    },
+    "email-skills": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "786c1ba8b81904bc232c61766898662b03245ef30486d49409f40b310c0bdb8e"
+    },
     "improve": {
       "source": "shadcn/improve",
       "sourceType": "github",
       "skillPath": "skills/improve/SKILL.md",
       "computedHash": "39a9358732dcff385e9e4d3e60b4547856f834e54a58b35e455aa9bd49928c13"
+    },
+    "list-hygiene": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "list-hygiene/SKILL.md",
+      "computedHash": "0fb786ceaa76953a9dde6dd326513ffd155e75bea945e1a03558957a0a01caf0"
+    },
+    "marketing-campaigns": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "marketing-campaigns/SKILL.md",
+      "computedHash": "8e327caf91c62695cc2b1935bbda6dbc2c5428aa549797b7b93c9a4cdd4e9a62"
+    },
+    "monitoring": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "monitoring/SKILL.md",
+      "computedHash": "be00064feb5f3380dca9d525bfce13c5c3cd9251c9e18110e119a2ccd12bb747"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "c1a68ee06a668aced9ab2b5fbdea5f989864123794eb2e056b339a072dbb7f10"
+    },
+    "tailwind-design-system": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/frontend-mobile-development/skills/tailwind-design-system/SKILL.md",
+      "computedHash": "cd61afd28f594e8b6712b61749209cbb4466e3eec4e4223793bbd97fc85c1b63"
+    },
+    "transactional": {
+      "source": "autosendhq/email-skills",
+      "sourceType": "github",
+      "skillPath": "transactional/SKILL.md",
+      "computedHash": "8fb5c8656f3b85314d80a4c1f38ce01f2f230ddc0141772b4f89e3e2b7bfe792"
+    },
+    "typescript-advanced-types": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/javascript-typescript/skills/typescript-advanced-types/SKILL.md",
+      "computedHash": "8cbf2bf600f392d7260e476e3202932a876e2281cda3b15a8b6a5a43f383252d"
+    },
+    "vercel-composition-patterns": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/composition-patterns/SKILL.md",
+      "computedHash": "575757e3e25761c8c562d6e395d29f0b76c98b1273c0bd72d88e6ab1bc9c7d42"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/react-best-practices/SKILL.md",
+      "computedHash": "ca7b0c0c6e5f2750043f7f0cd72d16ac4e2abc48f9b5500d047a4b77a2506212"
+    },
+    "webapp-testing": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/webapp-testing/SKILL.md",
+      "computedHash": "ad5b1fc52807e9afa4635e59218a026b164dc58b6c3f41b0f7c644dcd6ccf572"
     }
   }
 }
