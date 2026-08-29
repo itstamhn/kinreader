@@ -22,9 +22,14 @@ the table when done.
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
+| 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
+
+**Note on 009**: re-plan it after the Astro marketing app exists. Its two remaining routes
+(`/r/:id`, `/api/og`) are a share page and an OG card built as escaped HTML strings —
+static-site-generator work, not Worker work. See plan 013, "What this sets up".
 
 ## Execution log
 
