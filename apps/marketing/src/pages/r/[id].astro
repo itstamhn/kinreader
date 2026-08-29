@@ -1,0 +1,59 @@
+---
+// The share page, moved from the Worker (apps/web/src/server.ts) when Astro
+// took over the apex. It stays on kinreader.com deliberately: links already in
+// the wild -- and in crawler caches -- point here, and the whole purpose of the
+// route is to be fetched by a crawler.
+//
+// Two things inherited from the Worker version, both true and both flagged in
+// plans/README.md as follow-ups: nothing in the app generates `/r/:id` links,
+// and the app does not handle the `?read=` it forwards to. Porting preserved
+// the URL contract; it did not make the feature work.
+export const prerender = false;
+
+const { id } = Astro.params;
+const params = Astro.url.searchParams;
+
+const title = params.get('t') || 'Kinetic Reader Article';
+const author = params.get('a') || 'Author';
+const image = params.get('img') || '';
+
+const ogImage = new URL(
+  `/api/og?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&image=${encodeURIComponent(image)}`,
+  Astro.site
+).href;
+
+// The reader now lives on its own origin, so this is absolute. A relative
+// redirect would land back on the marketing site and loop.
+const appUrl = `https://app.kinreader.com/?read=${encodeURIComponent(id ?? '')}`;
+---
+
+<!--
+  Every interpolation below goes through Astro's default escaping. Do not
+  reach for `set:html` on this page: the values are attacker-controlled query
+  parameters, and escaping them is what plan 004 was about.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title} • kinreader.com</title>
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@KinreaderFM" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={`by ${author} • Listen to this article in 1-line synchronized kinetic typography.`} />
+    <meta name="twitter:image" content={ogImage} />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={`by ${author} • Made to listen on kinreader.com`} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:url" content={Astro.url.href} />
+
+    <meta name="robots" content="noindex" />
+    <meta http-equiv="refresh" content={`0;url=${appUrl}`} />
+  </head>
+  <body style="background:#0d0d14;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;">
+    <p>Loading {title} on kinreader.com… <a href={appUrl} style="color:#F2A33C;">Continue</a></p>
+  </body>
+</html>

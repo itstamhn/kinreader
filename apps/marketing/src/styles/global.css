@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+/* Duplicated from apps/web/src/index.css on purpose -- four colours and three
+   font families are cheaper copied than coupled through a shared package.
+   If the two sites visibly drift and it bothers someone, that is the moment to
+   extract them, not before. */
+@theme {
+  --color-ink: #0B0C10;
+  --color-surface: #14151C;
+  --color-paper: #ECEAE4;
+  --color-cream: #F4F0E6;
+  --color-amber: #F2A33C;
+
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Newsreader", ui-serif, Georgia, serif;
+  --font-mono: "Spline Sans Mono", ui-monospace, monospace;
+}
+
+html {
+  background: var(--color-ink);
+  color: var(--color-paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+.bg-kinreader-radial {
+  background:
+    radial-gradient(60% 50% at 50% 0%, rgba(242, 163, 60, 0.08) 0%, transparent 70%),
+    var(--color-ink);
+}

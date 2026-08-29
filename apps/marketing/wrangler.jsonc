@@ -1,0 +1,18 @@
+{
+  // The @astrojs/cloudflare adapter generates dist/server/wrangler.json at build
+  // time and fills in `main` and `assets` itself -- do NOT set them here, or the
+  // Cloudflare Vite plugin resolves `main` against a file that does not exist
+  // yet and the build fails before Astro has written it.
+  //
+  // What this file is for is the deploy-time configuration the adapter has no
+  // opinion about: the name, the compat settings, and the domains.
+  "name": "kinreader-marketing",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The apex and www. The reader is a separate Worker on app.kinreader.com,
+  // deployed from apps/web with its own config.
+  "routes": [
+    { "pattern": "kinreader.com", "custom_domain": true },
+    { "pattern": "www.kinreader.com", "custom_domain": true }
+  ]
+}

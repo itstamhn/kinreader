@@ -46,81 +46,24 @@ test('POST /api/tts no longer exists on the Spiceflow app (404, not 400)', async
 // silently 404'd because nothing checked for stragglers. This scans every
 // .ts/.tsx file under src/ and fails if any of them still mentions a dead
 // route, aside from this file's own assertions above.
-test('no file under src/ references api/extract or api/tts except this file\'s own 404 assertions', async () => {
+//
+// `api/og` and `r/` joined the list with plan 014: they moved to the Astro app
+// on the apex, and this Worker now serves app.kinreader.com, where a link to
+// either would 404 in production and nowhere else.
+const DEAD_ROUTES = ['api/extract', 'api/tts', 'api/og', '/r/'];
+
+test('no file under src/ references a route that moved away from this Worker', async () => {
   const glob = new Bun.Glob('**/*.{ts,tsx}');
   const offenders: string[] = [];
 
   for await (const relPath of glob.scan({ cwd: import.meta.dir })) {
     if (relPath === 'server.test.ts') continue; // this file -- permitted, see above
     const text = await Bun.file(`${import.meta.dir}/${relPath}`).text();
-    if (text.includes('api/extract') || text.includes('api/tts')) {
-      offenders.push(relPath);
-    }
+    const hit = DEAD_ROUTES.find((route) => text.includes(route));
+    if (hit) offenders.push(`${relPath} (${hit})`);
   }
 
   expect(offenders).toEqual([]);
-});
-
-test('GET /r/:id escapes a </title><script> payload in the t param', async () => {
-  const res = await app.handle(
-    new Request('http://localhost/r/x?t=%3C/title%3E%3Cscript%3Ealert(1)%3C/script%3E')
-  );
-
-  const body = await res.text();
-  expect(body).not.toContain('<script>');
-  expect(body).toContain('&lt;script&gt;');
-});
-
-test('GET /r/:id escapes an attribute-breaking payload in the a param', async () => {
-  const res = await app.handle(
-    new Request('http://localhost/r/x?a=%22%3E%3Cscript%3Ealert(1)%3C/script%3E')
-  );
-
-  const body = await res.text();
-  expect(body).not.toContain('"><script>');
-  expect(body).toContain('&quot;&gt;&lt;script&gt;');
-});
-
-test('GET /r/:id renders an ordinary title as readable text', async () => {
-  const res = await app.handle(new Request('http://localhost/r/x?t=Hello%20World'));
-
-  const body = await res.text();
-  expect(body).toContain('Hello World');
-});
-
-test('GET /r/:id escapes an apostrophe in the title', async () => {
-  const res = await app.handle(new Request("http://localhost/r/x?t=Dan's%20Article"));
-
-  const body = await res.text();
-  expect(body).toContain('Dan&#39;s Article');
-});
-
-test('GET /api/og escapes a <script> payload in the title param', async () => {
-  const res = await app.handle(
-    new Request('http://localhost/api/og?title=%3Cscript%3Ealert(1)%3C/script%3E')
-  );
-
-  const body = await res.text();
-  expect(body).not.toContain('<script>');
-  expect(body).toContain('&lt;script&gt;');
-});
-
-test('GET /api/og rejects a javascript: image URL', async () => {
-  const res = await app.handle(
-    new Request('http://localhost/api/og?image=javascript:alert(1)')
-  );
-
-  const body = await res.text();
-  expect(body).not.toContain('javascript:');
-});
-
-test('GET /api/og allows a legitimate https image URL through as an href', async () => {
-  const res = await app.handle(
-    new Request('http://localhost/api/og?image=https://example.com/a.png')
-  );
-
-  const body = await res.text();
-  expect(body).toContain('href="https://example.com/a.png"');
 });
 
 // --- Server-side token verification against KV-backed auth store (plan 003) ---
@@ -337,7 +280,7 @@ function locationOf(res: Response): URL {
 }
 
 const GOOGLE_ENV = {
-  APP_ORIGIN: 'https://kinreader.com',
+  APP_ORIGIN: 'https://app.kinreader.com',
   GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
   GOOGLE_CLIENT_SECRET: 'client-secret',
 };
@@ -347,28 +290,31 @@ const GOOGLE_ENV = {
 // had never been told about and got a 400 redirect_uri_mismatch instead of a
 // consent screen.
 test('GET /api/auth/google sends Google the canonical redirect_uri, whatever host the user arrived on', async () => {
+  // The apex is the realistic case now that it serves the marketing site: a
+  // stale link or bookmark to the old auth URL must still reach Google with a
+  // redirect_uri the console has registered.
   const res = await app.handle(
-    googleRequest('https://www.kinreader.com/api/auth/google', GOOGLE_ENV)
+    googleRequest('https://kinreader.com/api/auth/google', GOOGLE_ENV)
   );
 
   // First hop: onto the canonical origin, so the state cookie lands on the
   // host that will receive the callback.
   expect(res.status).toBe(302);
-  expect(res.headers.get('Location')).toBe('https://kinreader.com/api/auth/google?canonical=1');
+  expect(res.headers.get('Location')).toBe('https://app.kinreader.com/api/auth/google?canonical=1');
 
   const second = await app.handle(
-    googleRequest('https://kinreader.com/api/auth/google', GOOGLE_ENV)
+    googleRequest('https://app.kinreader.com/api/auth/google', GOOGLE_ENV)
   );
   const google = locationOf(second);
   expect(google.origin).toBe('https://accounts.google.com');
   expect(google.searchParams.get('redirect_uri')).toBe(
-    'https://kinreader.com/api/auth/google/callback'
+    'https://app.kinreader.com/api/auth/google/callback'
   );
 });
 
 test('GET /api/auth/google issues a state parameter matched by an HttpOnly SameSite=Lax cookie', async () => {
   const res = await app.handle(
-    googleRequest('https://kinreader.com/api/auth/google', GOOGLE_ENV)
+    googleRequest('https://app.kinreader.com/api/auth/google', GOOGLE_ENV)
   );
 
   const state = locationOf(res).searchParams.get('state');
@@ -385,12 +331,12 @@ test('GET /api/auth/google issues a state parameter matched by an HttpOnly SameS
 
 test('GET /api/auth/google with no client id configured redirects home with a readable auth_error', async () => {
   const res = await app.handle(
-    googleRequest('https://kinreader.com/api/auth/google', { APP_ORIGIN: 'https://kinreader.com' })
+    googleRequest('https://app.kinreader.com/api/auth/google', { APP_ORIGIN: 'https://app.kinreader.com' })
   );
 
   expect(res.status).toBe(302);
   const location = locationOf(res);
-  expect(location.origin).toBe('https://kinreader.com');
+  expect(location.origin).toBe('https://app.kinreader.com');
   expect(location.searchParams.get('auth_error')).toContain('not configured');
 });
 
@@ -398,7 +344,7 @@ test('GET /api/auth/google/callback rejects a callback whose state does not matc
   const kv = createKvStub();
   const res = await app.handle(
     googleRequest(
-      'https://kinreader.com/api/auth/google/callback?code=abc&state=attacker-state',
+      'https://app.kinreader.com/api/auth/google/callback?code=abc&state=attacker-state',
       { ...GOOGLE_ENV, AUTH_CODES: kv },
       { Cookie: 'kr_oauth_state=real-state' }
     )
@@ -413,7 +359,7 @@ test('GET /api/auth/google/callback rejects a callback whose state does not matc
 test('GET /api/auth/google/callback rejects a callback with no state cookie at all', async () => {
   const kv = createKvStub();
   const res = await app.handle(
-    googleRequest('https://kinreader.com/api/auth/google/callback?code=abc&state=anything', {
+    googleRequest('https://app.kinreader.com/api/auth/google/callback?code=abc&state=anything', {
       ...GOOGLE_ENV,
       AUTH_CODES: kv,
     })
@@ -426,7 +372,7 @@ test('GET /api/auth/google/callback rejects a callback with no state cookie at a
 test('GET /api/auth/google/callback reports a cancelled consent screen instead of "Missing Google credentials"', async () => {
   const res = await app.handle(
     googleRequest(
-      'https://kinreader.com/api/auth/google/callback?error=access_denied&state=s',
+      'https://app.kinreader.com/api/auth/google/callback?error=access_denied&state=s',
       GOOGLE_ENV,
       { Cookie: 'kr_oauth_state=s' }
     )
@@ -455,14 +401,14 @@ test('GET /api/auth/google/callback signs in a verified Google account and hands
   try {
     const res = await app.handle(
       googleRequest(
-        'https://kinreader.com/api/auth/google/callback?code=abc&state=s',
+        'https://app.kinreader.com/api/auth/google/callback?code=abc&state=s',
         { ...GOOGLE_ENV, AUTH_CODES: kv },
         { Cookie: 'kr_oauth_state=s' }
       )
     );
 
     const location = locationOf(res);
-    expect(location.origin).toBe('https://kinreader.com');
+    expect(location.origin).toBe('https://app.kinreader.com');
     expect(location.searchParams.get('email')).toBe('reader@example.com');
     const token = location.searchParams.get('auth_token');
     expect(typeof token).toBe('string');
@@ -494,7 +440,7 @@ test('GET /api/auth/google/callback refuses a Google profile with no email inste
   try {
     const res = await app.handle(
       googleRequest(
-        'https://kinreader.com/api/auth/google/callback?code=abc&state=s',
+        'https://app.kinreader.com/api/auth/google/callback?code=abc&state=s',
         { ...GOOGLE_ENV, AUTH_CODES: kv },
         { Cookie: 'kr_oauth_state=s' }
       )
@@ -526,7 +472,7 @@ test('GET /api/auth/google/callback refuses an unverified Google email', async (
   try {
     const res = await app.handle(
       googleRequest(
-        'https://kinreader.com/api/auth/google/callback?code=abc&state=s',
+        'https://app.kinreader.com/api/auth/google/callback?code=abc&state=s',
         { ...GOOGLE_ENV, AUTH_CODES: kv },
         { Cookie: 'kr_oauth_state=s' }
       )
@@ -543,9 +489,10 @@ test('canonicalOrigin keeps localhost on its own origin so local dev still works
   expect(canonicalOrigin({}, new Request('http://localhost:3000/api/auth/google'))).toBe(
     'http://localhost:3000'
   );
-  // An unconfigured production origin still gets a stable, registerable URI.
+  // An unconfigured production origin still gets a stable, registerable URI --
+  // the app's own subdomain, not the apex, which serves the marketing site.
   expect(canonicalOrigin({}, new Request('https://kinetic-reader.workers.dev/api/auth/google'))).toBe(
-    'https://kinreader.com'
+    'https://app.kinreader.com'
   );
   expect(
     canonicalOrigin({ APP_ORIGIN: 'https://staging.kinreader.com/' }, new Request('https://x.dev/'))

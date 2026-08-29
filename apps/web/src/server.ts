@@ -35,13 +35,15 @@ export function secureSixDigitCode(): string {
 // The origin Google redirects back to. It has to be byte-identical between the
 // auth request and the token exchange, and registered in the Google Cloud
 // console -- so it cannot be derived from the incoming request. Deriving it is
-// what broke sign-in away from the apex domain: `www.kinreader.com`,
-// `*.workers.dev` and preview hostnames each produce a redirect_uri Google has
+// what broke sign-in away from the canonical domain: every other hostname
+// (`www.`, `*.workers.dev`, a preview URL) produces a redirect_uri Google has
 // never seen, and Google rejects it with a 400 `redirect_uri_mismatch` on its
-// own error page, before the browser is ever sent back to us. Phones land on
-// `www.` far more often than desktops do (shared links, keyboard autocomplete),
-// which is why this reads as "login doesn't work on mobile".
-const DEFAULT_APP_ORIGIN = 'https://kinreader.com';
+// own error page, before the browser is ever sent back to us.
+//
+// Plan 014 moved the reader to its own subdomain: the apex serves the Astro
+// marketing site now, so a fallback pointing there would send OAuth to a page
+// that cannot complete it.
+const DEFAULT_APP_ORIGIN = 'https://app.kinreader.com';
 
 export function canonicalOrigin(env: any, request: Request): string {
   const configured = typeof env?.APP_ORIGIN === 'string' ? env.APP_ORIGIN.trim() : '';
@@ -395,177 +397,7 @@ export const app = new Spiceflow()
       console.error('Google OAuth error:', err);
       return redirectWithAuthError(origin, err?.message || 'Google sign-in failed', clearCookie);
     }
-  })
-
-  // 3. Dynamic OpenGraph Image Generator (1200x630 Announcr-style Player Card)
-  .get('/api/og', ({ request }) => {
-    const urlObj = new URL(request.url);
-    const title = urlObj.searchParams.get('title') || 'We are in the middle of the digital renaissance';
-    const author = urlObj.searchParams.get('author') || 'DAN KOE';
-    const snippet = urlObj.searchParams.get('snippet') || title;
-    const image = urlObj.searchParams.get('image') || '';
-
-    const cleanTitle = escapeHtml(title.length > 70 ? title.slice(0, 67) + '...' : title);
-    const cleanSnippet = escapeHtml(snippet.length > 55 ? snippet.slice(0, 52) + '...' : snippet);
-    const cleanAuthor = escapeHtml(author.toUpperCase());
-    const imageHref = safeImageUrl(image);
-
-    const svg = `
-    <svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <!-- Dark Purple Ambient Background Gradient -->
-        <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#0a0a10"/>
-          <stop offset="50%" stop-color="#140a24"/>
-          <stop offset="100%" stop-color="#07070d"/>
-        </linearGradient>
-
-        <radialGradient id="glow" cx="20%" cy="30%" r="70%">
-          <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.35"/>
-          <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
-        </radialGradient>
-
-        <linearGradient id="cardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#1e1b4b" stop-opacity="0.6"/>
-          <stop offset="100%" stop-color="#0f0e17" stop-opacity="0.9"/>
-        </linearGradient>
-
-        <linearGradient id="pillGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="#8b5cf6"/>
-          <stop offset="100%" stop-color="#6366f1"/>
-        </linearGradient>
-
-        <clipPath id="cardClip">
-          <rect x="40" y="40" width="1120" height="550" rx="32" ry="32"/>
-        </clipPath>
-
-        <clipPath id="imgClip">
-          <rect x="740" y="110" width="370" height="410" rx="24" ry="24"/>
-        </clipPath>
-      </defs>
-
-      <!-- Background Canvas -->
-      <rect width="1200" height="630" fill="url(#bg)"/>
-      <rect width="1200" height="630" fill="url(#glow)"/>
-
-      <!-- Inner Glass Card Container -->
-      <g clip-path="url(#cardClip)">
-        <rect x="40" y="40" width="1120" height="550" rx="32" ry="32" fill="url(#cardGrad)" stroke="#312e81" stroke-width="2"/>
-
-        <!-- Brand Header -->
-        <circle cx="90" cy="95" r="9" fill="#10b981" />
-        <circle cx="90" cy="95" r="16" fill="none" stroke="#10b981" stroke-opacity="0.4" stroke-width="2"/>
-        <text x="115" y="102" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="24" font-weight="800" fill="#ffffff" letter-spacing="-0.5">kinreader<tspan fill="#a78bfa">.com</tspan></text>
-        <text x="940" y="100" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#9ca3af" letter-spacing="2">X ARTICLE • MADE TO LISTEN</text>
-
-        <!-- Full Article Pill -->
-        <rect x="90" y="150" width="130" height="32" rx="16" fill="#065f46" fill-opacity="0.4" stroke="#10b981" stroke-width="1.5"/>
-        <circle cx="108" cy="166" r="4" fill="#34d399"/>
-        <text x="120" y="171" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="800" fill="#6ee7b7" letter-spacing="1.5">FULL ARTICLE</text>
-
-        <!-- Article Headline -->
-        <foreignObject x="90" y="200" width="610" height="190">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'Literata', 'EB Garamond', Georgia, serif; font-size: 42px; font-weight: 700; line-height: 1.25; color: #ffffff; letter-spacing: -0.5px; text-shadow: 0 4px 12px rgba(0,0,0,0.5);">
-            ${cleanTitle}
-          </div>
-        </foreignObject>
-
-        <!-- Author Tag -->
-        <text x="90" y="420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#9ca3af" letter-spacing="1">by <tspan fill="#e5e7eb" font-weight="800">${cleanAuthor}</tspan></text>
-
-        <!-- Action / Hear it out loud Pill -->
-        <rect x="90" y="455" width="220" height="52" rx="26" fill="url(#pillGrad)" filter="drop-shadow(0 8px 16px rgba(139,92,246,0.3))"/>
-        <polygon points="122,473 122,491 138,482" fill="#ffffff"/>
-        <text x="148" y="487" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#ffffff" letter-spacing="0.5">Hear it out loud</text>
-
-        <!-- Bottom Kinetic Bar Indicator -->
-        <rect x="90" y="525" width="610" height="30" rx="8" fill="#000000" fill-opacity="0.4"/>
-        <text x="105" y="546" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#ffffff">${cleanSnippet}</text>
-
-        <!-- Right Side Diagram / Cover Image -->
-        <rect x="740" y="140" width="370" height="380" rx="24" fill="#0d0d14" stroke="#4338ca" stroke-width="2"/>
-        ${imageHref ? `<image href="${imageHref}" x="740" y="140" width="370" height="380" preserveAspectRatio="xMidYMid slice" clip-path="url(#imgClip)"/>` : `
-          <rect x="740" y="140" width="370" height="380" rx="24" fill="#181825"/>
-          <text x="925" y="340" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="54" fill="#6b7280">🎧</text>
-        `}
-      </g>
-    </svg>
-    `;
-
-    return new Response(svg, {
-      headers: {
-        'Content-Type': 'image/svg+xml',
-        'Cache-Control': 'public, max-age=86400',
-      },
-    });
-  })
-
-  // 4. Shareable Deep-Link with Dynamic Twitter Card Meta Tags
-  .get('/r/:id', ({ request, params }) => {
-    const urlObj = new URL(request.url);
-    const id = params.id;
-    const rawTitle = urlObj.searchParams.get('t') || 'Kinetic Reader Article';
-    const rawAuthor = urlObj.searchParams.get('a') || 'Author';
-    const rawImage = urlObj.searchParams.get('img') || '';
-
-    const title = escapeHtml(rawTitle);
-    const author = escapeHtml(rawAuthor);
-
-    const ogImageUrl = escapeHtml(
-      `${urlObj.origin}/api/og?title=${encodeURIComponent(rawTitle)}&author=${encodeURIComponent(rawAuthor)}&image=${encodeURIComponent(rawImage)}`
-    );
-
-    const html = `<!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>${title} • kinreader.com</title>
-
-        <!-- Twitter Card Tags -->
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:site" content="@KineticReaderFM" />
-        <meta name="twitter:title" content="${title}" />
-        <meta name="twitter:description" content="by ${author} • Listen to this article in 1-line synchronized kinetic typography." />
-        <meta name="twitter:image" content="${ogImageUrl}" />
-
-        <!-- OpenGraph Tags -->
-        <meta property="og:type" content="article" />
-        <meta property="og:title" content="${title}" />
-        <meta property="og:description" content="by ${author} • Made to listen on kinreader.com" />
-        <meta property="og:image" content="${ogImageUrl}" />
-        <meta property="og:url" content="${escapeHtml(request.url)}" />
-
-        <meta http-equiv="refresh" content="0;url=/?read=${encodeURIComponent(id)}" />
-      </head>
-      <body style="background:#0d0d14;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;">
-        <p>Loading ${title} on kinreader.com...</p>
-      </body>
-    </html>`;
-
-    return new Response(html, {
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
   });
-
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function safeImageUrl(input: string): string {
-  try {
-    const parsed = new URL(input);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
-    return escapeHtml(parsed.toString());
-  } catch {
-    return '';
-  }
-}
 
 const AUTH_TTL_SECONDS = 15 * 60;
 

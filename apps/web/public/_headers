@@ -14,3 +14,6 @@
   X-Content-Type-Options: nosniff
   X-Frame-Options: SAMEORIGIN
   Referrer-Policy: strict-origin-when-cross-origin
+  # app.kinreader.com is the reader, not a page anyone should reach from search.
+  # The apex (the Astro marketing site) is the indexable front door -- plan 014.
+  X-Robots-Tag: noindex

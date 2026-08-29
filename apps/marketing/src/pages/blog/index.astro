@@ -1,0 +1,29 @@
+---
+import Base from '../../layouts/Base.astro';
+import { getCollection } from 'astro:content';
+
+const posts = (await getCollection('blog', ({ data }) => !data.draft)).sort(
+  (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
+);
+---
+
+<Base title="Blog — Kinreader" description="Notes on reading, listening, and building Kinreader.">
+  <section class="py-12">
+    <h1 class="font-serif text-3xl sm:text-4xl text-cream tracking-tight">Blog</h1>
+    <p class="font-sans text-sm text-paper/55 mt-2">Notes on reading, listening, and building Kinreader.</p>
+
+    <ul class="mt-8 space-y-3">
+      {posts.map((post) => (
+        <li>
+          <a href={`/blog/${post.id}`} class="group block p-5 rounded-2xl border border-white/10 hover:border-amber/40 transition">
+            <time datetime={post.data.pubDate.toISOString()} class="font-mono text-[10.5px] uppercase tracking-wider text-paper/35">
+              {post.data.pubDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+            </time>
+            <h2 class="font-serif text-xl text-cream group-hover:text-amber transition mt-1">{post.data.title}</h2>
+            <p class="font-sans text-xs text-paper/50 mt-1.5 leading-relaxed">{post.data.description}</p>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </section>
+</Base>

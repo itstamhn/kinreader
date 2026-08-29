@@ -32,9 +32,11 @@ export default {
       });
     }
     
-    // 3. Handle Spiceflow backend API routes & deep-link share routes
+    // 3. Handle Spiceflow backend API routes. The share pages moved to the
+    // Astro app on the apex with plan 014 -- this Worker now serves
+    // app.kinreader.com, where nothing links to them.
     let response: Response;
-    if (url.pathname.startsWith('/api') || url.pathname.startsWith('/r/')) {
+    if (url.pathname.startsWith('/api')) {
       (request as any).env = env;
       response = await app.handle(request);
     } else {
@@ -49,15 +51,14 @@ export default {
     newHeaders.set('X-Frame-Options', 'SAMEORIGIN');
     newHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-    // /api/og serves an SVG image directly; a restrictive default-src can
-    // interfere with how browsers render it when fetched on its own, so the
-    // CSP is scoped to everything else (the HTML app shell and other routes).
-    if (url.pathname !== '/api/og') {
-      newHeaders.set(
-        'Content-Security-Policy',
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
-      );
-    }
+    // The OG-image exemption went away with the route itself (plan 014): that
+    // card is served by the Astro app on the apex now, and every response this
+    // Worker still produces is JSON or a redirect, so nothing here needs to be
+    // carved out of the policy.
+    newHeaders.set(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+    );
 
     return new Response(response.body, {
       status: response.status,
