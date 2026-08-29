@@ -10,3 +10,13 @@ test('splitTextIntoSonioxChunks covers text beyond the REST fallback limit witho
   expect(chunks.join(' ')).toBe(text);
   expect(chunks.at(-1)).toContain('word229');
 });
+
+test('splitTextIntoSonioxChunks slices an unbroken token at the configured chunk boundary', () => {
+  const text = 'x'.repeat(451);
+
+  const chunks = splitTextIntoSonioxChunks(text);
+
+  expect(chunks).toEqual(['x'.repeat(450), 'x']);
+  expect(chunks.every((chunk) => chunk.length <= 450)).toBe(true);
+  expect(chunks.join('')).toBe(text);
+});

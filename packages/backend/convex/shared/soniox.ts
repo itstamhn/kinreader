@@ -32,6 +32,16 @@ export function splitTextIntoSonioxChunks(fullText: string, maxChunkSize = MAX_S
       } else {
         const words = sent.split(/\s+/);
         for (const word of words) {
+          if (word.length > maxChunkSize) {
+            if (curChunk) {
+              chunks.push(curChunk.trim());
+              curChunk = '';
+            }
+            for (let start = 0; start < word.length; start += maxChunkSize) {
+              chunks.push(word.slice(start, start + maxChunkSize));
+            }
+            continue;
+          }
           if ((curChunk + ' ' + word).trim().length <= maxChunkSize) {
             curChunk = curChunk ? curChunk + ' ' + word : word;
           } else {
