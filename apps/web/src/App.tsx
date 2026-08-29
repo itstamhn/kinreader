@@ -4,7 +4,6 @@ import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
 import { Controls } from './components/Controls';
 import { UrlInputModal } from './components/UrlInputModal';
-import { SettingsModal } from './components/SettingsModal';
 import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer';
 import { AuthModal, type UserProfile } from './components/AuthModal';
 import { ClipboardDetectSheet } from './components/ClipboardDetectSheet';
@@ -85,8 +84,8 @@ export function App() {
 
   // Modals & Bottom Sheets State
   const [isInputOpen, setIsInputOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [libraryTab, setLibraryTab] = useState<'queue' | 'settings'>('queue');
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
@@ -350,9 +349,15 @@ export function App() {
       {/* 1. Header Bar */}
       <Header
         article={article}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => {
+          setLibraryTab('settings');
+          setIsLibraryOpen(true);
+        }}
         onOpenInput={() => setIsInputOpen(true)}
-        onOpenLibrary={() => setIsLibraryOpen(true)}
+        onOpenLibrary={() => {
+          setLibraryTab('queue');
+          setIsLibraryOpen(true);
+        }}
         user={user}
         onOpenAuth={() => setIsAuthOpen(true)}
         speed={playback.rate}
@@ -422,12 +427,14 @@ export function App() {
             }
           );
         }}
-        onOpenSettings={() => setIsSettingsOpen(true)}
         user={user}
         onOpenAuth={() => setIsAuthOpen(true)}
         isPlaying={playback.isPlaying}
         onTogglePlay={handleTogglePlay}
         speed={playback.rate}
+        settings={settings}
+        onSaveSettings={handleSaveSettings}
+        initialTab={libraryTab}
       />
 
       <UrlInputModal
@@ -449,13 +456,6 @@ export function App() {
         user={user}
         externalError={authError}
         onDismissExternalError={() => setAuthError(null)}
-      />
-
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onSaveSettings={handleSaveSettings}
       />
     </div>
   );

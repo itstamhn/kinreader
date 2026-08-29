@@ -1,6 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { X, Play, Pause, Clock, Sparkles, Trash2, ArrowRight, Link as LinkIcon, Compass, Archive, History, Settings, ExternalLink } from 'lucide-react';
-import type { ArticleData } from '../types';
+import {
+  X,
+  Play,
+  Pause,
+  Clock,
+  Sparkles,
+  Trash2,
+  ArrowRight,
+  Link as LinkIcon,
+  Settings,
+  Type,
+  Volume2,
+  Check,
+  ExternalLink,
+} from 'lucide-react';
+import type { ArticleData, ReaderSettings } from '../types';
 import type { UserProfile } from './AuthModal';
 
 export interface SavedArticleItem {
@@ -11,6 +25,24 @@ export interface SavedArticleItem {
   isCachedAudio?: boolean;
 }
 
+const SONIOX_VOICES = [
+  { id: 'Adrian', name: 'Adrian', desc: 'Warm Narrative (Default)' },
+  { id: 'Emma', name: 'Emma', desc: 'Clear & Articulate' },
+  { id: 'Alex', name: 'Alex', desc: 'Deep & Authoritative' },
+  { id: 'Sophie', name: 'Sophie', desc: 'Engaging & Smooth' },
+  { id: 'Oliver', name: 'Oliver', desc: 'Calm & Rhythmic' },
+];
+
+const DEFAULT_READER_SETTINGS: ReaderSettings = {
+  ttsProvider: 'soniox',
+  sonioxApiKey: '',
+  sonioxVoice: 'Adrian',
+  groqApiKey: '',
+  elevenApiKey: '',
+  elevenVoiceId: '21m00Tcm4TlvDq8ikWAM',
+  defaultRate: 1.5,
+};
+
 interface LibraryDrawerProps {
   isOpen: boolean;
   onClose: () => void;
@@ -19,12 +51,14 @@ interface LibraryDrawerProps {
   onSelectArticle: (article: ArticleData) => void;
   onDeleteArticle?: (id: string) => void;
   onQuickExtract?: (url: string) => void;
-  onOpenSettings?: () => void;
   user?: UserProfile | null;
   onOpenAuth?: () => void;
   isPlaying?: boolean;
   onTogglePlay?: () => void;
   speed?: number;
+  settings?: ReaderSettings;
+  onSaveSettings?: (newSettings: ReaderSettings) => void;
+  initialTab?: 'queue' | 'settings';
 }
 
 export function LibraryDrawer({
@@ -35,28 +69,56 @@ export function LibraryDrawer({
   onSelectArticle,
   onDeleteArticle,
   onQuickExtract,
-  onOpenSettings,
   user,
   onOpenAuth,
   isPlaying = false,
   onTogglePlay,
   speed = 1.5,
+  settings = DEFAULT_READER_SETTINGS,
+  onSaveSettings,
+  initialTab = 'queue',
 }: LibraryDrawerProps) {
+  const [currentTab, setCurrentTab] = useState<'queue' | 'settings'>(initialTab);
   const [filter, setFilter] = useState<'All' | 'Substack' | 'X threads' | 'Web'>('All');
   const [fastUrl, setFastUrl] = useState('');
 
+  // Local settings state
+  const [defaultRate, setDefaultRate] = useState(settings.defaultRate || 1.5);
+  const [fontSize, setFontSize] = useState<'sm' | 'md' | 'lg'>(settings.fontSize || 'md');
+  const [sonioxVoice, setSonioxVoice] = useState(settings.sonioxVoice || 'Adrian');
+
+  useEffect(() => {
+    setCurrentTab(initialTab);
+  }, [initialTab, isOpen]);
+
+  useEffect(() => {
+    setDefaultRate(settings.defaultRate || 1.5);
+    setFontSize(settings.fontSize || 'md');
+    setSonioxVoice(settings.sonioxVoice || 'Adrian');
+  }, [settings]);
+
   if (!isOpen) return null;
 
+  const handleUpdateSettings = (updates: Partial<ReaderSettings>) => {
+    const updated = { ...settings, ...updates };
+    if (onSaveSettings) onSaveSettings(updated);
+  };
+
   // Active top article (Hero card / Mini-player)
-  const currentItem = savedArticles.find(
-    (s) => s.article.sourceUrl === currentArticleId || s.article.title === currentArticleId
-  ) || savedArticles[0];
+  const currentItem =
+    savedArticles.find(
+      (s) => s.article.sourceUrl === currentArticleId || s.article.title === currentArticleId
+    ) || savedArticles[0];
 
   const filteredArticles = savedArticles.filter((item) => {
     if (filter === 'All') return true;
-    if (filter === 'X threads') return item.article.sourceType === 'x' || /x\.com|twitter/i.test(item.article.sourceUrl || '');
-    if (filter === 'Substack') return /substack/i.test(item.article.sourceUrl || '') || /newsletter/i.test(item.article.author || '');
-    return item.article.sourceType === 'article' || item.article.sourceType === 'text';
+    if (filter === 'X threads') return /x\.com|twitter/i.test(item.article.sourceUrl || '');
+    if (filter === 'Substack')
+      return (
+        /substack/i.test(item.article.sourceUrl || '') ||
+        /newsletter/i.test(item.article.author || '')
+      );
+    return true;
   });
 
   const handlePasteExtract = () => {
@@ -84,14 +146,6 @@ export function LibraryDrawer({
     }
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
   return (
     <div
       onClick={(e) => {
@@ -100,30 +154,57 @@ export function LibraryDrawer({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-0 sm:p-6 select-none"
     >
       <div className="w-full sm:max-w-5xl h-full sm:h-[92vh] sm:max-h-[780px] bg-[#0B0C10] sm:border sm:border-white/10 sm:rounded-3xl shadow-2xl flex flex-col sm:flex-row overflow-hidden relative pt-safe pb-safe">
-        {/* 1. Left Sidebar Navigation (Desktop only) */}
+        {/* 1. Left Sidebar Navigation (Desktop only - Design 1b) */}
         <div className="w-52 shrink-0 border-r border-white/5 p-5 hidden md:flex flex-col gap-2">
           {/* Logo */}
           <div className="font-serif font-medium text-2xl tracking-tight text-[#F4F0E6] px-2 pb-4">
             Kinreader<span className="text-[#F2A33C]">.</span>
           </div>
 
-          <button className="flex items-center gap-3 h-10 px-3.5 rounded-xl bg-[#F2A33C]/10 text-[#F2A33C] font-sans font-semibold text-xs transition">
+          <button
+            onClick={() => setCurrentTab('queue')}
+            className={`flex items-center gap-3 h-10 px-3.5 rounded-xl font-sans text-xs font-semibold transition ${
+              currentTab === 'queue'
+                ? 'bg-[#F2A33C]/10 text-[#F2A33C]'
+                : 'text-white/55 hover:bg-white/5 hover:text-white'
+            }`}
+          >
             <svg className="w-4 h-4" viewBox="0 0 20 20" fill="none">
-              <rect x="2.5" y="4" width="15" height="3" rx="1.5" fill="#F2A33C" />
-              <rect x="2.5" y="9.5" width="10" height="3" rx="1.5" fill="rgba(242,163,60,.45)" />
-              <rect x="2.5" y="15" width="13" height="3" rx="1.5" fill="rgba(242,163,60,.45)" />
+              <rect
+                x="2.5"
+                y="4"
+                width="15"
+                height="3"
+                rx="1.5"
+                fill={currentTab === 'queue' ? '#F2A33C' : 'rgba(236,234,228,.5)'}
+              />
+              <rect
+                x="2.5"
+                y="9.5"
+                width="10"
+                height="3"
+                rx="1.5"
+                fill={currentTab === 'queue' ? 'rgba(242,163,60,.45)' : 'rgba(236,234,228,.3)'}
+              />
+              <rect
+                x="2.5"
+                y="15"
+                width="13"
+                height="3"
+                rx="1.5"
+                fill={currentTab === 'queue' ? 'rgba(242,163,60,.45)' : 'rgba(236,234,228,.3)'}
+              />
             </svg>
             <span>Queue</span>
           </button>
 
           <button
-            onClick={() => {
-              if (onOpenSettings) {
-                onClose();
-                onOpenSettings();
-              }
-            }}
-            className="flex items-center gap-3 h-10 px-3.5 rounded-xl hover:bg-white/5 text-white/55 hover:text-white font-sans font-medium text-xs transition"
+            onClick={() => setCurrentTab('settings')}
+            className={`flex items-center gap-3 h-10 px-3.5 rounded-xl font-sans text-xs font-medium transition ${
+              currentTab === 'settings'
+                ? 'bg-[#F2A33C]/10 text-[#F2A33C] font-semibold'
+                : 'text-white/55 hover:bg-white/5 hover:text-white'
+            }`}
           >
             <Settings className="w-4 h-4" />
             <span>Settings</span>
@@ -152,8 +233,23 @@ export function LibraryDrawer({
         <div className="flex-1 flex flex-col p-4 sm:p-7 gap-4 overflow-y-auto min-w-0 relative">
           {/* Mobile Header (Design 3b) */}
           <div className="flex sm:hidden items-center justify-between pt-2 pb-1">
-            <div className="font-serif font-medium text-2xl tracking-tight text-[#F4F0E6]">
-              Kinreader<span className="text-[#F2A33C]">.</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setCurrentTab('queue')}
+                className={`font-serif font-medium text-xl tracking-tight transition ${
+                  currentTab === 'queue' ? 'text-[#F4F0E6]' : 'text-white/40'
+                }`}
+              >
+                Queue<span className="text-[#F2A33C]">.</span>
+              </button>
+              <button
+                onClick={() => setCurrentTab('settings')}
+                className={`font-serif font-medium text-xl tracking-tight transition ${
+                  currentTab === 'settings' ? 'text-[#F4F0E6]' : 'text-white/40'
+                }`}
+              >
+                Settings
+              </button>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -171,238 +267,328 @@ export function LibraryDrawer({
             </div>
           </div>
 
-          {/* Fast Search / Paste Input Bar (Design 3b & 1b) */}
-          <div className="flex items-center gap-2.5">
-            <div className="flex-1 flex items-center gap-2.5 h-11 px-3.5 rounded-2xl bg-white/5 border border-white/10 focus-within:border-[#F2A33C]/50 transition">
-              <LinkIcon className="w-4 h-4 text-white/40 shrink-0" />
-              <input
-                type="text"
-                placeholder="Paste any article, Substack, or X link…"
-                value={fastUrl}
-                onChange={(e) => setFastUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handlePasteExtract();
-                }}
-                className="w-full bg-transparent border-none outline-none font-sans text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/30"
-              />
-              <span className="hidden sm:inline font-mono text-[9px] text-[#ECEAE4]/30 px-2 py-0.5 border border-white/10 rounded">
-                ⌘V
-              </span>
-            </div>
-
-            <button
-              onClick={fastUrl.trim() ? handlePasteExtract : handleNativeClipboardPaste}
-              className="h-11 px-4 sm:px-5 rounded-2xl glow-amber-btn font-sans font-semibold text-xs transition active:scale-98 shrink-0"
-            >
-              {fastUrl.trim() ? 'Narrate' : 'Paste'}
-            </button>
-
-            {/* Desktop Profile Avatar */}
-            <button
-              onClick={onOpenAuth}
-              className="hidden sm:flex w-9 h-9 rounded-full bg-gradient-to-br from-[#2A2D38] to-[#181A21] border border-white/10 items-center justify-center font-sans font-semibold text-xs text-[#ECEAE4]/70 shrink-0"
-              title="Account Profile"
-            >
-              {user?.avatar ? (
-                <img src={user.avatar} alt="" className="w-full h-full rounded-full object-cover" />
-              ) : user ? (
-                user.name.slice(0, 2).toUpperCase()
-              ) : (
-                'JD'
-              )}
-            </button>
-
-            {/* Desktop Close Button */}
-            <button
-              onClick={onClose}
-              className="hidden sm:flex w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 items-center justify-center text-white/50 hover:text-white transition shrink-0"
-              title="Close Library (Esc)"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Desktop Continue Hero Card (Design 1b) */}
-          {currentItem && (
-            <div
-              onClick={() => {
-                onSelectArticle(currentItem.article);
-                onClose();
-              }}
-              className="hidden sm:flex rounded-3xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-white/10 p-5 sm:p-6 items-center gap-5 cursor-pointer group hover:border-[#F2A33C]/40 transition shadow-xl select-none"
-            >
-              <div className="flex-1 flex flex-col gap-2 min-w-0">
-                <div className="font-mono text-[9px] font-semibold tracking-widest uppercase text-[#F2A33C]">
-                  CONTINUE · {Math.round(currentItem.progress || 0)}%
-                </div>
-                <div className="font-serif text-xl sm:text-2xl text-[#F4F0E6] group-hover:text-white transition truncate">
-                  {currentItem.article.title}
-                </div>
-                <div className="font-sans text-xs text-[#ECEAE4]/45 truncate">
-                  <span>{currentItem.article.author || 'Author'}</span>
-                  <span> · 14 min → </span>
-                  <span className="text-[#F2A33C] font-medium">6 min</span>
-                  <span> · Soniox · 2.1×</span>
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
-                  <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-[#B87718] to-[#F2A33C]"
-                      style={{ width: `${Math.max(10, currentItem.progress || 0)}%` }}
-                    />
-                  </div>
-                  <span className="font-mono text-[10px] text-[#ECEAE4]/40">−03:41</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5 shrink-0">
-                {onDeleteArticle && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteArticle(currentItem.id);
+          {/* TAB 1: QUEUE (Design 1b) */}
+          {currentTab === 'queue' && (
+            <>
+              {/* Fast Search / Paste Input Bar */}
+              <div className="flex items-center gap-2.5">
+                <div className="flex-1 flex items-center gap-2.5 h-11 px-3.5 rounded-2xl bg-white/5 border border-white/10 focus-within:border-[#F2A33C]/50 transition">
+                  <LinkIcon className="w-4 h-4 text-white/40 shrink-0" />
+                  <input
+                    type="text"
+                    placeholder="Paste any article, Substack, or X link…"
+                    value={fastUrl}
+                    onChange={(e) => setFastUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handlePasteExtract();
                     }}
-                    className="w-9 h-9 rounded-full bg-white/5 hover:bg-rose-500/20 text-white/40 hover:text-rose-400 flex items-center justify-center transition"
-                    title="Delete current article"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-                <div className="w-14 h-14 rounded-full glow-amber-btn flex items-center justify-center shadow-lg group-hover:scale-105 transition">
-                  <Play className="w-5 h-5 fill-[#16130B] text-[#16130B] ml-0.5" />
+                    className="w-full bg-transparent border-none outline-none font-sans text-xs text-[#ECEAE4] placeholder-[#ECEAE4]/30"
+                  />
+                  <span className="hidden sm:inline font-mono text-[9px] text-[#ECEAE4]/30 px-2 py-0.5 border border-white/10 rounded">
+                    ⌘V
+                  </span>
+                </div>
+
+                <button
+                  onClick={fastUrl.trim() ? handlePasteExtract : handleNativeClipboardPaste}
+                  className="h-11 px-4 sm:px-5 rounded-2xl glow-amber-btn font-sans font-semibold text-xs transition active:scale-98 shrink-0"
+                >
+                  {fastUrl.trim() ? 'Narrate' : 'Paste'}
+                </button>
+
+                {/* Desktop Profile Avatar */}
+                <button
+                  onClick={onOpenAuth}
+                  className="hidden sm:flex w-9 h-9 rounded-full bg-gradient-to-br from-[#2A2D38] to-[#181A21] border border-white/10 items-center justify-center font-sans font-semibold text-xs text-[#ECEAE4]/70 shrink-0"
+                  title="Account Profile"
+                >
+                  {user?.avatar ? (
+                    <img
+                      src={user.avatar}
+                      alt=""
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                  ) : user ? (
+                    user.name.slice(0, 2).toUpperCase()
+                  ) : (
+                    'JD'
+                  )}
+                </button>
+
+                {/* Desktop Close Button */}
+                <button
+                  onClick={onClose}
+                  className="hidden sm:flex w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 items-center justify-center text-white/50 hover:text-white transition shrink-0"
+                  title="Close (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Desktop Continue Hero Card */}
+              {currentItem && (
+                <div
+                  onClick={() => {
+                    onSelectArticle(currentItem.article);
+                    onClose();
+                  }}
+                  className="hidden sm:flex rounded-3xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-white/10 p-5 sm:p-6 items-center gap-5 cursor-pointer group hover:border-[#F2A33C]/40 transition shadow-xl select-none"
+                >
+                  <div className="flex-1 flex flex-col gap-2 min-w-0">
+                    <div className="font-mono text-[9px] font-semibold tracking-widest uppercase text-[#F2A33C]">
+                      CONTINUE · {Math.round(currentItem.progress || 0)}%
+                    </div>
+                    <div className="font-serif text-xl sm:text-2xl text-[#F4F0E6] group-hover:text-white transition truncate">
+                      {currentItem.article.title}
+                    </div>
+                    <div className="font-sans text-xs text-[#ECEAE4]/45 truncate">
+                      <span>{currentItem.article.author || 'Author'}</span>
+                      <span> · 14 min → </span>
+                      <span className="text-[#F2A33C] font-medium">6 min</span>
+                      <span> · Adrian · {speed}×</span>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-1">
+                      <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-[#B87718] to-[#F2A33C]"
+                          style={{ width: `${Math.max(10, currentItem.progress || 0)}%` }}
+                        />
+                      </div>
+                      <span className="font-mono text-[10px] text-[#ECEAE4]/40">−03:41</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    {onDeleteArticle && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteArticle(currentItem.id);
+                        }}
+                        className="w-9 h-9 rounded-full bg-white/5 hover:bg-rose-500/20 text-white/40 hover:text-rose-400 flex items-center justify-center transition"
+                        title="Delete current article"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                    <div className="w-14 h-14 rounded-full glow-amber-btn flex items-center justify-center shadow-lg group-hover:scale-105 transition">
+                      <Play className="w-5 h-5 fill-[#16130B] text-[#16130B] ml-0.5" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Category Filter Tabs */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="font-sans font-semibold text-[11px] tracking-wider uppercase text-[#ECEAE4]/40">
+                  UP NEXT · {filteredArticles.length}
+                </span>
+
+                <div className="flex gap-1.5 sm:gap-2">
+                  {(['All', 'Substack', 'X threads', 'Web'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setFilter(tab)}
+                      className={`h-7 px-3 rounded-full text-xs font-sans font-medium transition ${
+                        filter === tab
+                          ? 'bg-[#F4F0E6] text-[#16130B] font-semibold'
+                          : 'bg-white/5 text-[#ECEAE4]/60 hover:text-white'
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
                 </div>
               </div>
-            </div>
-          )}
 
-          {/* Category Filter Tabs (Design 3b & 1b) */}
-          <div className="flex items-center justify-between pt-1">
-            <span className="font-sans font-semibold text-[11px] tracking-wider uppercase text-[#ECEAE4]/40">
-              UP NEXT · {filteredArticles.length}
-            </span>
-
-            <div className="flex gap-1.5 sm:gap-2">
-              {(['All', 'Substack', 'X threads', 'Web'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setFilter(tab)}
-                  className={`h-7 px-3 rounded-full text-xs font-sans font-medium transition ${
-                    filter === tab
-                      ? 'bg-[#F4F0E6] text-[#16130B] font-semibold'
-                      : 'bg-white/5 hover:bg-white/10 text-white/55'
-                  }`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Article List Rows */}
-          <div className="flex-1 flex flex-col divide-y divide-white/5 pb-20 sm:pb-2">
-            {filteredArticles.length === 0 ? (
-              <div className="py-12 text-center text-xs text-white/40 font-sans">
-                No articles in this filter.
-              </div>
-            ) : (
-              filteredArticles.map((item) => {
-                const isSubstack = /substack/i.test(item.article.sourceUrl || '') || /money stuff|noahpinion/i.test(item.article.title);
-                const isX = item.article.sourceType === 'x' || /x\.com|twitter/i.test(item.article.sourceUrl || '');
-                const dotColor = isSubstack ? '#FF6719' : isX ? '#ECEAE4' : '#5A8DEE';
-
-                return (
+              {/* Article Queue List */}
+              <div className="flex flex-col divide-y divide-white/5">
+                {filteredArticles.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => {
                       onSelectArticle(item.article);
                       onClose();
                     }}
-                    className="flex items-center gap-3.5 py-3 px-2 hover:bg-white/5 rounded-xl cursor-pointer group transition justify-between"
+                    className="flex items-center justify-between py-3.5 px-2 hover:bg-white/[0.03] rounded-xl transition cursor-pointer group"
                   >
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="flex items-center gap-3.5 min-w-0 pr-4">
                       <div
-                        className="w-2 h-2 rounded-full shrink-0"
-                        style={{ backgroundColor: dotColor }}
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          /x\.com|twitter/i.test(item.article.sourceUrl || '')
+                            ? 'bg-sky-400'
+                            : /substack/i.test(item.article.sourceUrl || '') || /newsletter/i.test(item.article.author || '')
+                              ? 'bg-orange-500'
+                              : 'bg-[#F2A33C]'
+                        }`}
                       />
-                      <div className="flex-1 flex flex-col min-w-0">
-                        <div className="font-serif text-[15px] text-[#ECEAE4] group-hover:text-white transition truncate">
+                      <div className="flex flex-col truncate">
+                        <span className="font-serif text-base text-[#ECEAE4] group-hover:text-white truncate transition">
                           {item.article.title}
-                        </div>
-                        <div className="font-sans text-[11px] text-[#ECEAE4]/40 truncate">
-                          {item.article.author || 'Article'} · 9 min → 4 min
+                        </span>
+                        <div className="flex items-center gap-1.5 text-[11px] text-[#ECEAE4]/40 font-sans">
+                          <span>{item.article.author || 'Author'}</span>
+                          <span>·</span>
+                          <span className="text-[#F2A33C]">9 → 4 min</span>
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0">
                       {onDeleteArticle && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             onDeleteArticle(item.id);
                           }}
-                          className="w-8 h-8 rounded-lg hover:bg-rose-500/15 text-white/30 hover:text-rose-400 flex items-center justify-center transition"
-                          title="Delete from Library"
+                          className="w-8 h-8 rounded-full opacity-0 group-hover:opacity-100 hover:bg-rose-500/20 text-white/30 hover:text-rose-400 flex items-center justify-center transition"
+                          title="Delete article"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 group-hover:text-[#F2A33C] transition">
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                      </div>
+                      <Play className="w-3.5 h-3.5 text-white/40 group-hover:text-[#F2A33C] transition" />
                     </div>
                   </div>
-                );
-              })
-            )}
-          </div>
+                ))}
+              </div>
+            </>
+          )}
 
-          {/* ── MOBILE PERSISTENT FLOATING MINI-PLAYER (Design 3b) ── */}
-          {currentItem && (
-            <div
-              onClick={() => {
-                onSelectArticle(currentItem.article);
-                onClose();
-              }}
-              className="sm:hidden absolute bottom-3 left-3 right-3 h-14 rounded-2xl bg-[#1C1D24]/95 backdrop-blur-xl border border-white/10 flex items-center gap-3 px-3 shadow-[0_10px_30px_rgba(0,0,0,0.5)] z-30 cursor-pointer"
-            >
-              {/* Mini Waveform Icon */}
-              <div className="w-9 h-9 rounded-lg bg-[#0A0B0F] border border-white/10 flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4 text-[#F2A33C]" />
+          {/* TAB 2: SETTINGS (Integrated Inline Screen - No Popups) */}
+          {currentTab === 'settings' && (
+            <div className="flex flex-col gap-6 max-w-xl py-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-serif text-2xl text-[#F4F0E6]">Settings & Preferences</h2>
+                  <p className="font-sans text-xs text-[#ECEAE4]/40 pt-0.5">
+                    Customize your kinetic reading velocity and narrator cadence.
+                  </p>
+                </div>
+                <button
+                  onClick={onClose}
+                  className="hidden sm:flex w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 items-center justify-center text-white/50 hover:text-white transition shrink-0"
+                  title="Close (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              {/* Title & Progress Bar */}
-              <div className="flex-1 flex flex-col gap-1 min-w-0">
-                <span className="font-sans font-semibold text-xs text-[#F4F0E6] truncate">
-                  {currentItem.article.title}
-                </span>
-                <div className="h-[2.5px] rounded-full bg-white/15 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-[#F2A33C]"
-                    style={{ width: `${Math.max(10, currentItem.progress || 0)}%` }}
-                  />
+              {/* 1. Focal Text Scale */}
+              <div className="flex flex-col gap-2.5">
+                <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
+                  <Type className="w-4 h-4 text-[#F2A33C]" />
+                  <span>Focal Text Scale</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2.5">
+                  {(
+                    [
+                      { id: 'sm', label: 'Compact', desc: '36px' },
+                      { id: 'md', label: 'Standard', desc: '46px (Default)' },
+                      { id: 'lg', label: 'Large', desc: '56px' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => {
+                        setFontSize(opt.id);
+                        handleUpdateSettings({ fontSize: opt.id });
+                      }}
+                      className={`p-3 rounded-2xl border flex flex-col items-center gap-1 transition ${
+                        fontSize === opt.id
+                          ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F2A33C]'
+                          : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
+                      }`}
+                    >
+                      <span className="font-sans text-xs font-bold">{opt.label}</span>
+                      <span className="font-mono text-[10px] opacity-70">{opt.desc}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Speed */}
-              <span className="font-mono font-semibold text-[11px] text-[#F2A33C]">
-                {speed.toFixed(1)}×
-              </span>
+              {/* 2. Default Playback Tempo */}
+              <div className="flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80">
+                    Default Playback Tempo
+                  </label>
+                  <span className="font-mono text-xs font-bold text-[#F2A33C] px-2.5 py-0.5 rounded-lg bg-[#F2A33C]/10 border border-[#F2A33C]/30">
+                    {defaultRate.toFixed(1)}×
+                  </span>
+                </div>
 
-              {/* 38px Amber Play Button */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (onTogglePlay) onTogglePlay();
-                }}
-                className="w-9 h-9 rounded-full glow-amber-btn flex items-center justify-center shrink-0 shadow-md"
-              >
-                {isPlaying ? (
-                  <Pause className="w-3.5 h-3.5 fill-[#16130B] text-[#16130B]" />
-                ) : (
-                  <Play className="w-3.5 h-3.5 fill-[#16130B] text-[#16130B] ml-0.5" />
-                )}
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-[11px] text-[#ECEAE4]/40">0.8×</span>
+                  <input
+                    type="range"
+                    min="0.8"
+                    max="3.5"
+                    step="0.1"
+                    value={defaultRate}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setDefaultRate(val);
+                      handleUpdateSettings({ defaultRate: val });
+                    }}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#F2A33C]"
+                  />
+                  <span className="font-mono text-[11px] text-[#ECEAE4]/40">3.5×</span>
+                </div>
+              </div>
+
+              {/* 3. Narrator Voice */}
+              <div className="flex flex-col gap-2.5">
+                <label className="font-sans text-xs font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
+                  <Volume2 className="w-4 h-4 text-[#F2A33C]" />
+                  <span>Neural Voice Selection</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {SONIOX_VOICES.map((v) => (
+                    <button
+                      key={v.id}
+                      onClick={() => {
+                        setSonioxVoice(v.id);
+                        handleUpdateSettings({ sonioxVoice: v.id });
+                      }}
+                      className={`p-3 rounded-2xl border text-left flex flex-col gap-1 transition ${
+                        sonioxVoice === v.id
+                          ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F4F0E6]'
+                          : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-sans font-bold text-xs text-[#F4F0E6]">{v.name}</span>
+                        {sonioxVoice === v.id && <Check className="w-3.5 h-3.5 text-[#F2A33C]" />}
+                      </div>
+                      <span className="font-sans text-[11px] text-[#ECEAE4]/40">{v.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 4. Kinreader Pro Banner */}
+              <div className="rounded-2xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-[#F2A33C]/30 p-4 flex items-center justify-between mt-2">
+                <div className="flex items-center gap-3">
+                  <Sparkles className="w-5 h-5 text-[#F2A33C]" />
+                  <div className="flex flex-col">
+                    <span className="font-sans font-semibold text-xs text-[#F4F0E6]">
+                      Kinreader Pro
+                    </span>
+                    <span className="font-sans text-[11px] text-[#ECEAE4]/50">
+                      All neural voices, 3.5× tempo, unlimited articles.
+                    </span>
+                  </div>
+                </div>
+                <a
+                  href="https://buy.stripe.com/eVqfZbgvZeDH6Uc2zJ53O00"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-4 py-2 rounded-xl glow-amber-btn font-sans font-semibold text-xs transition"
+                >
+                  Upgrade
+                </a>
               </div>
             </div>
           )}
