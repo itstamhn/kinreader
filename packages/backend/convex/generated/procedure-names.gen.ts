@@ -3,6 +3,6 @@
 // Do not edit manually. Run `kitcn codegen` to regenerate.
 
 export const procedureNames = {
-  "routers/articles.ts": [{ column: 3, line: 26, name: "routers/articles:extract" }],
+  "routers/articles.ts": [{ column: 3, line: 85, name: "routers/articles:extract" }],
   "routers/tts.ts": [{ column: 3, line: 79, name: "routers/tts:synthesize" }],
 };

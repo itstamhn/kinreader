@@ -136,6 +136,12 @@ happy-dom preload lives in `apps/web/bunfig.toml`, so run `bun run test` instead
 
 The web app imports the backend as `@kinreader/backend/api`, never by relative path.
 
+kitcn ships its own agent skill inside its npm package; it is vendored to
+`.claude/skills/kitcn` (see `VENDORED.md` there to refresh it after a kitcn bump). Its
+`references/setup/index.md` describes a `convex/functions/` layout this repo does not use
+yet — `plans/015` is the migration, and until it lands the paths in that skill will not
+match what is on disk.
+
 Two origins, deliberately: `kinreader.com` is the marketing site, `app.kinreader.com` is
 the reader. They do not share cookies or `localStorage`, so anything that assumes
 same-origin between them needs an explicit CORS or `targetOrigin` decision.

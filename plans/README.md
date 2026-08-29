@@ -17,13 +17,14 @@ the table when done.
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 | 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | DONE |
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | DONE |
-| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | BLOCKED (needs a Convex deployment — see log) |
+| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006, 015 | BLOCKED (needs a Convex deployment — see log) |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
 | 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | DONE |
 | 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | IN PROGRESS (code DONE; cutover pending) |
+| 015 | Align the backend with kitcn's expected project layout | P2 | M | 013 | TODO — do before 008 |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
