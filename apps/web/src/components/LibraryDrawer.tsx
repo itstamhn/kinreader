@@ -101,29 +101,19 @@ export function LibraryDrawer({
     >
       <div className="w-full sm:max-w-5xl h-full sm:h-[92vh] sm:max-h-[780px] bg-[#0B0C10] sm:border sm:border-white/10 sm:rounded-3xl shadow-2xl flex flex-col sm:flex-row overflow-hidden relative pt-safe pb-safe">
         {/* 1. Left Sidebar Navigation (Desktop only) */}
-        <div className="w-56 shrink-0 border-r border-white/5 p-5 hidden md:flex flex-col gap-2">
+        <div className="w-52 shrink-0 border-r border-white/5 p-5 hidden md:flex flex-col gap-2">
           {/* Logo */}
           <div className="font-serif font-medium text-2xl tracking-tight text-[#F4F0E6] px-2 pb-4">
             Kinreader<span className="text-[#F2A33C]">.</span>
           </div>
 
-          <button className="flex items-center gap-3 h-10 px-3 rounded-xl bg-[#F2A33C]/10 text-[#F2A33C] font-sans font-semibold text-xs transition">
+          <button className="flex items-center gap-3 h-10 px-3.5 rounded-xl bg-[#F2A33C]/10 text-[#F2A33C] font-sans font-semibold text-xs transition">
             <svg className="w-4 h-4" viewBox="0 0 20 20" fill="none">
               <rect x="2.5" y="4" width="15" height="3" rx="1.5" fill="#F2A33C" />
               <rect x="2.5" y="9.5" width="10" height="3" rx="1.5" fill="rgba(242,163,60,.45)" />
               <rect x="2.5" y="15" width="13" height="3" rx="1.5" fill="rgba(242,163,60,.45)" />
             </svg>
             <span>Queue</span>
-          </button>
-
-          <button className="flex items-center gap-3 h-10 px-3 rounded-xl hover:bg-white/5 text-white/55 font-sans font-medium text-xs transition">
-            <Archive className="w-4 h-4" />
-            <span>Archive</span>
-          </button>
-
-          <button className="flex items-center gap-3 h-10 px-3 rounded-xl hover:bg-white/5 text-white/55 font-sans font-medium text-xs transition">
-            <History className="w-4 h-4" />
-            <span>History</span>
           </button>
 
           <button
@@ -133,7 +123,7 @@ export function LibraryDrawer({
                 onOpenSettings();
               }
             }}
-            className="flex items-center gap-3 h-10 px-3 rounded-xl hover:bg-white/5 text-white/55 font-sans font-medium text-xs transition"
+            className="flex items-center gap-3 h-10 px-3.5 rounded-xl hover:bg-white/5 text-white/55 hover:text-white font-sans font-medium text-xs transition"
           >
             <Settings className="w-4 h-4" />
             <span>Settings</span>
@@ -141,11 +131,11 @@ export function LibraryDrawer({
 
           <div className="flex-1" />
 
-          {/* Pro Promo Card (Design 1b) */}
+          {/* Pro Promo Card */}
           <div className="rounded-2xl bg-gradient-to-br from-[#F2A33C]/15 to-[#F2A33C]/5 border border-[#F2A33C]/25 p-3.5 flex flex-col gap-1.5">
             <span className="font-sans font-semibold text-xs text-[#F4F0E6]">Kinreader Pro</span>
             <span className="font-sans text-[11px] leading-relaxed text-[#ECEAE4]/50">
-              All voices, 3.5× tempo, social clips.
+              All neural voices, 3.5× tempo, unlimited articles.
             </span>
             <a
               href="https://buy.stripe.com/eVqfZbgvZeDH6Uc2zJ53O00"

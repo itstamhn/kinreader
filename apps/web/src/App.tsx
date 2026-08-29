@@ -7,7 +7,6 @@ import { UrlInputModal } from './components/UrlInputModal';
 import { SettingsModal } from './components/SettingsModal';
 import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer';
 import { AuthModal, type UserProfile } from './components/AuthModal';
-import { ShareClipModal } from './components/ShareClipModal';
 import { ClipboardDetectSheet } from './components/ClipboardDetectSheet';
 import { SpeechEngine } from './utils/speechEngine';
 import { SAMPLE_ARTICLE, SAMPLE_TIMINGS, SAMPLE_DURATION } from './data/sampleData';
@@ -90,7 +89,6 @@ export function App() {
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [isClipOpen, setIsClipOpen] = useState(false);
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
   const [detectedClipboardUrl, setDetectedClipboardUrl] = useState<string>('');
 
@@ -349,13 +347,12 @@ export function App() {
 
   return (
     <div className="flex flex-col justify-between h-[100dvh] max-h-[100dvh] w-full bg-kinreader-radial text-[#ECEAE4] select-none relative overflow-hidden font-sans">
-      {/* 1. Header Bar (Design 3a & 1a) */}
+      {/* 1. Header Bar */}
       <Header
         article={article}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenInput={() => setIsInputOpen(true)}
         onOpenLibrary={() => setIsLibraryOpen(true)}
-        onOpenClip={() => setIsClipOpen(true)}
         user={user}
         onOpenAuth={() => setIsAuthOpen(true)}
         speed={playback.rate}
@@ -364,11 +361,9 @@ export function App() {
         onToggleVoice={() => setIsVoiceEnabled(!isVoiceEnabled)}
         isRampEnabled={isRampEnabled}
         onToggleRamp={() => setIsRampEnabled(!isRampEnabled)}
-        clauseLength={clauseLength}
-        onChangeClauseLength={(len) => setClauseLength(len)}
       />
 
-      {/* 3. Kinetic Display (Design 3a mobile scale & desktop) */}
+      {/* 2. Kinetic Display */}
       <KineticDisplay
         words={playback.words}
         currentWordIndex={playback.currentWordIndex}
@@ -378,7 +373,7 @@ export function App() {
         clauseLength={clauseLength}
       />
 
-      {/* 4. Bottom Controls (Design 3a mobile thumb zone & desktop bar) */}
+      {/* 3. Bottom Controls */}
       <Controls
         isPlaying={playback.isPlaying}
         onTogglePlay={handleTogglePlay}
@@ -397,7 +392,7 @@ export function App() {
         isDegraded={playbackStatus === 'degraded'}
       />
 
-      {/* Modals, Drawers, Clip Maker & Mobile Clipboard Sheet */}
+      {/* Modals, Drawers & Mobile Clipboard Sheet */}
       <ClipboardDetectSheet
         isOpen={!!detectedClipboardUrl}
         detectedUrl={detectedClipboardUrl}
@@ -407,14 +402,6 @@ export function App() {
           saveArticleToLibrary(newArt);
           setSavedArticles(getSavedArticles());
         }}
-      />
-
-      <ShareClipModal
-        isOpen={isClipOpen}
-        onClose={() => setIsClipOpen(false)}
-        article={article}
-        currentWord={playback.words[playback.currentWordIndex]?.text}
-        speed={playback.rate}
       />
 
       <LibraryDrawer

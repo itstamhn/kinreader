@@ -303,14 +303,6 @@ export function Controls({
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           )}
-
-          {/* Desktop Keyboard Shortcuts Badges (Design 1a) */}
-          <div className="hidden xl:flex items-center gap-1.5 font-mono text-[10px] text-[#ECEAE4]/30 pl-1">
-            <span className="px-1.5 py-0.5 border border-white/10 rounded">Space</span>
-            <span className="px-1.5 py-0.5 border border-white/10 rounded">←</span>
-            <span className="px-1.5 py-0.5 border border-white/10 rounded">→</span>
-            <span className="px-1.5 py-0.5 border border-white/10 rounded">⇧+</span>
-          </div>
         </div>
       </div>
 
