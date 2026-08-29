@@ -523,7 +523,7 @@ test('an exact cache hit loads stored audio before minting a key or opening a so
   const loadedUrls: string[] = [];
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
-    loadedUrls.push(url);
+    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
     return originalLoadAudioUrl.call(this, url, words, duration, onError);
   };
 
@@ -548,10 +548,61 @@ test('an exact cache hit loads stored audio before minting a key or opening a so
     await narrateRawText(container, 'Exact timing');
     await waitFor(() => expect(loadedUrls).toContain('https://cache.example/exact.mp3'));
 
-    expect(cacheRequests).toEqual([{ url: 'Pasted Note', voice: 'Adrian' }]);
+    expect(cacheRequests).toHaveLength(1);
+    expect(cacheRequests[0]).toEqual({
+      url: 'content-sha256:b2d0149d4df84e1408ed3208160aa121666399f06ebc62f7636aaeac1d329fb6',
+      voice: 'Adrian',
+    });
     expect(keyRequests).toBe(0);
     expect(transport.streams).toHaveLength(0);
     expect(container.textContent).not.toContain('Neural voice unavailable');
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
+
+test('pasted notes share exact audio only when their content is identical', async () => {
+  const transport = fakeStreamingTransport();
+  const cacheRequests: Array<{ url: string; voice: string }> = [];
+  const loadedUrls: string[] = [];
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: '2026-08-29T12:00:00Z' }),
+      loadExactTrack: async (input) => {
+        cacheRequests.push(input);
+        if (input.url !== cacheRequests[0]?.url) return null;
+        return {
+          audioUrl: 'https://cache.example/first-note.mp3',
+          words: exactWords,
+          duration: 0.7,
+          timingsSource: 'soniox',
+        };
+      },
+    });
+
+    await narrateRawText(container, 'Exact timing');
+    await waitFor(() => expect(loadedUrls).toHaveLength(1));
+
+    await narrateRawText(container, 'Second note');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+    expect(cacheRequests[1]!.url).not.toBe(cacheRequests[0]!.url);
+    expect(loadedUrls).toHaveLength(1);
+
+    await narrateRawText(container, 'Exact timing');
+    await waitFor(() => expect(loadedUrls).toHaveLength(2));
+    expect(cacheRequests[2]!.url).toBe(cacheRequests[0]!.url);
+    expect(loadedUrls).toEqual([
+      'https://cache.example/first-note.mp3',
+      'https://cache.example/first-note.mp3',
+    ]);
+    expect(transport.streams).toHaveLength(1);
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
   }
@@ -597,7 +648,7 @@ test('exact-track persistence failure does not replace completed WebSocket playb
     expect(await persistenceInputs[0]!.blob.arrayBuffer()).toEqual(new Uint8Array([4, 5, 6]).buffer);
     expect(persistenceInputs[0]).toMatchObject({
       clientId: expect.any(String),
-      url: 'Pasted Note',
+      url: 'content-sha256:b2d0149d4df84e1408ed3208160aa121666399f06ebc62f7636aaeac1d329fb6',
       text: 'Exact timing',
       voice: 'Adrian',
       duration: 0.7,

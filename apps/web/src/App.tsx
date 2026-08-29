@@ -15,6 +15,7 @@ import {
   type OpenSonioxStreamOptions,
 } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
+import { articleCacheKey } from './utils/articleCacheKey';
 import {
   uploadAndFinalizeExactTrack,
   type ExactTrackCacheEntry,
@@ -255,7 +256,8 @@ export function App({
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
     const voice = currSettings.sonioxVoice || 'Adrian';
-    const cacheUrl = art.sourceUrl || art.title;
+    const cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: art.content });
+    if (!isCurrentLoad()) return;
     const cancelCurrentStream = () => {
       activeStreamRef.current?.cancel();
       activeStreamRef.current = null;

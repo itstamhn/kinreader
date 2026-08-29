@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { internalMutation, internalQuery } from '../_generated/server';
+import { internalMutation, internalQuery, type MutationCtx } from '../_generated/server';
 import type { Doc } from '../_generated/dataModel';
 import schema from '../schema';
 import {
@@ -22,6 +22,22 @@ import {
 // there should not also burn a token from the (bypassable) per-client
 // bucket. `synthesize` reaches this only after a cache miss; `temporaryKey`
 // reaches it before its direct Soniox key-issuance request.
+async function consumeTtsRateLimits(
+  ctx: MutationCtx,
+  key: string,
+  purpose: 'synthesize' | 'temporaryKey' | 'trackUpload' | undefined
+): Promise<boolean> {
+  const global = await ttsGlobalRateLimiter(ctx).limit(TTS_GLOBAL_KEY);
+  if (!global.success) return false;
+
+  const clientLimiter =
+    purpose === 'temporaryKey' || purpose === 'trackUpload'
+      ? ttsTemporaryKeyClientRateLimiter(ctx)
+      : ttsClientRateLimiter(ctx);
+  const client = await clientLimiter.limit(key);
+  return client.success;
+}
+
 export const consumeTtsRateLimit = internalMutation({
   args: {
     key: v.string(),
@@ -31,15 +47,47 @@ export const consumeTtsRateLimit = internalMutation({
   },
   returns: v.object({ ok: v.boolean() }),
   handler: async (ctx, args) => {
-    const global = await ttsGlobalRateLimiter(ctx).limit(TTS_GLOBAL_KEY);
-    if (!global.success) return { ok: false };
+    return { ok: await consumeTtsRateLimits(ctx, args.key, args.purpose) };
+  },
+});
 
-    const clientLimiter =
-      args.purpose === 'temporaryKey' || args.purpose === 'trackUpload'
-        ? ttsTemporaryKeyClientRateLimiter(ctx)
-        : ttsClientRateLimiter(ctx);
-    const client = await clientLimiter.limit(args.key);
-    return { ok: client.success };
+const TRACK_UPLOAD_GRANT_TTL_MS = 10 * 60 * 1000;
+
+export const issueTrackUploadGrant = internalMutation({
+  args: {
+    key: v.string(),
+    token: v.string(),
+    expiresAt: v.number(),
+  },
+  returns: v.union(
+    v.object({ ok: v.literal(false) }),
+    v.object({ ok: v.literal(true), grant: v.string(), expiresAt: v.number() })
+  ),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    if (
+      args.token.length < 64 ||
+      args.token.length > 200 ||
+      args.expiresAt <= now ||
+      args.expiresAt > now + TRACK_UPLOAD_GRANT_TTL_MS
+    ) {
+      throw new Error('Invalid track upload grant issuance');
+    }
+
+    const duplicate = await ctx.db
+      .query('ttsUploadGrants')
+      .withIndex('by_token', (q) => q.eq('token', args.token))
+      .first();
+    if (duplicate) throw new Error('Duplicate track upload grant');
+
+    if (!(await consumeTtsRateLimits(ctx, args.key, 'trackUpload'))) return { ok: false as const };
+
+    await ctx.db.insert('ttsUploadGrants', {
+      token: args.token,
+      expiresAt: args.expiresAt,
+      createdAt: now,
+    });
+    return { ok: true as const, grant: args.token, expiresAt: args.expiresAt };
   },
 });
 
@@ -176,6 +224,21 @@ const wordTimingValidator = v.object({
   end: v.number(),
 });
 
+async function deleteStorageIfUnreferenced(
+  ctx: MutationCtx,
+  storageId: Doc<'audioTracks'>['storageId']
+) {
+  if (!storageId) return;
+  const remainingReference = await ctx.db
+    .query('audioTracks')
+    .withIndex('by_storage_id', (q) => q.eq('storageId', storageId))
+    .first();
+  if (remainingReference) return;
+
+  const oldStorage = await ctx.db.system.get('_storage', storageId);
+  if (oldStorage) await ctx.storage.delete(storageId);
+}
+
 export const insertAudioTrack = internalMutation({
   args: {
     articleId: v.id('articles'),
@@ -207,8 +270,7 @@ export const insertAudioTrack = internalMutation({
         createdAt: Date.now(),
       });
       if (existing.storageId && existing.storageId !== args.storageId) {
-        const oldStorage = await ctx.db.system.get('_storage', existing.storageId);
-        if (oldStorage) await ctx.storage.delete(existing.storageId);
+        await deleteStorageIfUnreferenced(ctx, existing.storageId);
       }
       return existing._id;
     }
@@ -233,6 +295,7 @@ export const finalizeExactTrack = internalMutation({
     author: v.optional(v.string()),
     content: v.string(),
     voice: v.string(),
+    grant: v.string(),
     storageId: v.id('_storage'),
     duration: v.number(),
     words: v.array(wordTimingValidator),
@@ -276,6 +339,20 @@ export const finalizeExactTrack = internalMutation({
     if (!storedAudio || storedAudio.size <= 0 || storedAudio.contentType !== 'audio/mpeg') {
       throw new Error('storageId must reference uploaded audio/mpeg data');
     }
+
+    const grant = await ctx.db
+      .query('ttsUploadGrants')
+      .withIndex('by_token', (q) => q.eq('token', args.grant))
+      .unique();
+    if (!grant) throw new Error('Invalid or already used track upload grant');
+    if (grant.expiresAt <= Date.now()) throw new Error('Track upload grant has expired');
+    await ctx.db.delete(grant._id);
+
+    const storageReference = await ctx.db
+      .query('audioTracks')
+      .withIndex('by_storage_id', (q) => q.eq('storageId', args.storageId))
+      .first();
+    if (storageReference) throw new Error('storageId was already finalized');
 
     let article = await ctx.db
       .query('articles')
@@ -323,8 +400,7 @@ export const finalizeExactTrack = internalMutation({
       });
       trackId = existing._id;
       if (existing.storageId && existing.storageId !== args.storageId) {
-        const oldStorage = await ctx.db.system.get('_storage', existing.storageId);
-        if (oldStorage) await ctx.storage.delete(existing.storageId);
+        await deleteStorageIfUnreferenced(ctx, existing.storageId);
       }
     } else {
       trackId = await ctx.db.insert('audioTracks', {

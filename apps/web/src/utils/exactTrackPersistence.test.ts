@@ -24,7 +24,11 @@ test('uploads the completed MP3 Blob through the upload URL before finalizing it
       words,
     },
     {
-      requestUploadUrl: async () => ({ uploadUrl: 'https://upload.example/track' }),
+      requestUploadUrl: async () => ({
+        uploadUrl: 'https://upload.example/track',
+        grant: 'single-use-upload-grant',
+        expiresAt: 123456,
+      }),
       fetcher: async (url, init) => {
         requests.push({ url: String(url), init });
         return new Response(JSON.stringify({ storageId: 'storage-id-from-upload' }), { status: 200 });
@@ -52,6 +56,7 @@ test('uploads the completed MP3 Blob through the upload URL before finalizing it
       text: 'Exact timing',
       voice: 'Adrian',
       storageId: 'storage-id-from-upload',
+      grant: 'single-use-upload-grant',
       duration: 0.7,
       words,
     },
@@ -78,7 +83,11 @@ test('rejects oversized timing arrays before requesting an upload URL', async ()
       {
         requestUploadUrl: async () => {
           uploadUrlRequests += 1;
-          return { uploadUrl: 'https://upload.example/track' };
+          return {
+            uploadUrl: 'https://upload.example/track',
+            grant: 'unused-grant',
+            expiresAt: 123456,
+          };
         },
         fetcher: async () => new Response(JSON.stringify({ storageId: 'unused' })),
         finalizeTrack: async () => {},

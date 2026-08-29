@@ -118,6 +118,21 @@ async function storeUploadedTestAudio(t: ReturnType<typeof convexTest>, bytes: n
   return storageId;
 }
 
+async function issueTrackUploadGrant(t: ReturnType<typeof convexTest>, clientId: string) {
+  return (await t.mutation(api.routers.tts.generateTrackUploadUrl, { clientId })) as {
+    uploadUrl: string;
+    grant: string;
+    expiresAt: number;
+  };
+}
+
+async function exactPersistenceWrites(t: ReturnType<typeof convexTest>) {
+  return await t.run(async (ctx) => ({
+    articles: await ctx.db.query('articles').collect(),
+    tracks: await ctx.db.query('audioTracks').collect(),
+  }));
+}
+
 test('exact cache lookup rejects legacy, estimated, truncated, and missing-storage tracks', async () => {
   const t = convexTest(schema, modules);
   const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
@@ -207,6 +222,112 @@ test('track upload URL issuance is denied by the existing limiter before returni
   expect(tracks).toEqual([]);
 });
 
+test('track upload issuance returns distinct 256-bit capabilities with bounded expiry', async () => {
+  const t = convexTest(schema, modules);
+  const issuedAfter = Date.now();
+  const first = await issueTrackUploadGrant(t, 'capability-first');
+  const second = await issueTrackUploadGrant(t, 'capability-second');
+
+  expect(first.grant).toMatch(/^[0-9a-f]{64}$/);
+  expect(second.grant).toMatch(/^[0-9a-f]{64}$/);
+  expect(second.grant).not.toBe(first.grant);
+  expect(first.expiresAt).toBeGreaterThan(issuedAfter);
+  expect(first.expiresAt).toBeLessThanOrEqual(issuedAfter + 10 * 60 * 1000);
+
+  const grants = await t.run(async (ctx) => ctx.db.query('ttsUploadGrants').collect());
+  expect(grants.map((grant) => grant.token).sort()).toEqual([first.grant, second.grant].sort());
+});
+
+test('track upload allocation is unreachable when capability issuance is rate denied', async () => {
+  const ttsModule = await import('./tts');
+  let allocationCalls = 0;
+
+  await expect(
+    ttsModule.allocateTrackUploadAfterGrant(
+      async () => ({ ok: false as const }),
+      async () => {
+        allocationCalls += 1;
+        return 'https://must-not-be-allocated.example';
+      }
+    )
+  ).rejects.toThrow('Too many track upload requests');
+
+  expect(allocationCalls).toBe(0);
+});
+
+test('exact track finalization requires a valid unexpired upload grant before writing', async () => {
+  const baseInput = {
+    url: 'https://example.com/grant-required',
+    text: 'Exact timing',
+    voice: 'Adrian',
+    duration: 0.7,
+    words: exactWords,
+  };
+
+  for (const variant of ['missing', 'wrong', 'expired'] as const) {
+    const t = convexTest(schema, modules);
+    const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
+    const input: Record<string, unknown> = { ...baseInput, storageId };
+    if (variant === 'wrong') input.grant = `wrong-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    if (variant === 'expired') {
+      const grant = `expired-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+      input.grant = grant;
+      await t.run(async (ctx) => {
+        await (ctx.db as any).insert('ttsUploadGrants', {
+          token: grant,
+          expiresAt: Date.now() - 1,
+          createdAt: Date.now() - 60_000,
+        });
+      });
+    }
+
+    await expect(t.mutation(api.routers.tts.persistTrack, input as any)).rejects.toThrow(
+      variant === 'expired' ? /expired/i : /grant/i
+    );
+    expect(await exactPersistenceWrites(t)).toEqual({ articles: [], tracks: [] });
+  }
+});
+
+test('an upload grant is single-use and a storage ID cannot be finalized into multiple rows', async () => {
+  const t = convexTest(schema, modules);
+  const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
+  const firstGrant = await issueTrackUploadGrant(t, 'single-use-first');
+  const baseInput = {
+    text: 'Exact timing',
+    voice: 'Adrian',
+    storageId,
+    duration: 0.7,
+    words: exactWords,
+  };
+
+  await t.mutation(api.routers.tts.persistTrack, {
+    ...baseInput,
+    url: 'https://example.com/grant-first',
+    grant: firstGrant.grant,
+  });
+
+  await expect(
+    t.mutation(api.routers.tts.persistTrack, {
+      ...baseInput,
+      url: 'https://example.com/reused-grant',
+      grant: firstGrant.grant,
+    })
+  ).rejects.toThrow(/grant/i);
+
+  const secondGrant = await issueTrackUploadGrant(t, 'single-use-second');
+  await expect(
+    t.mutation(api.routers.tts.persistTrack, {
+      ...baseInput,
+      url: 'https://example.com/reused-storage',
+      grant: secondGrant.grant,
+    })
+  ).rejects.toThrow(/storageId.*already/i);
+
+  const writes = await exactPersistenceWrites(t);
+  expect(writes.articles).toHaveLength(1);
+  expect(writes.tracks).toHaveLength(1);
+});
+
 test('exact track finalization upserts at speed 1 and deletes the superseded stored audio', async () => {
   const t = convexTest(schema, modules);
   const firstStorageId = await storeUploadedTestAudio(t, [1]);
@@ -222,10 +343,17 @@ test('exact track finalization upserts at speed 1 and deletes the superseded sto
     words: exactWords,
   };
 
-  const first = await t.mutation(persistTrack, { ...input, storageId: firstStorageId });
+  const firstGrant = await issueTrackUploadGrant(t, 'upsert-first');
+  const replacementGrant = await issueTrackUploadGrant(t, 'upsert-replacement');
+  const first = await t.mutation(persistTrack, {
+    ...input,
+    storageId: firstStorageId,
+    grant: firstGrant.grant,
+  });
   const replacement = await t.mutation(persistTrack, {
     ...input,
     storageId: replacementStorageId,
+    grant: replacementGrant.grant,
     duration: 0.8,
     words: [
       { text: 'Exact', start: 0.15, end: 0.4 },
@@ -254,8 +382,77 @@ test('exact track finalization upserts at speed 1 and deletes the superseded sto
   expect(replacementStorage?.size).toBe(2);
 });
 
+test('replacing one of two shared storage references leaves the old blob alive', async () => {
+  const t = convexTest(schema, modules);
+  const sharedStorageId = await storeUploadedTestAudio(t, [1]);
+  const replacementStorageId = await storeUploadedTestAudio(t, [2]);
+  const { primaryArticleId } = await t.run(async (ctx) => {
+    const primaryArticleId = await ctx.db.insert('articles', {
+      url: 'https://example.com/shared-primary',
+      title: 'Primary',
+      content: 'Exact timing',
+      author: 'Author',
+      sourceType: 'article',
+      wordCount: 2,
+      createdAt: 1,
+    });
+    const secondaryArticleId = await ctx.db.insert('articles', {
+      url: 'https://example.com/shared-secondary',
+      title: 'Secondary',
+      content: 'Exact timing',
+      author: 'Author',
+      sourceType: 'article',
+      wordCount: 2,
+      createdAt: 1,
+    });
+    await ctx.db.insert('audioTracks', {
+      articleId: primaryArticleId,
+      voice: 'Adrian',
+      speed: 1,
+      storageId: sharedStorageId,
+      duration: 0.7,
+      timingsSource: 'soniox',
+      words: exactWords,
+      createdAt: 1,
+    });
+    await ctx.db.insert('audioTracks', {
+      articleId: secondaryArticleId,
+      voice: 'Adrian',
+      speed: 1,
+      storageId: sharedStorageId,
+      duration: 0.7,
+      timingsSource: 'soniox',
+      words: exactWords,
+      createdAt: 1,
+    });
+    return { primaryArticleId };
+  });
+  const grant = await issueTrackUploadGrant(t, 'shared-storage-replacement');
+
+  const result = await t.mutation(api.routers.tts.persistTrack, {
+    url: 'https://example.com/shared-primary',
+    text: 'Exact timing',
+    voice: 'Adrian',
+    storageId: replacementStorageId,
+    grant: grant.grant,
+    duration: 0.7,
+    words: exactWords,
+  });
+
+  expect(result.articleId).toBe(primaryArticleId);
+  const { sharedStorage, references } = await t.run(async (ctx) => ({
+    sharedStorage: await ctx.db.system.get('_storage', sharedStorageId),
+    references: (await ctx.db.query('audioTracks').collect()).filter(
+      (track) => track.storageId === sharedStorageId
+    ),
+  }));
+  expect(references).toHaveLength(1);
+  expect(sharedStorage?.size).toBe(1);
+});
+
 test('exact track finalization rejects values that are not uploaded audio storage IDs', async () => {
   const t = convexTest(schema, modules);
+  const grant = await issueTrackUploadGrant(t, 'not-storage');
   const articleId = await t.run(async (ctx) =>
     ctx.db.insert('articles', {
       url: 'https://example.com/not-storage',
@@ -274,6 +471,7 @@ test('exact track finalization rejects values that are not uploaded audio storag
       text: 'Exact timing',
       voice: 'Adrian',
       storageId: articleId,
+      grant: grant.grant,
       duration: 0.7,
       words: exactWords,
     })
@@ -285,6 +483,7 @@ test('exact track finalization rejects values that are not uploaded audio storag
 
 test('exact track finalization rejects uploaded storage without the required audio MIME type', async () => {
   const t = convexTest(schema, modules);
+  const grant = await issueTrackUploadGrant(t, 'missing-mime');
   const storageIdWithoutMime = await t.run(async (ctx) =>
     ctx.storage.store(new Blob([new Uint8Array([1, 2, 3])]))
   );
@@ -295,6 +494,7 @@ test('exact track finalization rejects uploaded storage without the required aud
       text: 'Exact timing',
       voice: 'Adrian',
       storageId: storageIdWithoutMime,
+      grant: grant.grant,
       duration: 0.7,
       words: exactWords,
     })

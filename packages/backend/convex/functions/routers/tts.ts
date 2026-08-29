@@ -107,6 +107,23 @@ function splitTextIntoRestSonioxChunks(fullText: string): string[] {
 
 type TemporaryKeyResult = { apiKey: string; expiresAt: string };
 
+type TrackUploadGrantIssue =
+  | { ok: false }
+  | { ok: true; grant: string; expiresAt: number };
+
+export async function allocateTrackUploadAfterGrant(
+  issueGrant: () => Promise<TrackUploadGrantIssue>,
+  allocateUploadUrl: () => Promise<string>
+): Promise<{ uploadUrl: string; grant: string; expiresAt: number }> {
+  const issuance = await issueGrant();
+  if (!issuance.ok) {
+    throw new Error('Too many track upload requests. Please try again in a minute.');
+  }
+
+  const uploadUrl = await allocateUploadUrl();
+  return { uploadUrl, grant: issuance.grant, expiresAt: issuance.expiresAt };
+}
+
 function isTemporaryKeyResponse(value: unknown): value is { api_key: string; expires_at: string } {
   if (!value || typeof value !== 'object') return false;
   const response = value as Record<string, unknown>;
@@ -145,18 +162,30 @@ export const getExactTrack = query
 
 export const generateTrackUploadUrl = mutation
   .input(z.object({ clientId: z.string().trim().min(1).max(200).optional() }))
-  .output(z.object({ uploadUrl: z.string().min(1) }))
+  .output(
+    z.object({
+      uploadUrl: z.string().min(1),
+      grant: z.string().min(64).max(200),
+      expiresAt: z.number().int().positive(),
+    })
+  )
   .mutation(async ({ ctx, input }) => {
     const identity = await ctx.auth?.getUserIdentity?.();
     const rateLimitKey = identity?.tokenIdentifier || input.clientId || 'anonymous';
-    const rateLimit: { ok: boolean } = await ctx.runMutation(
-      internal.routers.ttsInternal.consumeTtsRateLimit,
-      { key: rateLimitKey, purpose: 'trackUpload' }
+    const grantToken = `${crypto.randomUUID().replaceAll('-', '')}${crypto
+      .randomUUID()
+      .replaceAll('-', '')}`;
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+
+    return await allocateTrackUploadAfterGrant(
+      () =>
+        ctx.runMutation(internal.routers.ttsInternal.issueTrackUploadGrant, {
+          key: rateLimitKey,
+          token: grantToken,
+          expiresAt,
+        }) as Promise<TrackUploadGrantIssue>,
+      () => ctx.storage.generateUploadUrl()
     );
-    if (!rateLimit.ok) {
-      throw new Error('Too many track upload requests. Please try again in a minute.');
-    }
-    return { uploadUrl: await ctx.storage.generateUploadUrl() };
   });
 
 export const persistTrack = mutation
@@ -167,6 +196,7 @@ export const persistTrack = mutation
       author: z.string().max(500).optional(),
       text: z.string().trim().min(1).max(MAX_TTS_CHARS),
       voice: z.string().trim().min(1).max(100),
+      grant: z.string().min(64).max(200),
       storageId: z.string().min(1),
       duration: z.number().finite().positive(),
       words: z.array(wordTimingSchema).max(MAX_WORDS),
@@ -180,6 +210,7 @@ export const persistTrack = mutation
       author: input.author,
       content: input.text,
       voice: input.voice,
+      grant: input.grant,
       storageId: input.storageId as Id<'_storage'>,
       duration: input.duration,
       words: input.words,

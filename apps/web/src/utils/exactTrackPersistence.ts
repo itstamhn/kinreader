@@ -23,12 +23,17 @@ export type PersistExactTrackInput = {
 
 type FinalizeTrackInput = Omit<PersistExactTrackInput, 'clientId' | 'blob'> & {
   storageId: string;
+  grant: string;
 };
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type ExactTrackPersistenceDependencies = {
-  requestUploadUrl(clientId: string): Promise<{ uploadUrl: string }>;
+  requestUploadUrl(clientId: string): Promise<{
+    uploadUrl: string;
+    grant: string;
+    expiresAt: number;
+  }>;
   finalizeTrack(input: FinalizeTrackInput): Promise<unknown>;
   fetcher?: Fetcher;
 };
@@ -48,7 +53,7 @@ export async function uploadAndFinalizeExactTrack(
   }
   if (input.blob.size === 0) throw new Error('Cannot persist an empty audio track');
 
-  const { uploadUrl } = await dependencies.requestUploadUrl(input.clientId);
+  const { uploadUrl, grant } = await dependencies.requestUploadUrl(input.clientId);
   const fetcher: Fetcher = dependencies.fetcher ?? fetch;
   const uploadResponse = await fetcher(uploadUrl, {
     method: 'POST',
@@ -75,6 +80,7 @@ export async function uploadAndFinalizeExactTrack(
     text: input.text,
     voice: input.voice,
     storageId,
+    grant,
     duration: input.duration,
     words: input.words,
   });

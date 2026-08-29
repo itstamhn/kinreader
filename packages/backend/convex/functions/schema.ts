@@ -106,7 +106,19 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index('by_article_voice_speed', ['articleId', 'voice', 'speed'])
-    .index('by_article', ['articleId']),
+    .index('by_article', ['articleId'])
+    .index('by_storage_id', ['storageId']),
+
+  // Short-lived capabilities issued alongside browser upload URLs. A grant
+  // is consumed in the same transaction that creates its exact-track row,
+  // binding each successful finalization to one rate-limited issuance.
+  ttsUploadGrants: defineTable({
+    token: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index('by_token', ['token'])
+    .index('by_expires_at', ['expiresAt']),
 
   // 8. User Reading Playlists & Cross-Device Progress
   userArticles: defineTable({

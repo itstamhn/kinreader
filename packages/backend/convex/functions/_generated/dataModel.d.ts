@@ -136,6 +136,7 @@ export type DataModel = {
       by_creation_time: ["_creationTime"];
       by_article: ["articleId", "_creationTime"];
       by_article_voice_speed: ["articleId", "voice", "speed", "_creationTime"];
+      by_storage_id: ["storageId", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};
@@ -226,6 +227,24 @@ export type DataModel = {
       by_creation_time: ["_creationTime"];
       token: ["token", "_creationTime"];
       userId: ["userId", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  ttsUploadGrants: {
+    document: {
+      createdAt: number;
+      expiresAt: number;
+      token: string;
+      _id: Id<"ttsUploadGrants">;
+      _creationTime: number;
+    };
+    fieldPaths: "_creationTime" | "_id" | "createdAt" | "expiresAt" | "token";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_expires_at: ["expiresAt", "_creationTime"];
+      by_token: ["token", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};

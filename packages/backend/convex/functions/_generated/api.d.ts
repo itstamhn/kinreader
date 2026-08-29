@@ -29,7 +29,7 @@ export declare const api: {
         "mutation",
         "public",
         { clientId?: string },
-        { uploadUrl: string }
+        { expiresAt: number; grant: string; uploadUrl: string }
       >;
       getExactTrack: FunctionReference<
         "query",
@@ -48,6 +48,7 @@ export declare const api: {
         {
           author?: string;
           duration: number;
+          grant: string;
           storageId: string;
           text: string;
           title?: string;
@@ -313,6 +314,7 @@ export declare const internal: {
           author?: string;
           content: string;
           duration: number;
+          grant: string;
           storageId: Id<"_storage">;
           title?: string;
           url: string;
@@ -382,6 +384,12 @@ export declare const internal: {
           words: Array<{ end: number; start: number; text: string }>;
         },
         Id<"audioTracks">
+      >;
+      issueTrackUploadGrant: FunctionReference<
+        "mutation",
+        "internal",
+        { expiresAt: number; key: string; token: string },
+        { ok: false } | { expiresAt: number; grant: string; ok: true }
       >;
     };
     users: {

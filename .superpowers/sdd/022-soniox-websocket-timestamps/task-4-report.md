@@ -134,3 +134,61 @@ Passed:
 
 - No live Soniox session or real browser-to-Convex upload URL POST was run. The client upload contract is exercised with a real `Blob`/`Response` boundary fake, and the schema/functions were accepted by a local anonymous Convex deployment.
 - The documented three-step upload flow has an unavoidable orphan window if the Blob upload succeeds and the browser disappears before finalization. Successful replacements clean up their superseded storage, while a future periodic orphan-storage policy could address interrupted uploads.
+
+## Round 1 review fixes
+
+### Delivered
+
+- Replaced the raw-paste `sourceUrl || title` cache identity with `articleCacheKey`: real source URLs remain unchanged, while source-less notes use a `content-sha256:<hex>` key over the trimmed content. A deterministic browser-only fallback remains available if `SubtleCrypto` is absent. Cache lookup and persistence share the same derived key.
+- Added `ttsUploadGrants`, indexed by token and expiry. Upload URL issuance now creates a distinct 256-bit CSPRNG capability with a ten-minute expiry only after both existing rate limiters accept the request, then returns that capability with the upload URL.
+- Added an injectable `allocateTrackUploadAfterGrant` ordering boundary and a concrete allocation-call spy. A denied issuance throws before `ctx.storage.generateUploadUrl()` can be reached.
+- Made `grant` mandatory in browser finalization and both public/internal Convex validators. `finalizeExactTrack` validates a live, unexpired grant and deletes it in the same mutation before any article or track write; transaction rollback preserves all-or-nothing behavior.
+- Added `audioTracks.by_storage_id`. Finalization rejects any storage ID already referenced by a track, so even a newly issued grant cannot reuse one uploaded object for a second row.
+- Replacements now query `by_storage_id` after the old row is replaced and delete the superseded object only when no remaining track references it. The same safety helper covers REST/internal track replacement.
+- Regenerated the Convex/kitcn API, data-model, and procedure-name artifacts.
+
+### RED
+
+Web regressions were added before implementation:
+
+```sh
+cd apps/web
+bun test src/utils/articleCacheKey.test.ts src/utils/exactTrackPersistence.test.ts src/App.test.tsx
+```
+
+Result: **16 passed, 5 failed, 1 module-load error**. The app still requested `Pasted Note`, different pasted content incorrectly loaded the same cache audio, finalization omitted the capability, and the content-key module did not exist.
+
+Backend regressions were then added before implementation:
+
+```sh
+cd packages/backend
+bun test convex/functions/routers/tts.test.ts
+```
+
+Result: **16 passed, 7 failed**. The allocation seam did not exist; missing grants resolved; `grant` was rejected as an unexpected field in intended-success cases; and the shared-storage and capability cases could not pass.
+
+### GREEN
+
+Focused backend result after implementation: **24 passed, 0 failed, 102 assertions**. This includes distinct/bounded 256-bit issuance, missing/wrong/expired/reused grant denial, no unauthorized article/track writes, cross-grant storage-ID reuse denial, allocation ordering, unique old-file deletion, and shared-reference retention.
+
+Focused web result: **22 passed, 0 failed, 91 assertions**. This includes the fixed SHA-256 vector, same-title/different-content cache isolation, identical-content cache reuse, grant forwarding through the upload flow, cache-first behavior, and playable-audio preservation after persistence failure.
+
+### Final verification
+
+- `bun run test` in `packages/backend`: **63 passed, 0 failed, 221 assertions**.
+- `bun run test` in `apps/web`: **78 passed, 0 failed, 264 assertions**.
+- Backend and web `bun run typecheck`: passed with zero errors.
+- `bun run codegen`: passed and regenerated checked-in artifacts.
+- `npx convex dev --once --typecheck=disable --codegen=disable`: local-anonymous deployment accepted the schema/functions (`Convex functions ready!`).
+- `git diff --check`: passed.
+
+Existing non-failing React `act(...)`, intentional network-fallback, and SourceBuffer diagnostic output remains unchanged.
+
+### Round 1 self-review
+
+- Cache identity is derived before exact-cache lookup and before client ID creation, temporary-key issuance, or socket creation; the persistence path reuses the exact same key.
+- The public capability contains 256 random bits, has a server-validated maximum ten-minute lifetime, is stored only after both limiter checks, and is removed transactionally before the first article/track write.
+- Reusing the same grant fails because its row is gone; presenting a different grant cannot reuse an already referenced storage ID because `by_storage_id` is checked in the same transaction.
+- Missing, wrong, expired, and reused grants leave article/track counts unchanged from their pre-call state.
+- Replacement deletes the previous object only after the track row points at the new object and an indexed read proves no remaining reference exists.
+- Persistence remains best-effort after the completed WebSocket Blob is playable, and REST/browser fallbacks remain intact.
