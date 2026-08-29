@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { action } from '../crpc';
 import { internal } from '../_generated/api';
+import { env } from '../_generated/server';
 import type { Doc, Id } from '../_generated/dataModel';
 
 // Ported from src/server.ts's `POST /api/tts` handler (plan 005's guards
@@ -138,7 +139,7 @@ function isTemporaryKeyResponse(value: unknown): value is { api_key: string; exp
 export const temporaryKey = action
   .input(z.object({ clientId: z.string().optional() }))
   .action(async ({ ctx, input }): Promise<TemporaryKeyResult> => {
-    const sonioxApiKey = process.env.SONIOX_API_KEY;
+    const sonioxApiKey = env.SONIOX_API_KEY;
     if (!sonioxApiKey) {
       throw new Error('SONIOX_API_KEY is not configured');
     }

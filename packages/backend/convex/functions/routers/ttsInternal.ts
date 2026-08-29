@@ -18,8 +18,8 @@ import {
 // Consumes TWO limiters (see convex/lib/rateLimiter.ts for why both exist):
 // the global one first, since it is the real security boundary and denying
 // there should not also burn a token from the (bypassable) per-client
-// bucket. Both are cache-miss-only -- the caller only reaches this after a
-// cache lookup has already missed.
+// bucket. `synthesize` reaches this only after a cache miss; `temporaryKey`
+// reaches it before its direct Soniox key-issuance request.
 export const consumeTtsRateLimit = internalMutation({
   args: {
     key: v.string(),

@@ -506,6 +506,23 @@ test('temporaryKey rejects the sixth request for one client before calling Sonio
   ]);
 });
 
+test('temporaryKey global-limit denial prevents its Soniox fetch', async () => {
+  const t = convexTest(schema, modules);
+  await drainGlobalRateLimit(t);
+
+  await withSonioxServerKey(async () => {
+    stubFetch(() => {
+      throw new Error('a globally rate-limited temporary-key request must not reach Soniox');
+    });
+
+    await expect(t.action(api.routers.tts.temporaryKey, { clientId: 'new-client-after-global-limit' })).rejects.toThrow(
+      'Too many temporary key requests'
+    );
+  });
+
+  expect(fetchCalls).toEqual([]);
+});
+
 test('temporaryKey fails clearly without a server key or a valid Soniox response', async () => {
   const t = convexTest(schema, modules);
   const originalKey = process.env.SONIOX_API_KEY;
