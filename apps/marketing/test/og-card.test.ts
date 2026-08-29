@@ -36,7 +36,13 @@ test('renderOgCard allows a legitimate https image URL through as an href', () =
 test('renderOgCard truncates an overlong title rather than overflowing the card', () => {
   const svg = renderOgCard({ title: 'x'.repeat(200) });
   expect(svg).toContain('...');
-  expect(svg).not.toContain('x'.repeat(80));
+
+  // The headline box holds three lines of ~30 characters, so the cap is 90 --
+  // asserting a fixed substring length would just re-pin the test to whatever
+  // the constant happens to be. Assert the emitted text instead.
+  const headline = svg.match(/<tspan x="90"[^>]*>([^<]*)<\/tspan>/)?.[1] ?? '';
+  expect(headline.length).toBeLessThanOrEqual(90);
+  expect(headline.endsWith('...')).toBe(true);
 });
 
 test('renderOgCard renders an ordinary title as readable text', () => {

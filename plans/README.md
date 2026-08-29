@@ -32,10 +32,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 app on the apex, because the domain split forces it. What remains of 009 after 014 is
 "delete Spiceflow and `src/server.ts`", which needs plan 008 (auth to Convex) first.
 
-**Two follow-ups owed by 014**, both currently invisible failures: the OG card is an SVG,
-which X and Facebook do not render, so social cards almost certainly do not appear at all;
-and `/r/:id` is half-built — nothing generates those links and nothing handles the
-`?read=` it redirects to.
+**One follow-up still owed by 014**: `/r/:id` is half-built — nothing generates those links
+and nothing handles the `?read=` it redirects to. (The SVG-card follow-up is DONE; see the
+log entry below.)
 
 ## Execution log
 
@@ -496,3 +495,47 @@ are not re-audited from scratch next session.
 - **009 — still TODO**, and much smaller now. Plan 014 moved `/r/:id` and `/api/og` out of
   the Worker, so what remains is deleting Spiceflow and `src/server.ts` once 008 has moved
   auth off them.
+
+- **014 follow-up — OG card renders as PNG. DONE, verified on the real runtime.**
+  X, Facebook and LinkedIn do not render SVG for `og:image`, so the card had almost
+  certainly never appeared anywhere. `/api/og` now returns a 1200x630 PNG.
+
+  The design is unchanged and, more usefully, *not duplicated*: `renderOgCardPng`
+  rasterises the very SVG `renderOgCard` produces, so there is one card with two outputs.
+  Two edits made that possible — the `<foreignObject>` headline became wrapped `<tspan>`s
+  (resvg does not implement foreignObject, and the fallback SVG is better off without it),
+  and the emoji placeholder became a typographic one (no emoji font reaches a Worker).
+
+  **satori was tried first and abandoned**, which is the part worth recording. It fails on
+  Cloudflare Workers three different ways in sequence, each hidden behind the previous one:
+  1. Its shaper is Emscripten-compiled harfbuzz, which sets
+     `ENVIRONMENT_IS_WORKER = typeof WorkerGlobalScope != "undefined"` — true on Workers —
+     then reads `self.location.href`, which Workers do not have.
+  2. Shim `location` and it takes the *Node* branch instead, because `nodejs_compat` makes
+     `process.versions.node` truthy, and reaches for `__dirname` and `require("fs")`.
+  3. Drop `nodejs_compat` and it reaches for `XMLHttpRequest` to fetch a harfbuzz wasm it
+     does not inline.
+
+  resvg needs none of that: it takes font buffers directly. The marketing Worker therefore
+  runs **without `nodejs_compat`** — deliberately, and commented as such in its
+  `wrangler.jsonc`.
+
+  Verified by running the built Worker under `wrangler dev` (real workerd) and fetching the
+  route: `Content-Type: image/png`, 161434 bytes, IHDR 1200x630. Before the rewrite the
+  same request returned `image/svg+xml` — the fallback firing silently, which is exactly
+  how this would have shipped looking fine.
+
+  Two things this changed that are worth knowing:
+  - **Fonts are embedded as TTF, not woff.** resvg's font database does not decode woff,
+    and it fails *silently* — it renders the card with no text rather than erroring.
+    `scripts/embed-fonts.ts` regenerates `src/lib/og-fonts.ts` from @expo-google-fonts.
+  - **The Worker now fetches the hero image itself**, where the SVG only emitted an
+    `<image href>` for the client to resolve. That is a new server-side fetch of a URL from
+    a query parameter, so it goes through the same host guard the extractor uses (plan 011)
+    plus content-type and size caps, and any failure degrades to the placeholder. Tests
+    assert the blocked hosts are never fetched at all.
+
+  Also fixed while verifying: `public/_redirects` carried a www→apex 301 that **Cloudflare
+  silently skips** — Workers Static Assets rejects absolute URLs in that file ("Only
+  relative URLs are allowed"). It has been removed. www serves the same site with a
+  canonical link to the apex; a real 301 needs a Cloudflare Redirect Rule in the dashboard.

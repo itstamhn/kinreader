@@ -1,3 +1,0 @@
-# www -> apex, 301. The www custom domain points at this same Worker, so the
-# redirect has to happen here rather than in DNS.
-https://www.kinreader.com/* https://kinreader.com/:splat 301
