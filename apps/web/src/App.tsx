@@ -345,102 +345,118 @@ export function App() {
   const remainingSeconds = Math.max(0, playback.duration - playback.currentTime);
 
   return (
-    <div className="flex flex-col justify-between h-[100dvh] max-h-[100dvh] w-full bg-kinreader-radial text-[#ECEAE4] select-none relative overflow-hidden font-sans">
-      {/* 1. Header Bar */}
-      <Header
-        article={article}
-        onOpenSettings={() => {
-          setLibraryTab('settings');
-          setIsLibraryOpen(true);
-        }}
-        onOpenInput={() => setIsInputOpen(true)}
-        onOpenLibrary={() => {
-          setLibraryTab('queue');
-          setIsLibraryOpen(true);
-        }}
-        user={user}
-        onOpenAuth={() => setIsAuthOpen(true)}
-        speed={playback.rate}
-        progress={playback.progress}
-        isVoiceEnabled={isVoiceEnabled}
-        onToggleVoice={() => setIsVoiceEnabled(!isVoiceEnabled)}
-        isRampEnabled={isRampEnabled}
-        onToggleRamp={() => setIsRampEnabled(!isRampEnabled)}
-      />
+    <div className="w-full h-[100dvh] max-h-[100dvh] bg-[#0B0C10] text-[#ECEAE4] select-none relative overflow-hidden font-sans">
+      {isLibraryOpen ? (
+        <LibraryDrawer
+          isOpen={true}
+          onClose={() => setIsLibraryOpen(false)}
+          savedArticles={savedArticles}
+          currentArticleId={article.sourceUrl || article.title}
+          onSelectArticle={(newArt) => {
+            handleLoadNewArticle(newArt);
+            setIsLibraryOpen(false);
+          }}
+          onDeleteArticle={handleDeleteArticle}
+          onQuickExtract={(urlToExtract) => {
+            extractArticleMutation.mutate(
+              { url: urlToExtract },
+              {
+                onSuccess: (data) => {
+                  if (data.title) {
+                    handleLoadNewArticle(data);
+                    setIsLibraryOpen(false);
+                  }
+                },
+                onError: () => {},
+              }
+            );
+          }}
+          user={user}
+          onOpenAuth={() => setIsAuthOpen(true)}
+          isPlaying={playback.isPlaying}
+          onTogglePlay={handleTogglePlay}
+          speed={playback.rate}
+          settings={settings}
+          onSaveSettings={handleSaveSettings}
+          initialTab={libraryTab}
+        />
+      ) : (
+        <div className="w-full h-full flex flex-col justify-between bg-kinreader-radial">
+          {/* 1. Header Bar */}
+          <Header
+            article={article}
+            onOpenSettings={() => {
+              setLibraryTab('settings');
+              setIsLibraryOpen(true);
+            }}
+            onOpenInput={() => setIsInputOpen(true)}
+            onOpenLibrary={() => {
+              setLibraryTab('queue');
+              setIsLibraryOpen(true);
+            }}
+            user={user}
+            onOpenAuth={() => setIsAuthOpen(true)}
+            speed={playback.rate}
+            progress={playback.progress}
+            isVoiceEnabled={isVoiceEnabled}
+            onToggleVoice={() => setIsVoiceEnabled(!isVoiceEnabled)}
+            isRampEnabled={isRampEnabled}
+            onToggleRamp={() => setIsRampEnabled(!isRampEnabled)}
+          />
 
-      {/* 2. Kinetic Display */}
-      <KineticDisplay
-        words={playback.words}
-        currentWordIndex={playback.currentWordIndex}
-        onSelectWord={handleSelectWord}
-        viewMode={viewMode}
-        fontSize={settings.fontSize || 'md'}
-        clauseLength={clauseLength}
-      />
+          {/* 2. Kinetic Display */}
+          <KineticDisplay
+            words={playback.words}
+            currentWordIndex={playback.currentWordIndex}
+            onSelectWord={handleSelectWord}
+            viewMode={viewMode}
+            fontSize={settings.fontSize || 'md'}
+            clauseLength={clauseLength}
+          />
 
-      {/* 3. Bottom Controls */}
-      <Controls
-        isPlaying={playback.isPlaying}
-        onTogglePlay={handleTogglePlay}
-        speed={playback.rate}
-        onSpeedChange={handleSpeedChange}
-        progress={playback.progress}
-        onSeekProgress={handleSeekProgress}
-        currentTime={playback.currentTime}
-        duration={playback.duration}
-        remainingSeconds={remainingSeconds}
-        sourceUrl={article.sourceUrl}
-        sourceType={article.sourceType}
-        viewMode={viewMode}
-        onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
-        isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
-        isDegraded={playbackStatus === 'degraded'}
-      />
+          {/* 3. Bottom Controls */}
+          <Controls
+            isPlaying={playback.isPlaying}
+            onTogglePlay={handleTogglePlay}
+            speed={playback.rate}
+            onSpeedChange={handleSpeedChange}
+            progress={playback.progress}
+            onSeekProgress={handleSeekProgress}
+            currentTime={playback.currentTime}
+            duration={playback.duration}
+            remainingSeconds={remainingSeconds}
+            sourceUrl={article.sourceUrl}
+            sourceType={article.sourceType}
+            viewMode={viewMode}
+            onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
+            isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
+            isDegraded={playbackStatus === 'degraded'}
+          />
+        </div>
+      )}
 
-      {/* Modals, Drawers & Mobile Clipboard Sheet */}
+      {/* Modals & Bottom Sheets */}
       <ClipboardDetectSheet
         isOpen={!!detectedClipboardUrl}
         detectedUrl={detectedClipboardUrl}
         onClose={() => setDetectedClipboardUrl('')}
-        onNarrateNow={handleLoadNewArticle}
+        onNarrateNow={(newArt) => {
+          handleLoadNewArticle(newArt);
+          setIsLibraryOpen(false);
+        }}
         onAddToQueue={(newArt) => {
           saveArticleToLibrary(newArt);
           setSavedArticles(getSavedArticles());
         }}
       />
 
-      <LibraryDrawer
-        isOpen={isLibraryOpen}
-        onClose={() => setIsLibraryOpen(false)}
-        savedArticles={savedArticles}
-        currentArticleId={article.sourceUrl || article.title}
-        onSelectArticle={handleLoadNewArticle}
-        onDeleteArticle={handleDeleteArticle}
-        onQuickExtract={(urlToExtract) => {
-          extractArticleMutation.mutate(
-            { url: urlToExtract },
-            {
-              onSuccess: (data) => {
-                if (data.title) handleLoadNewArticle(data);
-              },
-              onError: () => {},
-            }
-          );
-        }}
-        user={user}
-        onOpenAuth={() => setIsAuthOpen(true)}
-        isPlaying={playback.isPlaying}
-        onTogglePlay={handleTogglePlay}
-        speed={playback.rate}
-        settings={settings}
-        onSaveSettings={handleSaveSettings}
-        initialTab={libraryTab}
-      />
-
       <UrlInputModal
         isOpen={isInputOpen}
         onClose={() => setIsInputOpen(false)}
-        onLoadArticle={handleLoadNewArticle}
+        onLoadArticle={(newArt) => {
+          handleLoadNewArticle(newArt);
+          setIsLibraryOpen(false);
+        }}
         onAddToQueue={(newArt) => {
           saveArticleToLibrary(newArt);
           setSavedArticles(getSavedArticles());
