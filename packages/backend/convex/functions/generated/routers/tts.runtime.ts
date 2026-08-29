@@ -14,6 +14,9 @@ import type { ActionCtx, MutationCtx, QueryCtx } from '../server';
 import type { OrmTriggerContext } from 'kitcn/orm';
 
 const procedureRegistry = {
+  "generateTrackUploadUrl": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/tts").generateTrackUploadUrl>("routers/tts:generateTrackUploadUrl"), () => (require("../../routers/tts") as Record<string, unknown>)["generateTrackUploadUrl"])],
+  "getExactTrack": ["query", typedProcedureResolver(createGeneratedFunctionReference<"query", "public", typeof import("../../routers/tts").getExactTrack>("routers/tts:getExactTrack"), () => (require("../../routers/tts") as Record<string, unknown>)["getExactTrack"])],
+  "persistTrack": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/tts").persistTrack>("routers/tts:persistTrack"), () => (require("../../routers/tts") as Record<string, unknown>)["persistTrack"])],
   "synthesize": ["action", typedProcedureResolver(createGeneratedFunctionReference<"action", "public", typeof import("../../routers/tts").synthesize>("routers/tts:synthesize"), () => (require("../../routers/tts") as Record<string, unknown>)["synthesize"])],
   "temporaryKey": ["action", typedProcedureResolver(createGeneratedFunctionReference<"action", "public", typeof import("../../routers/tts").temporaryKey>("routers/tts:temporaryKey"), () => (require("../../routers/tts") as Record<string, unknown>)["temporaryKey"])],
 } as const;

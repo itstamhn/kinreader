@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { action } from '../crpc';
+import { action, mutation, query } from '../crpc';
 import { internal } from '../_generated/api';
 import { env } from '../_generated/server';
 import type { Doc, Id } from '../_generated/dataModel';
@@ -18,6 +18,19 @@ const MAX_WORDS = 8192;
 const MAX_SONIOX_REST_SYNTH_CHARS = 900;
 
 type WordTiming = { text: string; start: number; end: number };
+
+const wordTimingSchema = z.object({
+  text: z.string().min(1),
+  start: z.number().finite().nonnegative(),
+  end: z.number().finite().positive(),
+});
+
+const exactTrackSchema = z.object({
+  audioUrl: z.string().min(1),
+  words: z.array(wordTimingSchema).max(MAX_WORDS),
+  duration: z.number().finite().positive(),
+  timingsSource: z.literal('soniox'),
+});
 
 // Explicit return type breaks a TS circularity: `internal`/`api` (from
 // _generated/api) aggregate every router module including this one, so
@@ -104,6 +117,74 @@ function isTemporaryKeyResponse(value: unknown): value is { api_key: string; exp
     !Number.isNaN(Date.parse(response.expires_at))
   );
 }
+
+export const getExactTrack = query
+  .input(
+    z.object({
+      url: z.string().trim().min(1).max(4096),
+      voice: z.string().trim().min(1).max(100),
+    })
+  )
+  .output(exactTrackSchema.nullable())
+  .query(async ({ ctx, input }) => {
+    const track: Doc<'audioTracks'> | null = await ctx.runQuery(
+      internal.routers.ttsInternal.findExactCachedTrackByUrl,
+      input
+    );
+    if (!track?.storageId) return null;
+
+    const audioUrl = await ctx.storage.getUrl(track.storageId);
+    if (!audioUrl) return null;
+    return {
+      audioUrl,
+      words: track.words,
+      duration: track.duration,
+      timingsSource: 'soniox' as const,
+    };
+  });
+
+export const generateTrackUploadUrl = mutation
+  .input(z.object({ clientId: z.string().trim().min(1).max(200).optional() }))
+  .output(z.object({ uploadUrl: z.string().min(1) }))
+  .mutation(async ({ ctx, input }) => {
+    const identity = await ctx.auth?.getUserIdentity?.();
+    const rateLimitKey = identity?.tokenIdentifier || input.clientId || 'anonymous';
+    const rateLimit: { ok: boolean } = await ctx.runMutation(
+      internal.routers.ttsInternal.consumeTtsRateLimit,
+      { key: rateLimitKey, purpose: 'trackUpload' }
+    );
+    if (!rateLimit.ok) {
+      throw new Error('Too many track upload requests. Please try again in a minute.');
+    }
+    return { uploadUrl: await ctx.storage.generateUploadUrl() };
+  });
+
+export const persistTrack = mutation
+  .input(
+    z.object({
+      url: z.string().trim().min(1).max(4096),
+      title: z.string().max(500).optional(),
+      author: z.string().max(500).optional(),
+      text: z.string().trim().min(1).max(MAX_TTS_CHARS),
+      voice: z.string().trim().min(1).max(100),
+      storageId: z.string().min(1),
+      duration: z.number().finite().positive(),
+      words: z.array(wordTimingSchema).max(MAX_WORDS),
+    })
+  )
+  .output(z.object({ articleId: z.string(), trackId: z.string() }))
+  .mutation(async ({ ctx, input }) => {
+    return await ctx.runMutation(internal.routers.ttsInternal.finalizeExactTrack, {
+      url: input.url,
+      title: input.title,
+      author: input.author,
+      content: input.text,
+      voice: input.voice,
+      storageId: input.storageId as Id<'_storage'>,
+      duration: input.duration,
+      words: input.words,
+    });
+  });
 
 export const temporaryKey = action
   .input(z.object({ clientId: z.string().optional() }))
@@ -412,6 +493,7 @@ export const synthesize = action
           speed,
           storageId,
           duration,
+          timingsSource: 'estimated',
           words,
         });
 

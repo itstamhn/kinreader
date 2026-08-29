@@ -89,6 +89,221 @@ async function drainGlobalRateLimit(t: ReturnType<typeof convexTest>) {
   });
 }
 
+async function drainTrackUploadRateLimit(t: ReturnType<typeof convexTest>, clientId: string) {
+  await t.run(async (ctx) => {
+    const limiter = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(5, MINUTE),
+      prefix: 'tts-temporary-key-client',
+    });
+    await limiter.limit(clientId, { count: 5 });
+  });
+}
+
+const exactWords = [
+  { text: 'Exact', start: 0.1, end: 0.35 },
+  { text: 'timing', start: 0.4, end: 0.7 },
+];
+
+async function storeUploadedTestAudio(t: ReturnType<typeof convexTest>, bytes: number[]) {
+  const storageId = await t.run(async (ctx) =>
+    ctx.storage.store(new Blob([new Uint8Array(bytes)], { type: 'audio/mpeg' }))
+  );
+  // convex-test's direct storage helper omits contentType, while the real
+  // browser upload endpoint records the POST's Content-Type header. Patch the
+  // emulator system row so successful fixtures mirror the production upload.
+  await t.run(async (ctx) => {
+    await (ctx.db as any).patch(storageId, { contentType: 'audio/mpeg' });
+  });
+  return storageId;
+}
+
+test('exact cache lookup rejects legacy, estimated, truncated, and missing-storage tracks', async () => {
+  const t = convexTest(schema, modules);
+  const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
+  const { articleId, trackId } = await t.run(async (ctx) => {
+    const articleId = await ctx.db.insert('articles', {
+      url: 'https://example.com/provenance',
+      title: 'Provenance',
+      content: 'Exact timing',
+      author: 'Author',
+      sourceType: 'article',
+      wordCount: 2,
+      createdAt: 1,
+    });
+    const trackId = await ctx.db.insert('audioTracks', {
+      articleId,
+      voice: 'Adrian',
+      speed: 1,
+      storageId,
+      duration: 0.7,
+      words: exactWords,
+      createdAt: 1,
+    });
+    return { articleId, trackId };
+  });
+
+  const getExactTrack = api.routers.tts.getExactTrack;
+  expect(
+    await t.query(getExactTrack, {
+      url: 'https://example.com/provenance',
+      voice: 'Adrian',
+    })
+  ).toBeNull();
+
+  await t.run(async (ctx) => ctx.db.patch(trackId, { timingsSource: 'estimated' }));
+  expect(
+    await t.query(getExactTrack, {
+      url: 'https://example.com/provenance',
+      voice: 'Adrian',
+    })
+  ).toBeNull();
+
+  await t.run(async (ctx) =>
+    ctx.db.patch(trackId, {
+      timingsSource: 'soniox',
+      words: exactWords.slice(0, 1),
+    })
+  );
+  expect(
+    await t.query(getExactTrack, {
+      url: 'https://example.com/provenance',
+      voice: 'Adrian',
+    })
+  ).toBeNull();
+
+  await t.run(async (ctx) => ctx.db.patch(trackId, { words: exactWords }));
+  const hit = await t.query(getExactTrack, {
+    url: 'https://example.com/provenance',
+    voice: 'Adrian',
+  });
+  expect(hit).toMatchObject({ words: exactWords, duration: 0.7 });
+  expect(hit?.audioUrl).toStartWith('https://some-deployment.convex.cloud/api/storage/');
+
+  await t.run(async (ctx) => ctx.storage.delete(storageId));
+  expect(
+    await t.query(getExactTrack, {
+      url: 'https://example.com/provenance',
+      voice: 'Adrian',
+    })
+  ).toBeNull();
+
+  expect(articleId).toBeTruthy();
+});
+
+test('track upload URL issuance is denied by the existing limiter before returning a URL', async () => {
+  const t = convexTest(schema, modules);
+  await drainTrackUploadRateLimit(t, 'upload-drained');
+
+  await expect(
+    t.mutation(api.routers.tts.generateTrackUploadUrl, {
+      clientId: 'upload-drained',
+    })
+  ).rejects.toThrow('Too many track upload requests');
+
+  const articles = await t.run(async (ctx) => ctx.db.query('articles').collect());
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(articles).toEqual([]);
+  expect(tracks).toEqual([]);
+});
+
+test('exact track finalization upserts at speed 1 and deletes the superseded stored audio', async () => {
+  const t = convexTest(schema, modules);
+  const firstStorageId = await storeUploadedTestAudio(t, [1]);
+  const replacementStorageId = await storeUploadedTestAudio(t, [2, 3]);
+  const persistTrack = api.routers.tts.persistTrack;
+  const input = {
+    url: 'https://example.com/upsert',
+    title: 'Exact Track',
+    author: 'Author',
+    text: 'Exact timing',
+    voice: 'Adrian',
+    duration: 0.7,
+    words: exactWords,
+  };
+
+  const first = await t.mutation(persistTrack, { ...input, storageId: firstStorageId });
+  const replacement = await t.mutation(persistTrack, {
+    ...input,
+    storageId: replacementStorageId,
+    duration: 0.8,
+    words: [
+      { text: 'Exact', start: 0.15, end: 0.4 },
+      { text: 'timing', start: 0.45, end: 0.8 },
+    ],
+  });
+
+  expect(replacement.articleId).toBe(first.articleId);
+  expect(replacement.trackId).toBe(first.trackId);
+
+  const { articles, tracks, firstStorage, replacementStorage } = await t.run(async (ctx) => ({
+    articles: await ctx.db.query('articles').collect(),
+    tracks: await ctx.db.query('audioTracks').collect(),
+    firstStorage: await ctx.db.system.get('_storage', firstStorageId),
+    replacementStorage: await ctx.db.system.get('_storage', replacementStorageId),
+  }));
+  expect(articles).toHaveLength(1);
+  expect(tracks).toHaveLength(1);
+  expect(tracks[0]).toMatchObject({
+    speed: 1,
+    storageId: replacementStorageId,
+    duration: 0.8,
+    timingsSource: 'soniox',
+  });
+  expect(firstStorage).toBeNull();
+  expect(replacementStorage?.size).toBe(2);
+});
+
+test('exact track finalization rejects values that are not uploaded audio storage IDs', async () => {
+  const t = convexTest(schema, modules);
+  const articleId = await t.run(async (ctx) =>
+    ctx.db.insert('articles', {
+      url: 'https://example.com/not-storage',
+      title: 'Not storage',
+      content: 'Exact timing',
+      author: 'Author',
+      sourceType: 'article',
+      wordCount: 2,
+      createdAt: 1,
+    })
+  );
+
+  await expect(
+    t.mutation(api.routers.tts.persistTrack, {
+      url: 'https://example.com/not-storage',
+      text: 'Exact timing',
+      voice: 'Adrian',
+      storageId: articleId,
+      duration: 0.7,
+      words: exactWords,
+    })
+  ).rejects.toThrow(/ArgumentValidationError|storage/i);
+
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks).toEqual([]);
+});
+
+test('exact track finalization rejects uploaded storage without the required audio MIME type', async () => {
+  const t = convexTest(schema, modules);
+  const storageIdWithoutMime = await t.run(async (ctx) =>
+    ctx.storage.store(new Blob([new Uint8Array([1, 2, 3])]))
+  );
+
+  await expect(
+    t.mutation(api.routers.tts.persistTrack, {
+      url: 'https://example.com/missing-mime',
+      text: 'Exact timing',
+      voice: 'Adrian',
+      storageId: storageIdWithoutMime,
+      duration: 0.7,
+      words: exactWords,
+    })
+  ).rejects.toThrow('audio/mpeg');
+
+  const tracks = await t.run(async (ctx) => ctx.db.query('audioTracks').collect());
+  expect(tracks).toEqual([]);
+});
+
 test('cache miss stores exactly one file and inserts exactly one audioTracks row', async () => {
   const t = convexTest(schema, modules);
   defaultProviderStub([

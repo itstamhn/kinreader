@@ -113,6 +113,7 @@ export type DataModel = {
       duration: number;
       speed: number;
       storageId?: Id<"_storage">;
+      timingsSource?: "soniox" | "estimated";
       voice: string;
       words: Array<{ end: number; start: number; text: string }>;
       _id: Id<"audioTracks">;
@@ -127,6 +128,7 @@ export type DataModel = {
       | "duration"
       | "speed"
       | "storageId"
+      | "timingsSource"
       | "voice"
       | "words";
     indexes: {

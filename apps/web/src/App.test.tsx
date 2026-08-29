@@ -12,6 +12,23 @@ import {
 type TestAppProps = {
   streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
+  loadExactTrack?: (input: { url: string; voice: string }) => Promise<{
+    audioUrl: string;
+    words: Array<{ text: string; start: number; end: number }>;
+    duration: number;
+    timingsSource: 'soniox';
+  } | null>;
+  persistExactTrack?: (input: {
+    clientId: string;
+    url: string;
+    title?: string;
+    author?: string;
+    text: string;
+    voice: string;
+    blob: Blob;
+    duration: number;
+    words: Array<{ text: string; start: number; end: number }>;
+  }) => Promise<void>;
 };
 
 function renderApp(props: TestAppProps = {}) {
@@ -23,6 +40,8 @@ function renderApp(props: TestAppProps = {}) {
           props.requestTemporaryKey ??
           (() => Promise.reject(new Error('temporary keys are disabled in non-streaming App tests')))
         }
+        loadExactTrack={props.loadExactTrack ?? (() => Promise.resolve(null))}
+        persistExactTrack={props.persistExactTrack ?? (() => Promise.resolve())}
       />
     </ConvexAppProvider>
   );
@@ -312,6 +331,11 @@ function timestampBatch(text: string, start = 0.1) {
   };
 }
 
+const exactWords = [
+  { text: 'Exact', start: 0.1, end: 0.35 },
+  { text: 'timing', start: 0.4, end: 0.7 },
+];
+
 function fakeStreamingTransport() {
   const streams: Array<{
     options: OpenSonioxStreamOptions;
@@ -486,6 +510,102 @@ test('a WebSocket failure falls back to REST and reports degraded playback', asy
 
     act(() => (window as any).__engine.audio.onerror(new Event('error')));
     await waitFor(() => expect(browserFallbackTexts).toContain('Fallback through REST'));
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+    SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
+  }
+});
+
+test('an exact cache hit loads stored audio before minting a key or opening a socket', async () => {
+  const transport = fakeStreamingTransport();
+  const cacheRequests: Array<{ url: string; voice: string }> = [];
+  let keyRequests = 0;
+  const loadedUrls: string[] = [];
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    loadedUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => {
+        keyRequests += 1;
+        return { apiKey: 'must-not-be-minted', expiresAt: '2026-08-29T12:00:00Z' };
+      },
+      loadExactTrack: async (input) => {
+        cacheRequests.push(input);
+        return {
+          audioUrl: 'https://cache.example/exact.mp3',
+          words: exactWords,
+          duration: 0.7,
+          timingsSource: 'soniox',
+        };
+      },
+    });
+
+    await narrateRawText(container, 'Exact timing');
+    await waitFor(() => expect(loadedUrls).toContain('https://cache.example/exact.mp3'));
+
+    expect(cacheRequests).toEqual([{ url: 'Pasted Note', voice: 'Adrian' }]);
+    expect(keyRequests).toBe(0);
+    expect(transport.streams).toHaveLength(0);
+    expect(container.textContent).not.toContain('Neural voice unavailable');
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
+
+test('exact-track persistence failure does not replace completed WebSocket playback with a fallback', async () => {
+  const transport = fakeStreamingTransport();
+  const persistenceInputs: Array<Parameters<NonNullable<TestAppProps['persistExactTrack']>>[0]> = [];
+  const restUrls: string[] = [];
+  const browserFallbackTexts: string[] = [];
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  const originalLoadBrowserText = SpeechEngine.prototype.loadBrowserText;
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    if (url.startsWith('/api/tts/stream')) restUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+  SpeechEngine.prototype.loadBrowserText = function (text, words) {
+    browserFallbackTexts.push(text);
+    return originalLoadBrowserText.call(this, text, words);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: '2026-08-29T12:00:00Z' }),
+      loadExactTrack: async () => null,
+      persistExactTrack: async (input) => {
+        persistenceInputs.push(input);
+        throw new Error('persistence unavailable');
+      },
+    });
+    await narrateRawText(container, 'Exact timing');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+
+    act(() => {
+      transport.streams[0]!.options.handlers.onAudio(new Uint8Array([4, 5, 6]));
+      transport.streams[0]!.options.handlers.onTimestamps(timestampBatch('Exact timing'));
+      transport.streams[0]!.options.handlers.onDone();
+      transport.streams[0]!.options.handlers.onTerminated?.();
+    });
+
+    await waitFor(() => expect(persistenceInputs).toHaveLength(1));
+    expect(await persistenceInputs[0]!.blob.arrayBuffer()).toEqual(new Uint8Array([4, 5, 6]).buffer);
+    expect(persistenceInputs[0]).toMatchObject({
+      clientId: expect.any(String),
+      url: 'Pasted Note',
+      text: 'Exact timing',
+      voice: 'Adrian',
+      duration: 0.7,
+      words: exactWords,
+    });
+    expect(restUrls).toEqual([]);
+    expect(browserFallbackTexts).toEqual([]);
+    expect(container.textContent).not.toContain('Neural voice unavailable');
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;

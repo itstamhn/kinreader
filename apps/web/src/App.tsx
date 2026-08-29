@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
 import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
@@ -15,6 +15,11 @@ import {
   type OpenSonioxStreamOptions,
 } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
+import {
+  uploadAndFinalizeExactTrack,
+  type ExactTrackCacheEntry,
+  type PersistExactTrackInput,
+} from './utils/exactTrackPersistence';
 import { SAMPLE_ARTICLE, SAMPLE_TIMINGS, SAMPLE_DURATION } from './data/sampleData';
 import {
   getSavedArticles,
@@ -53,18 +58,37 @@ type PlaybackStatus =
 export interface AppProps {
   streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
+  loadExactTrack?: (input: { url: string; voice: string }) => Promise<ExactTrackCacheEntry | null>;
+  persistExactTrack?: (input: PersistExactTrackInput) => Promise<void>;
 }
 
 export function App({
   streamingTransport = openSonioxStream,
   requestTemporaryKey,
+  loadExactTrack,
+  persistExactTrack,
 }: AppProps = {}) {
   const crpc = useCRPC();
+  const queryClient = useQueryClient();
   const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
   const temporaryKeyMutation = useMutation(crpc.routers.tts.temporaryKey.mutationOptions());
+  const trackUploadUrlMutation = useMutation(crpc.routers.tts.generateTrackUploadUrl.mutationOptions());
+  const persistTrackMutation = useMutation(crpc.routers.tts.persistTrack.mutationOptions());
   const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
   const addToPlaylistMutation = useMutation(crpc.routers.users.addToPlaylist.mutationOptions());
   const deleteUserArticleMutation = useMutation(crpc.routers.users.deleteUserArticle.mutationOptions());
+
+  const lookupExactTrack =
+    loadExactTrack ??
+    ((input: { url: string; voice: string }) =>
+      queryClient.fetchQuery(crpc.routers.tts.getExactTrack.queryOptions(input)));
+  const persistCompletedExactTrack =
+    persistExactTrack ??
+    ((input: PersistExactTrackInput) =>
+      uploadAndFinalizeExactTrack(input, {
+        requestUploadUrl: (clientId) => trackUploadUrlMutation.mutateAsync({ clientId }),
+        finalizeTrack: (finalizeInput) => persistTrackMutation.mutateAsync(finalizeInput),
+      }));
 
   const { data: session } = authClient.useSession();
   const user: UserProfile | null = session?.user
@@ -230,6 +254,8 @@ export function App({
     setPlaybackStatus('synthesizing');
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
+    const voice = currSettings.sonioxVoice || 'Adrian';
+    const cacheUrl = art.sourceUrl || art.title;
     const cancelCurrentStream = () => {
       activeStreamRef.current?.cancel();
       activeStreamRef.current = null;
@@ -282,6 +308,7 @@ export function App({
         const accumulator = createWordTimingAccumulator(art.content.trim());
         const exactWords: WordTiming[] = [];
         let audioFinished = false;
+        let completedBlob: Blob | null = null;
         let attemptActive = true;
         const progressivePlayback = eng.startStreamingSession(initialWordTimings, totalDuration);
         setPlaybackStatus(progressivePlayback ? 'synthesizing' : 'degraded');
@@ -298,13 +325,32 @@ export function App({
           eng.appendWordTimings(exactWords, exactDuration, { authoritative: true });
           attemptActive = false;
           activeStreamRef.current = null;
-          setPlaybackStatus(eng.progressivePlaybackAvailable ? 'ready' : 'degraded');
+          setPlaybackStatus('ready');
+
+          if (completedBlob) {
+            const persistenceInput: PersistExactTrackInput = {
+              clientId,
+              url: cacheUrl,
+              title: art.title,
+              author: art.author,
+              text: art.content.trim(),
+              voice,
+              blob: completedBlob,
+              duration: exactDuration,
+              words: exactWords,
+            };
+            void Promise.resolve()
+              .then(() => persistCompletedExactTrack(persistenceInput))
+              .catch((error) => {
+                console.warn('Exact track persistence failed; keeping completed playback:', error);
+              });
+          }
         };
 
         const stream = streamingTransport({
           apiKey: temporaryKey.apiKey,
           text: art.content.trim(),
-          voice: currSettings.sonioxVoice || 'Adrian',
+          voice,
           handlers: {
             onAudio: (chunk) => {
               if (!attemptActive || !isCurrentLoad()) return;
@@ -320,11 +366,11 @@ export function App({
             onDone: () => {
               if (!attemptActive || !isCurrentLoad()) return;
               audioFinished = true;
-              eng.finishStreamingSession();
+              completedBlob = eng.finishStreamingSession();
             },
             onTerminated: () => {
               if (!attemptActive || !isCurrentLoad()) return;
-              if (!audioFinished) eng.finishStreamingSession();
+              if (!audioFinished) completedBlob = eng.finishStreamingSession();
               finalizeTimings();
             },
             onError: (error) => {
@@ -349,6 +395,23 @@ export function App({
         useRestFallback();
       }
     };
+
+    try {
+      const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
+      if (!isCurrentLoad()) return;
+      if (cachedTrack) {
+        let cacheFailed = false;
+        eng.loadAudioUrl(cachedTrack.audioUrl, cachedTrack.words, cachedTrack.duration, () => {
+          if (cacheFailed || !isCurrentLoad()) return;
+          cacheFailed = true;
+          void runWebSocketAttempt(0);
+        });
+        setPlaybackStatus('ready');
+        return;
+      }
+    } catch (error) {
+      console.warn('Exact track cache lookup failed; continuing with synthesis:', error);
+    }
 
     void runWebSocketAttempt(0);
   };

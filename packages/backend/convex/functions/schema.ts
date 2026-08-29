@@ -95,6 +95,7 @@ export default defineSchema({
     storageId: v.optional(v.id('_storage')), // Convex File Storage ID
     audioBase64: v.optional(v.string()), // Inline fallback base64
     duration: v.number(),
+    timingsSource: v.optional(v.union(v.literal('soniox'), v.literal('estimated'))),
     words: v.array(
       v.object({
         text: v.string(),

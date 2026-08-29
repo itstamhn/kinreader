@@ -1,5 +1,7 @@
 import { v } from 'convex/values';
 import { internalMutation, internalQuery } from '../_generated/server';
+import type { Doc } from '../_generated/dataModel';
+import schema from '../schema';
 import {
   TTS_GLOBAL_KEY,
   ttsClientRateLimiter,
@@ -23,7 +25,9 @@ import {
 export const consumeTtsRateLimit = internalMutation({
   args: {
     key: v.string(),
-    purpose: v.optional(v.union(v.literal('synthesize'), v.literal('temporaryKey'))),
+    purpose: v.optional(
+      v.union(v.literal('synthesize'), v.literal('temporaryKey'), v.literal('trackUpload'))
+    ),
   },
   returns: v.object({ ok: v.boolean() }),
   handler: async (ctx, args) => {
@@ -31,7 +35,9 @@ export const consumeTtsRateLimit = internalMutation({
     if (!global.success) return { ok: false };
 
     const clientLimiter =
-      args.purpose === 'temporaryKey' ? ttsTemporaryKeyClientRateLimiter(ctx) : ttsClientRateLimiter(ctx);
+      args.purpose === 'temporaryKey' || args.purpose === 'trackUpload'
+        ? ttsTemporaryKeyClientRateLimiter(ctx)
+        : ttsClientRateLimiter(ctx);
     const client = await clientLimiter.limit(args.key);
     return { ok: client.success };
   },
@@ -52,6 +58,7 @@ export const getOrCreateArticleStub = internalMutation({
     content: v.string(),
     sourceType: v.optional(v.union(v.literal('article'), v.literal('x'), v.literal('text'))),
   },
+  returns: v.id('articles'),
   handler: async (ctx, args) => {
     const existing = await ctx.db
       .query('articles')
@@ -87,6 +94,7 @@ export const findCachedTrackByUrl = internalQuery({
     voice: v.string(),
     speed: v.number(),
   },
+  returns: v.union(v.null(), schema.doc('audioTracks')),
   handler: async (ctx, args) => {
     const article = await ctx.db
       .query('articles')
@@ -103,6 +111,71 @@ export const findCachedTrackByUrl = internalQuery({
   },
 });
 
+function hasFullExactCoverage(track: Doc<'audioTracks'>, expectedWordCount: number): boolean {
+  if (
+    track.timingsSource !== 'soniox' ||
+    track.speed !== 1 ||
+    track.words.length === 0 ||
+    track.words.length !== expectedWordCount ||
+    track.words.length > 8192 ||
+    !Number.isFinite(track.duration) ||
+    track.duration <= 0
+  ) {
+    return false;
+  }
+
+  let previousEnd = 0;
+  for (const word of track.words) {
+    if (
+      word.text.trim().length === 0 ||
+      !Number.isFinite(word.start) ||
+      !Number.isFinite(word.end) ||
+      word.start < previousEnd ||
+      word.end <= word.start
+    ) {
+      return false;
+    }
+    previousEnd = word.end;
+  }
+  return Math.abs(previousEnd - track.duration) <= 0.01;
+}
+
+// This is the strict cache path used before browser WebSocket synthesis. Old
+// rows deliberately miss: exact playback requires explicit Soniox provenance,
+// complete word coverage, speed 1.0, and a live audio/mpeg storage object.
+export const findExactCachedTrackByUrl = internalQuery({
+  args: {
+    url: v.string(),
+    voice: v.string(),
+  },
+  returns: v.union(v.null(), schema.doc('audioTracks')),
+  handler: async (ctx, args) => {
+    const article = await ctx.db
+      .query('articles')
+      .withIndex('by_url', (q) => q.eq('url', args.url))
+      .first();
+    if (!article) return null;
+
+    const track = await ctx.db
+      .query('audioTracks')
+      .withIndex('by_article_voice_speed', (q) =>
+        q.eq('articleId', article._id).eq('voice', args.voice).eq('speed', 1)
+      )
+      .first();
+    if (!track?.storageId || !hasFullExactCoverage(track, article.wordCount)) return null;
+
+    const storedAudio = await ctx.db.system.get('_storage', track.storageId);
+    if (!storedAudio || storedAudio.size <= 0 || storedAudio.contentType !== 'audio/mpeg') return null;
+    return track;
+  },
+});
+
+const wordTimingValidator = v.object({
+  text: v.string(),
+  start: v.number(),
+  end: v.number(),
+});
+
 export const insertAudioTrack = internalMutation({
   args: {
     articleId: v.id('articles'),
@@ -110,14 +183,10 @@ export const insertAudioTrack = internalMutation({
     speed: v.number(),
     storageId: v.id('_storage'),
     duration: v.number(),
-    words: v.array(
-      v.object({
-        text: v.string(),
-        start: v.number(),
-        end: v.number(),
-      })
-    ),
+    timingsSource: v.optional(v.union(v.literal('soniox'), v.literal('estimated'))),
+    words: v.array(wordTimingValidator),
   },
+  returns: v.id('audioTracks'),
   handler: async (ctx, args) => {
     const existing = await ctx.db
       .query('audioTracks')
@@ -127,12 +196,20 @@ export const insertAudioTrack = internalMutation({
       .first();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
+      await ctx.db.replace(existing._id, {
+        articleId: args.articleId,
+        voice: args.voice,
+        speed: args.speed,
         storageId: args.storageId,
         duration: args.duration,
+        timingsSource: args.timingsSource,
         words: args.words,
         createdAt: Date.now(),
       });
+      if (existing.storageId && existing.storageId !== args.storageId) {
+        const oldStorage = await ctx.db.system.get('_storage', existing.storageId);
+        if (oldStorage) await ctx.storage.delete(existing.storageId);
+      }
       return existing._id;
     }
 
@@ -142,8 +219,126 @@ export const insertAudioTrack = internalMutation({
       speed: args.speed,
       storageId: args.storageId,
       duration: args.duration,
+      timingsSource: args.timingsSource,
       words: args.words,
       createdAt: Date.now(),
     });
+  },
+});
+
+export const finalizeExactTrack = internalMutation({
+  args: {
+    url: v.string(),
+    title: v.optional(v.string()),
+    author: v.optional(v.string()),
+    content: v.string(),
+    voice: v.string(),
+    storageId: v.id('_storage'),
+    duration: v.number(),
+    words: v.array(wordTimingValidator),
+  },
+  returns: v.object({
+    articleId: v.id('articles'),
+    trackId: v.id('audioTracks'),
+  }),
+  handler: async (ctx, args) => {
+    const url = args.url.trim();
+    const content = args.content.trim();
+    const voice = args.voice.trim();
+    if (!url || url.length > 4096) throw new Error('Invalid article URL');
+    if (!content || content.length > 50000) throw new Error('Invalid article content');
+    if (!voice || voice.length > 100) throw new Error('Invalid voice');
+    if (!Number.isFinite(args.duration) || args.duration <= 0) throw new Error('Invalid duration');
+
+    const rawWords = content.split(/\s+/).filter(Boolean);
+    if (rawWords.length === 0 || rawWords.length > 8192 || args.words.length !== rawWords.length) {
+      throw new Error('Exact timings must cover every article word within the 8192-word limit');
+    }
+
+    let previousEnd = 0;
+    for (const [index, word] of args.words.entries()) {
+      if (
+        word.text !== rawWords[index] ||
+        !Number.isFinite(word.start) ||
+        !Number.isFinite(word.end) ||
+        word.start < previousEnd ||
+        word.end <= word.start
+      ) {
+        throw new Error(`Invalid exact word timing at index ${index}`);
+      }
+      previousEnd = word.end;
+    }
+    if (Math.abs(previousEnd - args.duration) > 0.01) {
+      throw new Error('Exact duration must match the final word timing');
+    }
+
+    const storedAudio = await ctx.db.system.get('_storage', args.storageId);
+    if (!storedAudio || storedAudio.size <= 0 || storedAudio.contentType !== 'audio/mpeg') {
+      throw new Error('storageId must reference uploaded audio/mpeg data');
+    }
+
+    let article = await ctx.db
+      .query('articles')
+      .withIndex('by_url', (q) => q.eq('url', url))
+      .first();
+    if (article) {
+      await ctx.db.patch(article._id, {
+        title: args.title?.trim() || article.title,
+        author: args.author?.trim() || article.author,
+        content: content.slice(0, 2000),
+        wordCount: rawWords.length,
+      });
+    } else {
+      const articleId = await ctx.db.insert('articles', {
+        url,
+        title: args.title?.trim() || 'Untitled',
+        content: content.slice(0, 2000),
+        author: args.author?.trim() || 'Unknown',
+        sourceType: 'article',
+        wordCount: rawWords.length,
+        createdAt: Date.now(),
+      });
+      article = await ctx.db.get('articles', articleId);
+    }
+    if (!article) throw new Error('Failed to create article cache entry');
+
+    const existing = await ctx.db
+      .query('audioTracks')
+      .withIndex('by_article_voice_speed', (q) =>
+        q.eq('articleId', article._id).eq('voice', voice).eq('speed', 1)
+      )
+      .first();
+
+    let trackId;
+    if (existing) {
+      await ctx.db.replace(existing._id, {
+        articleId: article._id,
+        voice,
+        speed: 1,
+        storageId: args.storageId,
+        duration: args.duration,
+        timingsSource: 'soniox',
+        words: args.words,
+        createdAt: Date.now(),
+      });
+      trackId = existing._id;
+      if (existing.storageId && existing.storageId !== args.storageId) {
+        const oldStorage = await ctx.db.system.get('_storage', existing.storageId);
+        if (oldStorage) await ctx.storage.delete(existing.storageId);
+      }
+    } else {
+      trackId = await ctx.db.insert('audioTracks', {
+        articleId: article._id,
+        voice,
+        speed: 1,
+        storageId: args.storageId,
+        duration: args.duration,
+        timingsSource: 'soniox',
+        words: args.words,
+        createdAt: Date.now(),
+      });
+    }
+
+    return { articleId: article._id, trackId };
   },
 });
