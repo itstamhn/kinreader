@@ -78,3 +78,46 @@ Spiceflow is built from the ground up for edge runtimes:
 ```bash
 bunx wrangler deploy
 ```
+
+---
+
+## Google sign-in configuration
+
+"Continue with Google" needs three things lined up, and a mismatch in any one of
+them fails the sign-in on Google's own error page, before the browser ever comes
+back to the app.
+
+1. **Secrets on the Worker** — set once, per environment:
+
+   ```bash
+   bunx wrangler secret put GOOGLE_CLIENT_ID
+   bunx wrangler secret put GOOGLE_CLIENT_SECRET
+   ```
+
+   With either one missing, the sign-in button now returns the user to the app
+   with a visible "not configured yet" message instead of failing silently.
+
+2. **`APP_ORIGIN`** (`wrangler.jsonc` → `vars`) — the one origin OAuth runs on.
+   The `redirect_uri` is built from it rather than from the incoming request, so
+   a visitor who arrives on `www.`, on `*.workers.dev`, or on a preview URL is
+   sent to the canonical origin first instead of handing Google an unregistered
+   redirect URI.
+
+3. **The Google Cloud console** — under *APIs & Services → Credentials → OAuth
+   2.0 Client ID*, the **Authorized redirect URI** must match `APP_ORIGIN`
+   exactly:
+
+   ```
+   https://kinreader.com/api/auth/google/callback
+   ```
+
+   Add `http://localhost:3000/api/auth/google/callback` too if you want the flow
+   to run in local development, and set `APP_ORIGIN=http://localhost:3000` in
+   `.env` so the API server (which sees the Vite proxy's rewritten `Host`)
+   builds the same URI.
+
+Note that Google refuses OAuth inside embedded WebViews (`disallowed_useragent`),
+so "Continue with Google" cannot work in the in-app browsers of X, Instagram,
+LinkedIn or Slack no matter how the app is configured. The sign-in modal detects
+those and points the user at Safari/Chrome or at email sign-in, which works
+everywhere.
