@@ -1,7 +1,8 @@
-import { app } from './server';
-
 export default {
-  async fetch(request: Request, env: { ASSETS: { fetch: (req: Request) => Promise<Response> } }): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: { ASSETS: { fetch: (req: Request) => Promise<Response> } }
+  ): Promise<Response> {
     const url = new URL(request.url);
 
     // 1. Check if the incoming client connection was HTTP
@@ -26,19 +27,36 @@ export default {
       return new Response(null, {
         status: 301,
         headers: {
-          'Location': httpsUrl,
+          Location: httpsUrl,
           'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
         },
       });
     }
-    
-    // 3. Handle Spiceflow backend API routes. The share pages moved to the
-    // Astro app on the apex with plan 014 -- this Worker now serves
-    // app.kinreader.com, where nothing links to them.
+
+    // 3. Handle Worker API routes directly without external framework
     let response: Response;
-    if (url.pathname.startsWith('/api')) {
-      (request as any).env = env;
-      response = await app.handle(request);
+    if (url.pathname === '/api/health') {
+      response = new Response(
+        JSON.stringify({
+          status: 'ok',
+          timestamp: new Date().toISOString(),
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    } else if (url.pathname.startsWith('/api')) {
+      // Dead API route check (all API data operations live on Convex)
+      response = new Response(
+        JSON.stringify({
+          error: 'Not Found',
+        }),
+        {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
     } else {
       // Serve static SPA assets from dist/
       response = await env.ASSETS.fetch(request);
@@ -50,11 +68,6 @@ export default {
     newHeaders.set('X-Content-Type-Options', 'nosniff');
     newHeaders.set('X-Frame-Options', 'SAMEORIGIN');
     newHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-
-    // The OG-image exemption went away with the route itself (plan 014): that
-    // card is served by the Astro app on the apex now, and every response this
-    // Worker still produces is JSON or a redirect, so nothing here needs to be
-    // carved out of the policy.
     newHeaders.set(
       'Content-Security-Policy',
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
