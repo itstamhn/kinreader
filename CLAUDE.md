@@ -126,6 +126,7 @@ A Bun workspace. Run commands from the directory that owns the config:
 | Path | Package | What it is | Commands |
 |------|---------|-----------|----------|
 | `apps/web` | `@kinreader/web` | The Vite SPA and the Cloudflare Worker (auth, share routes) | `bun run dev`, `vite build`, `bunx wrangler deploy` |
+| `apps/marketing` | `@kinreader/marketing` | The Astro site on the apex: landing, blog, `/r/:id`, `/api/og` | `bun run dev`, `astro build`, `bunx wrangler deploy` |
 | `packages/backend` | `@kinreader/backend` | Convex functions — the shared API for every client | `bunx convex dev`, `bunx kitcn codegen` |
 
 From the repo root, `bun run typecheck`, `bun run test` and `bun run build` fan out to
@@ -135,5 +136,12 @@ happy-dom preload lives in `apps/web/bunfig.toml`, so run `bun run test` instead
 
 The web app imports the backend as `@kinreader/backend/api`, never by relative path.
 
-Planned but not yet present: `apps/marketing` (Astro) and `apps/mobile` (Expo). See
-`plans/013` and `plans/014`.
+Two origins, deliberately: `kinreader.com` is the marketing site, `app.kinreader.com` is
+the reader. They do not share cookies or `localStorage`, so anything that assumes
+same-origin between them needs an explicit CORS or `targetOrigin` decision.
+
+Astro routes **every** file under `apps/marketing/src/pages`, so tests for that package
+live in `apps/marketing/test/`. Its `wrangler.jsonc` must not set `main` or `assets` —
+the Cloudflare adapter generates those at build time.
+
+Planned but not yet present: `apps/mobile` (Expo). See `plans/013` and `plans/014`.

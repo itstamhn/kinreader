@@ -17,13 +17,13 @@ the table when done.
 | 005 | Rate-limit `/api/tts` per client IP | P1 | M | 002 | DONE |
 | 006 | Wire the kitcn cRPC layer and move `/api/extract` to Convex | P2 | L | 002 | DONE |
 | 007 | Move `/api/tts` to a Convex action with file storage | P2 | L | 006 | DONE |
-| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | TODO |
+| 008 | Replace hand-rolled auth with kitcn Better Auth on Convex | P2 | L | 006 | BLOCKED (needs a Convex deployment — see log) |
 | 009 | Retire Spiceflow; two markup routes move into the Worker | P3 | M | 006,007,008 | TODO |
 | 010 | Harden magic-link codes (CSPRNG + attempt limiting) | P1 | S | 007 | DONE |
 | 011 | Validate extraction URLs to close the SSRF | P2 | M | 006 | DONE |
 | 012 | Error boundary, CSP, and pin Convex to kitcn's range | P3 | S | 007 | DONE |
 | 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | DONE |
-| 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | TODO |
+| 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | IN PROGRESS (code DONE; cutover pending) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -427,3 +427,72 @@ are not re-audited from scratch next session.
      including the prose in `plans/*.md`. No source file uses any of them (the real
      usages are `outline-none`, `overflow-visible` and `sm:block`, all still present).
      Scoping Tailwind to `apps/web` removed junk, it did not drop a style.
+
+- **014 — code DONE, cutover PENDING.** Everything in the repo is built, tested and
+  verified locally: `apps/marketing` serves the landing page, the blog (content
+  collections + RSS + sitemap), `/r/:id` and `/api/og`; both routes are gone from the
+  Worker; the origin constants, the Worker route, and `X-Robots-Tag: noindex` are all
+  switched to `app.kinreader.com`. 88 tests pass (49 web + 23 backend + 16 marketing),
+  `astro check` reports 0 errors, both apps build.
+
+  **What is NOT done, and needs credentials this environment does not have:** Step 7's
+  cutover (registering the new redirect URI in the Google Cloud console, pointing the
+  DNS/custom domains, deploying the two Workers) and Step 9 (the optional `localStorage`
+  bridge, which is a product call on how many users have a library on the apex today).
+  Nothing has changed in production; the branch is safe to hold until someone does the
+  cutover in the order Step 7 specifies — **console first, DNS last**.
+
+  Deviations found during execution, all verified:
+  1. **Astro is on 7.2.9 and `docs.astro.build` is blocked by the egress proxy**, so the
+     API was derived from the installed package's own types rather than from docs or
+     memory. Confirmed there: `src/content.config.ts` with the `glob` loader from
+     `astro/loaders`, `render()` as a top-level `astro:content` export, and
+     `output: 'static' | 'server'`.
+  2. **`@astrojs/cloudflare` generates `dist/server/wrangler.json` itself.** A hand-written
+     `wrangler.jsonc` must NOT set `main` or `assets` — the Cloudflare Vite plugin
+     resolves `main` before Astro has written the file and the build dies. It *does* merge
+     `name`, `routes` and the compat settings, which is how the custom domains get set.
+  3. **Anything under `src/pages` is a route.** A test file next to the endpoint was
+     picked up as `/api/og.test` and broke the build trying to prerender `bun:test`. Tests
+     live in `apps/marketing/test/`, and the card was split into `src/lib/og-card.ts` so
+     it can be imported without touching the route tree.
+  4. **Astro inlines small scripts**, so the PWA-recovery redirect is a file in `public/`
+     rather than an Astro `<script>`. That keeps `script-src 'self'` hash-free, which was
+     the explicit goal of Step 8 given the silent-failure warning in `apps/web/public/_headers`.
+  5. **The escaping tests could not port verbatim, and the plan was wrong to assume they
+     could.** `bun test` cannot import a `.astro` file. More importantly Astro escapes `&`
+     and `"` in attribute values but leaves `<`/`>` raw inside them — safe, because the
+     quote escaping prevents any breakout, but `expect(body).not.toContain('<script>')`
+     fails on it for a benign reason. Verified end to end against a dev server instead
+     (`curl "localhost:4321/r/abc?t=</title><script>alert(1)</script>&a=Bob\"onload=\"evil()"`
+     → title and body escaped, the quote becomes `&quot;`), and the page is now guarded by
+     a test that it never grows a `set:html`.
+  6. **The OG card is byte-identical**, and this was proven rather than assumed: the
+     removed Worker implementation was restored from the previous commit and rendered
+     alongside the new one across six inputs, XSS payloads included.
+  7. Test count is deliberately **not** conserved (6 route tests became 16). The moved
+     tests were rewritten against the split-out renderer, which is directly testable.
+
+- **008 — BLOCKED.** Not started, on the plan's own terms. Step 2 is an unconditional
+  gate ("sign in from the client and confirm identity reaches the server; do not proceed
+  until both hold"), and Step 1 verifies with `bunx convex dev --once`. Both need a live
+  Convex deployment, and this execution environment has no Convex credentials
+  (`CONVEX_DEPLOYMENT` unset, no `.env.local`). Writing Steps 3-5 without that gate would
+  mean rewriting authorization and **deleting the working auth backend** with the
+  foundation unverified — which is what makes this plan HIGH risk in the first place.
+
+  Reconnaissance done so it starts ahead, answering one of its STOP conditions:
+  **kitcn's Better Auth adapter is compatible with what is installed.** kitcn 0.32.1
+  peer-requires `better-auth >=1.7.0 <1.8.0` (1.7.2 resolves and installs cleanly),
+  `convex >=1.42 <1.45.0` (pinned at 1.44.0 by plan 012 ✓) and `zod >=4` (4.4.3 ✓).
+  `packages/backend/convex/generated/auth.ts` already imports from `kitcn/auth/generated`
+  and carries the disabled-reason path, exactly as the plan describes. `better-auth` is
+  not yet a dependency — Step 1 needs to add it to `packages/backend`.
+
+  Note for whoever picks this up: `docs.convex.dev` is also blocked by the egress proxy
+  here, and Step 1 says not to write `auth.ts` / `auth.config.ts` from memory. Run it
+  somewhere with both docs access and a deployment.
+
+- **009 — still TODO**, and much smaller now. Plan 014 moved `/r/:id` and `/api/og` out of
+  the Worker, so what remains is deleting Spiceflow and `src/server.ts` once 008 has moved
+  auth off them.
