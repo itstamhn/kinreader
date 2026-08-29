@@ -5,10 +5,10 @@ import { MINUTE, Ratelimit } from 'kitcn/ratelimit';
 // procedures -- Convex's own `_generated/api.d.ts` type filters kitcn's
 // wrapped `Procedure` out of `api.routers` entirely (see
 // convex/routers/articles.test.ts for the full explanation).
-import { api } from '../shared/api';
+import { api } from '../../shared/api';
 import { internal } from '../_generated/api';
 import schema from '../schema';
-import { TTS_GLOBAL_KEY } from '../lib/rateLimiter';
+import { TTS_GLOBAL_KEY } from '../../lib/rateLimiter';
 
 // See the comment in convex/routers/articles.test.ts for why this map is
 // built by hand instead of `import.meta.glob` (unsupported under `bun
@@ -20,7 +20,7 @@ const modules: Record<string, () => Promise<unknown>> = {
   './_generated/server.js': () => import('../_generated/server'),
   './routers/tts.ts': () => import('./tts'),
   './routers/ttsInternal.ts': () => import('./ttsInternal'),
-  './lib/rateLimiter.ts': () => import('../lib/rateLimiter'),
+  './lib/rateLimiter.ts': () => import('../../lib/rateLimiter'),
 };
 
 const originalFetch = global.fetch;

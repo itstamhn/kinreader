@@ -9,10 +9,10 @@ import type { inferApiInputs, inferApiOutputs } from "kitcn/server";
 export const api = {
   routers: {
     articles: {
-      extract: createApiLeaf<"action", typeof import("../routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../routers/articles").extract>("routers/articles:extract"), { type: "action" }),
+      extract: createApiLeaf<"action", typeof import("../functions/routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/articles").extract>("routers/articles:extract"), { type: "action" }),
     },
     tts: {
-      synthesize: createApiLeaf<"action", typeof import("../routers/tts").synthesize>(createGeneratedFunctionReference<"action", "public", typeof import("../routers/tts").synthesize>("routers/tts:synthesize"), { type: "action" }),
+      synthesize: createApiLeaf<"action", typeof import("../functions/routers/tts").synthesize>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/tts").synthesize>("routers/tts:synthesize"), { type: "action" }),
     },
   },
   _http: {

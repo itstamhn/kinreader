@@ -1,6 +1,6 @@
 import { Ratelimit, MINUTE } from 'kitcn/ratelimit';
 import type { ConvexRatelimitDbWriter } from 'kitcn/ratelimit';
-import type { MutationCtx } from '../_generated/server';
+import type { MutationCtx } from '../functions/_generated/server';
 
 // Carries plan 005's Cloudflare `TTS_RATE_LIMITER` binding (wrangler.jsonc,
 // 20 requests/minute/client) across into Convex. A cache hit in

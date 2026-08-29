@@ -7,7 +7,7 @@ import { convexTest } from 'convex-test';
 // entirely from its public type. kitcn's generated shared/api.ts is the
 // correct, type-complete surface for cRPC procedures and is still built on
 // the same standard Convex `FunctionReference`s convex-test expects.
-import { api } from '../shared/api';
+import { api } from '../../shared/api';
 import schema from '../schema';
 
 // convex-test needs a map of every module a called function (or anything it

@@ -21,7 +21,7 @@ export type ActionCtx = ServerActionCtx;
 export type GenericCtx = QueryCtx | MutationCtx | ActionCtx;
 export type OrmCtx<Ctx = QueryCtx> = Ctx;
 
-registerProcedureNameLookup(procedureNames, "convex");
+registerProcedureNameLookup(procedureNames, "convex/functions");
 
 export function withOrm<Ctx extends ServerQueryCtx | ServerMutationCtx>(ctx: Ctx): OrmCtx<Ctx> {
   return ctx as OrmCtx<Ctx>;

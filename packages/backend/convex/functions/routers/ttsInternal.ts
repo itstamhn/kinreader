@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { internalMutation, internalQuery } from '../_generated/server';
-import { TTS_GLOBAL_KEY, ttsClientRateLimiter, ttsGlobalRateLimiter } from '../lib/rateLimiter';
+import { TTS_GLOBAL_KEY, ttsClientRateLimiter, ttsGlobalRateLimiter } from '../../lib/rateLimiter';
 
 // Plain (non-cRPC) internal functions backing convex/routers/tts.ts's
 // action. Actions cannot touch `ctx.db` directly -- these are the
