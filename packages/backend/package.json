@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     "./api": "./convex/shared/api.ts",
-    "./dataModel": "./convex/functions/_generated/dataModel.d.ts"
+    "./dataModel": "./convex/functions/_generated/dataModel.d.ts",
+    "./soniox": "./convex/shared/soniox.ts"
   },
   "scripts": {
     "dev": "convex dev",

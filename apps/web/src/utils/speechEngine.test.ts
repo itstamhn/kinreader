@@ -285,3 +285,384 @@ test('rescaling waits for a duration the buffer actually covers', () => {
 
   expect(engine.words[9]!.end).toBe(10); // untouched
 });
+
+// Removing the standard-source preference would make browsers with both MSE
+// variants select ManagedMediaSource, whose lifecycle is controlled by iOS.
+// This test also catches losing the explicit progressive-playback signal.
+test('streaming prefers MediaSource and exposes progressive playback availability', () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const created: string[] = [];
+
+  class FakeMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  class FakeManagedMediaSource extends FakeMediaSource {}
+
+  (window as any).MediaSource = FakeMediaSource;
+  (window as any).ManagedMediaSource = FakeManagedMediaSource;
+  URL.createObjectURL = (source: any) => {
+    created.push(source.constructor.name);
+    return `blob:${source.constructor.name}`;
+  };
+
+  try {
+    const engine = new SpeechEngine();
+    const progressive = engine.startStreamingSession(evenWords(2), 2);
+
+    expect(progressive).toBe(true);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect(created).toEqual(['FakeMediaSource']);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+// iOS exposes ManagedMediaSource without standard MediaSource. Removing this
+// guarded fallback turns a progressively playable stream into a completed-Blob
+// wait even though the browser supports an MSE-compatible source.
+test('streaming uses ManagedMediaSource when it is the only supported source', () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const created: string[] = [];
+
+  class FakeManagedMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = FakeManagedMediaSource;
+  URL.createObjectURL = (source: any) => {
+    created.push(source.constructor.name);
+    return 'blob:managed-source';
+  };
+
+  try {
+    const engine = new SpeechEngine();
+
+    expect(engine.startStreamingSession(evenWords(1), 1)).toBe(true);
+    expect(created).toEqual(['FakeManagedMediaSource']);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+// Without MSE, finish must still make the complete bytes playable. A missing
+// Blob URL here is the iPhone Safari silent-playback failure from the plan.
+test('streaming without a supported source exposes degradation and loads the completed Blob', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  let completedBlob: Blob | undefined;
+
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = (source: any) => {
+    if (source instanceof Blob) completedBlob = source;
+    return 'blob:completed-audio';
+  };
+
+  try {
+    const engine = new SpeechEngine();
+    const progressive = engine.startStreamingSession(evenWords(1), 1);
+    expect(engine.getSnapshot().playbackReady).toBe(false);
+    engine.appendAudioChunk(new Uint8Array([1, 2]));
+    engine.appendAudioChunk(new Uint8Array([3]));
+
+    const blob = engine.finishStreamingSession();
+
+    expect(progressive).toBe(false);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect(completedBlob).toBe(blob);
+    expect((engine as any).audio.src).toContain('blob:completed-audio');
+    expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([1, 2, 3]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+function installThrowingAppendMediaSource() {
+  const created: Array<{ kind: string; value: unknown }> = [];
+
+  class ThrowingSourceBuffer {
+    updating = false;
+    private updateListeners = new Set<() => void>();
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === 'updateend') this.updateListeners.add(listener);
+    }
+
+    removeEventListener(type: string, listener: () => void) {
+      if (type === 'updateend') this.updateListeners.delete(listener);
+    }
+
+    appendBuffer() {
+      throw new Error('non-transient append failure');
+    }
+
+    abort() {}
+  }
+
+  class ThrowingAppendMediaSource {
+    static instances: ThrowingAppendMediaSource[] = [];
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    private sourceOpenListeners = new Set<() => void>();
+
+    constructor() {
+      ThrowingAppendMediaSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.sourceOpenListeners.add(listener);
+    }
+
+    removeEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.sourceOpenListeners.delete(listener);
+    }
+
+    addSourceBuffer() {
+      return new ThrowingSourceBuffer();
+    }
+
+    endOfStream() {
+      this.readyState = 'ended';
+    }
+
+    open() {
+      this.readyState = 'open';
+      for (const listener of [...this.sourceOpenListeners]) listener();
+    }
+  }
+
+  (window as any).MediaSource = ThrowingAppendMediaSource;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = (source: any) => {
+    const kind = source instanceof Blob ? 'blob' : 'media-source';
+    created.push({ kind, value: source });
+    return `blob:${kind}-${created.length}`;
+  };
+
+  return { ThrowingAppendMediaSource, created };
+}
+
+test('an appendBuffer failure before audio_end tears down MSE and installs all retained bytes at finish', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const { ThrowingAppendMediaSource, created } = installThrowingAppendMediaSource();
+    const engine = new SpeechEngine();
+    engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([1, 2]));
+    ThrowingAppendMediaSource.instances[0]!.open();
+
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().playbackReady).toBe(false);
+    expect((engine as any).mediaSource).toBeNull();
+
+    engine.appendAudioChunk(new Uint8Array([3, 4]));
+    engine.finishStreamingSession();
+
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
+    expect([
+      ...new Uint8Array(await (created[1]!.value as Blob).arrayBuffer()),
+    ]).toEqual([1, 2, 3, 4]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    console.warn = originalWarn;
+  }
+});
+
+test('an appendBuffer failure after audio_end immediately replaces MSE with the completed Blob', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const { ThrowingAppendMediaSource, created } = installThrowingAppendMediaSource();
+    const engine = new SpeechEngine();
+    engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([7, 8, 9]));
+    engine.finishStreamingSession();
+    ThrowingAppendMediaSource.instances[0]!.open();
+
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
+    expect([
+      ...new Uint8Array(await (created[1]!.value as Blob).arrayBuffer()),
+    ]).toEqual([7, 8, 9]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    console.warn = originalWarn;
+  }
+});
+
+// `audio_end` may arrive before MediaSource emits `sourceopen`. If buffer
+// creation then fails, cleanup revokes the source URL; the already-buffered
+// complete audio must replace it with one Blob URL, not remain unplayable.
+test('delayed source setup failure after audio end installs the completed Blob exactly once', async () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const created: Array<{ kind: string; value: any }> = [];
+  const revoked: string[] = [];
+
+  class DelayedFailingMediaSource {
+    static instances: DelayedFailingMediaSource[] = [];
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    private listeners = new Set<() => void>();
+
+    constructor() {
+      DelayedFailingMediaSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.listeners.add(listener);
+    }
+
+    removeEventListener(type: string, listener: () => void) {
+      if (type === 'sourceopen') this.listeners.delete(listener);
+    }
+
+    addSourceBuffer() {
+      throw new Error('MP3 SourceBuffer creation failed');
+    }
+
+    endOfStream() {
+      this.readyState = 'ended';
+    }
+
+    open() {
+      this.readyState = 'open';
+      for (const listener of [...this.listeners]) listener();
+    }
+  }
+
+  (window as any).MediaSource = DelayedFailingMediaSource;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = (source: any) => {
+    const kind = source instanceof Blob ? 'blob' : 'media-source';
+    created.push({ kind, value: source });
+    return `blob:${kind}-${created.length}`;
+  };
+  URL.revokeObjectURL = (url: string) => revoked.push(url);
+
+  try {
+    const engine = new SpeechEngine();
+    engine.startStreamingSession(evenWords(1), 1);
+    engine.appendAudioChunk(new Uint8Array([4, 5, 6]));
+    engine.finishStreamingSession();
+
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source']);
+
+    DelayedFailingMediaSource.instances[0]!.open();
+    DelayedFailingMediaSource.instances[0]!.open();
+
+    expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
+    expect(revoked).toEqual(['blob:media-source-1']);
+    expect((engine as any).audio.src).toContain('blob:blob-2');
+    expect([
+      ...new Uint8Array(await (created[1]!.value as Blob).arrayBuffer()),
+    ]).toEqual([4, 5, 6]);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  }
+});
+
+// Exact Soniox media-time coordinates must survive a later duration event;
+// calibrating them would globally stretch the very measurements we requested.
+test('authoritative streaming timings are never calibrated to audio duration', () => {
+  const engine = new SpeechEngine();
+  const exact = [
+    { text: 'one', start: 0.25, end: 0.7 },
+    { text: 'two', start: 0.9, end: 1.4 },
+  ];
+  const audio = fakeAudio({
+    duration: 4,
+    networkState: 1,
+    buffered: { length: 1, end: () => 4 },
+  });
+  attach(engine, audio, evenWords(2));
+
+  engine.appendWordTimings(exact, 1.4, { authoritative: true });
+  (engine as any).calibrateToAudioDuration();
+
+  expect(engine.words).toEqual(exact);
+  expect(engine.getSnapshot().authoritativeTimings).toBe(true);
+});
+
+// stop() owns every streaming resource. Missing any one of these leaves a
+// stale source callback or object URL able to outlive its article.
+test('stopping a stream aborts source work, revokes its URL, and ignores later chunks', () => {
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const revoked: string[] = [];
+  URL.revokeObjectURL = (url: string) => revoked.push(url);
+
+  const sourceBuffer = {
+    updating: true,
+    abortCalls: 0,
+    abort() { this.abortCalls += 1; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const mediaSource = {
+    readyState: 'open',
+    endOfStream() {},
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  try {
+    const engine = new SpeechEngine();
+    (engine as any).sourceBuffer = sourceBuffer;
+    (engine as any).mediaSource = mediaSource;
+    (engine as any).ownedObjectUrl = 'blob:streaming-source';
+    engine.isStreaming = true;
+    engine.appendAudioChunk(new Uint8Array([1]));
+
+    engine.stop();
+    engine.appendAudioChunk(new Uint8Array([9]));
+    const blob = engine.finishStreamingSession();
+
+    expect(sourceBuffer.abortCalls).toBe(1);
+    expect(revoked).toEqual(['blob:streaming-source']);
+    expect(blob.size).toBe(0);
+    expect((engine as any).mediaSource).toBeNull();
+    expect((engine as any).sourceBuffer).toBeNull();
+  } finally {
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  }
+});

@@ -12,7 +12,11 @@ export const api = {
       extract: createApiLeaf<"action", typeof import("../functions/routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/articles").extract>("routers/articles:extract"), { type: "action" }),
     },
     tts: {
+      generateTrackUploadUrl: createApiLeaf<"mutation", typeof import("../functions/routers/tts").generateTrackUploadUrl>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/tts").generateTrackUploadUrl>("routers/tts:generateTrackUploadUrl"), { type: "mutation" }),
+      getExactTrack: createApiLeaf<"query", typeof import("../functions/routers/tts").getExactTrack>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/tts").getExactTrack>("routers/tts:getExactTrack"), { type: "query" }),
+      persistTrack: createApiLeaf<"mutation", typeof import("../functions/routers/tts").persistTrack>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/tts").persistTrack>("routers/tts:persistTrack"), { type: "mutation" }),
       synthesize: createApiLeaf<"action", typeof import("../functions/routers/tts").synthesize>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/tts").synthesize>("routers/tts:synthesize"), { type: "action" }),
+      temporaryKey: createApiLeaf<"action", typeof import("../functions/routers/tts").temporaryKey>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/tts").temporaryKey>("routers/tts:temporaryKey"), { type: "action" }),
     },
     users: {
       addToPlaylist: createApiLeaf<"mutation", typeof import("../functions/routers/users").addToPlaylist>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/users").addToPlaylist>("routers/users:addToPlaylist"), { type: "mutation" }),

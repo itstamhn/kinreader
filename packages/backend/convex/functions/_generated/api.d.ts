@@ -25,6 +25,40 @@ export declare const api: {
       extract: FunctionReference<"action", "public", { url: string }, any>;
     };
     tts: {
+      generateTrackUploadUrl: FunctionReference<
+        "mutation",
+        "public",
+        { cacheKey: string; contentDigest: string; voice: string },
+        { expiresAt: number; grant: string; uploadUrl: string }
+      >;
+      getExactTrack: FunctionReference<
+        "query",
+        "public",
+        { url: string; voice: string },
+        {
+          audioUrl: string;
+          duration: number;
+          timingsSource: "soniox";
+          words: Array<{ end: number; start: number; text: string }>;
+        } | null
+      >;
+      persistTrack: FunctionReference<
+        "mutation",
+        "public",
+        {
+          author?: string;
+          duration: number;
+          grant: string;
+          storageId: string;
+          text: string;
+          title?: string;
+          url: string;
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        },
+        | { articleId: string; ok: true; trackId: string }
+        | { error: string; ok: false }
+      >;
       synthesize: FunctionReference<
         "action",
         "public",
@@ -39,6 +73,12 @@ export declare const api: {
           url: string;
           voice?: string;
         },
+        any
+      >;
+      temporaryKey: FunctionReference<
+        "action",
+        "public",
+        { clientId?: string },
         any
       >;
     };
@@ -301,17 +341,73 @@ export declare const internal: {
       >;
     };
     ttsInternal: {
+      cleanupAbandonedTrackUploads: FunctionReference<
+        "mutation",
+        "internal",
+        { cursor: string | null; now?: number },
+        { continueCursor: string | null; deleted: number; scanned: number }
+      >;
       consumeTtsRateLimit: FunctionReference<
         "mutation",
         "internal",
-        { key: string },
+        {
+          key: string;
+          purpose?: "synthesize" | "temporaryKey" | "trackUpload";
+        },
         { ok: boolean }
+      >;
+      finalizeExactTrack: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          author?: string;
+          cacheKey: string;
+          content: string;
+          duration: number;
+          grant: string;
+          ownerKey: string;
+          storageId: Id<"_storage">;
+          title?: string;
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        },
+        { articleId: Id<"articles">; trackId: Id<"audioTracks"> }
       >;
       findCachedTrackByUrl: FunctionReference<
         "query",
         "internal",
         { speed: number; url: string; voice: string },
-        any
+        null | {
+          _creationTime: number;
+          _id: Id<"audioTracks">;
+          articleId: Id<"articles">;
+          audioBase64?: string;
+          createdAt: number;
+          duration: number;
+          speed: number;
+          storageId?: Id<"_storage">;
+          timingsSource?: "soniox" | "estimated";
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        }
+      >;
+      findExactCachedTrackByUrl: FunctionReference<
+        "query",
+        "internal",
+        { cacheKey: string; ownerKey: string; voice: string },
+        null | {
+          _creationTime: number;
+          _id: Id<"audioTracks">;
+          articleId: Id<"articles">;
+          audioBase64?: string;
+          createdAt: number;
+          duration: number;
+          speed: number;
+          storageId?: Id<"_storage">;
+          timingsSource?: "soniox" | "estimated";
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        }
       >;
       getOrCreateArticleStub: FunctionReference<
         "mutation",
@@ -323,7 +419,7 @@ export declare const internal: {
           title?: string;
           url: string;
         },
-        any
+        Id<"articles">
       >;
       insertAudioTrack: FunctionReference<
         "mutation",
@@ -333,10 +429,37 @@ export declare const internal: {
           duration: number;
           speed: number;
           storageId: Id<"_storage">;
+          timingsSource?: "soniox" | "estimated";
           voice: string;
           words: Array<{ end: number; start: number; text: string }>;
         },
-        any
+        Id<"audioTracks">
+      >;
+      issueTrackUploadGrant: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          cacheKey: string;
+          contentDigest: string;
+          expiresAt: number;
+          ownerKey: string;
+          token: string;
+          voice: string;
+        },
+        { ok: false } | { expiresAt: number; grant: string; ok: true }
+      >;
+      rejectExactTrackUpload: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          cacheKey: string;
+          content: string;
+          grant: string;
+          ownerKey: string;
+          storageId: Id<"_storage">;
+          voice: string;
+        },
+        { deleted: boolean }
       >;
     };
     users: {

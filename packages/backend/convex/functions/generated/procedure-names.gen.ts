@@ -4,6 +4,6 @@
 
 export const procedureNames = {
   "routers/articles.ts": [{ column: 3, line: 85, name: "routers/articles:extract" }],
-  "routers/tts.ts": [{ column: 3, line: 142, name: "routers/tts:synthesize" }],
+  "routers/tts.ts": [{ column: 3, line: 187, name: "routers/tts:generateTrackUploadUrl" }, { column: 3, line: 149, name: "routers/tts:getExactTrack" }, { column: 3, line: 230, name: "routers/tts:persistTrack" }, { column: 3, line: 354, name: "routers/tts:synthesize" }, { column: 3, line: 273, name: "routers/tts:temporaryKey" }],
   "routers/users.ts": [{ column: 3, line: 191, name: "routers/users:addToPlaylist" }, { column: 3, line: 145, name: "routers/users:deleteUserArticle" }, { column: 3, line: 33, name: "routers/users:getCurrentUser" }, { column: 3, line: 48, name: "routers/users:getUserPlaylist" }, { column: 3, line: 88, name: "routers/users:saveUserProgress" }],
 };

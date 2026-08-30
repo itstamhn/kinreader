@@ -1,7 +1,9 @@
 import { z } from 'zod';
-import { action } from '../crpc';
+import { action, mutation, query } from '../crpc';
 import { internal } from '../_generated/api';
+import { env } from '../_generated/server';
 import type { Doc, Id } from '../_generated/dataModel';
+import { splitTextIntoSonioxChunks } from '../../shared/soniox';
 
 // Ported from src/server.ts's `POST /api/tts` handler (plan 005's guards
 // included). The route is removed from Spiceflow in the same change that
@@ -13,8 +15,22 @@ import type { Doc, Id } from '../_generated/dataModel';
 // capped below rather than letting the insert throw.
 const MAX_TTS_CHARS = 50000;
 const MAX_WORDS = 8192;
+const MAX_SONIOX_REST_SYNTH_CHARS = 900;
 
 type WordTiming = { text: string; start: number; end: number };
+
+const wordTimingSchema = z.object({
+  text: z.string().min(1),
+  start: z.number().finite().nonnegative(),
+  end: z.number().finite().positive(),
+});
+
+const exactTrackSchema = z.object({
+  audioUrl: z.string().min(1),
+  words: z.array(wordTimingSchema).max(MAX_WORDS),
+  duration: z.number().finite().positive(),
+  timingsSource: z.literal('soniox'),
+});
 
 // Explicit return type breaks a TS circularity: `internal`/`api` (from
 // _generated/api) aggregate every router module including this one, so
@@ -67,60 +83,252 @@ function linearWordTimings(text: string, speed = 1.0): { words: WordTiming[]; du
   return { words, duration: round(curTime) };
 }
 
-const MAX_SONIOX_CHUNK_CHARS = 450;
-const MAX_SONIOX_SYNTH_CHARS = 900;
-
-function splitTextIntoSonioxChunks(fullText: string, maxChunkSize = MAX_SONIOX_CHUNK_CHARS): string[] {
-  let textToSynthesize = fullText.trim();
-  if (textToSynthesize.length > MAX_SONIOX_SYNTH_CHARS) {
-    const rawSlice = textToSynthesize.slice(0, MAX_SONIOX_SYNTH_CHARS);
-    const lastBoundary = Math.max(
-      rawSlice.lastIndexOf('. '),
-      rawSlice.lastIndexOf('! '),
-      rawSlice.lastIndexOf('? '),
-      rawSlice.lastIndexOf('.\n'),
-      rawSlice.lastIndexOf('\n')
-    );
-    textToSynthesize = lastBoundary > 300 ? rawSlice.slice(0, lastBoundary + 1).trim() : rawSlice.trim();
+// The WebSocket transport streams the complete accepted article. The legacy
+// REST fallback remains intentionally capped until its compatibility path can
+// be retired, so it cannot accidentally regain the browser transport's cost
+// profile.
+function splitTextIntoRestSonioxChunks(fullText: string): string[] {
+  const trimmed = fullText.trim();
+  if (trimmed.length <= MAX_SONIOX_REST_SYNTH_CHARS) {
+    return splitTextIntoSonioxChunks(trimmed);
   }
 
-  if (textToSynthesize.length <= maxChunkSize) {
-    return [textToSynthesize];
-  }
-
-  const chunks: string[] = [];
-  const sentences = textToSynthesize.match(/[^.!?\n]+[.!?\n]+(?:\s+|$)|[^.!?\n]+$/g) || [textToSynthesize];
-  let curChunk = '';
-
-  for (const rawSent of sentences) {
-    const sent = rawSent.trim();
-    if (!sent) continue;
-
-    if ((curChunk + ' ' + sent).trim().length <= maxChunkSize) {
-      curChunk = curChunk ? curChunk + ' ' + sent : sent;
-    } else {
-      if (curChunk) {
-        chunks.push(curChunk.trim());
-        curChunk = '';
-      }
-      if (sent.length <= maxChunkSize) {
-        curChunk = sent;
-      } else {
-        const words = sent.split(/\s+/);
-        for (const w of words) {
-          if ((curChunk + ' ' + w).trim().length <= maxChunkSize) {
-            curChunk = curChunk ? curChunk + ' ' + w : w;
-          } else {
-            if (curChunk) chunks.push(curChunk.trim());
-            curChunk = w;
-          }
-        }
-      }
-    }
-  }
-  if (curChunk) chunks.push(curChunk.trim());
-  return chunks.filter(Boolean);
+  const rawSlice = trimmed.slice(0, MAX_SONIOX_REST_SYNTH_CHARS);
+  const lastBoundary = Math.max(
+    rawSlice.lastIndexOf('. '),
+    rawSlice.lastIndexOf('! '),
+    rawSlice.lastIndexOf('? '),
+    rawSlice.lastIndexOf('.\n'),
+    rawSlice.lastIndexOf('\n')
+  );
+  const cappedText = lastBoundary > 300 ? rawSlice.slice(0, lastBoundary + 1).trim() : rawSlice.trim();
+  return splitTextIntoSonioxChunks(cappedText);
 }
+
+type TemporaryKeyResult = { apiKey: string; expiresAt: string };
+
+type TrackUploadGrantIssue =
+  | { ok: false }
+  | { ok: true; grant: string; expiresAt: number };
+
+export async function allocateTrackUploadAfterGrant(
+  issueGrant: () => Promise<TrackUploadGrantIssue>,
+  allocateUploadUrl: () => Promise<string>
+): Promise<{ uploadUrl: string; grant: string; expiresAt: number }> {
+  const issuance = await issueGrant();
+  if (!issuance.ok) {
+    throw new Error('Too many track upload requests. Please try again in a minute.');
+  }
+
+  const uploadUrl = await allocateUploadUrl();
+  return { uploadUrl, grant: issuance.grant, expiresAt: issuance.expiresAt };
+}
+
+function isTemporaryKeyResponse(value: unknown): value is { api_key: string; expires_at: string } {
+  if (!value || typeof value !== 'object') return false;
+  const response = value as Record<string, unknown>;
+  if (
+    typeof response.api_key !== 'string' ||
+    response.api_key.length === 0 ||
+    typeof response.expires_at !== 'string'
+  ) return false;
+
+  const expiresAt = Date.parse(response.expires_at);
+  const now = Date.now();
+  return Number.isFinite(expiresAt) && expiresAt > now && expiresAt <= now + 10 * 60 * 1000;
+}
+
+export const getExactTrack = query
+  .input(
+    z.object({
+      url: z.string().trim().min(1).max(4096),
+      voice: z.string().trim().min(1).max(100),
+    })
+  )
+  .output(exactTrackSchema.nullable())
+  .query(async ({ ctx, input }) => {
+    const identity = await ctx.auth?.getUserIdentity?.();
+    if (!identity) return null;
+    const track: Doc<'audioTracks'> | null = await ctx.runQuery(
+      internal.routers.ttsInternal.findExactCachedTrackByUrl,
+      {
+        ownerKey: identity.tokenIdentifier,
+        cacheKey: input.url,
+        voice: input.voice,
+      }
+    );
+    if (!track?.storageId) return null;
+
+    const audioUrl = await ctx.storage.getUrl(track.storageId);
+    if (!audioUrl) return null;
+    return {
+      audioUrl,
+      words: track.words,
+      duration: track.duration,
+      timingsSource: 'soniox' as const,
+    };
+  });
+
+export const generateTrackUploadUrl = mutation
+  .input(
+    z.object({
+      cacheKey: z.string().trim().min(1).max(5000),
+      contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      voice: z.string().trim().min(1).max(100),
+    })
+  )
+  .output(
+    z.object({
+      uploadUrl: z.string().min(1),
+      grant: z.string().min(64).max(200),
+      expiresAt: z.number().int().positive(),
+    })
+  )
+  .mutation(async ({ ctx, input }) => {
+    const identity = await ctx.auth?.getUserIdentity?.();
+    if (!identity) throw new Error('Sign in is required to persist exact tracks');
+    const ownerKey = identity.tokenIdentifier;
+    const grantToken = `${crypto.randomUUID().replaceAll('-', '')}${crypto
+      .randomUUID()
+      .replaceAll('-', '')}`;
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+
+    return await allocateTrackUploadAfterGrant(
+      () =>
+        ctx.runMutation(internal.routers.ttsInternal.issueTrackUploadGrant, {
+          ownerKey,
+          cacheKey: input.cacheKey,
+          contentDigest: input.contentDigest,
+          voice: input.voice,
+          token: grantToken,
+          expiresAt,
+        }) as Promise<TrackUploadGrantIssue>,
+      () => ctx.storage.generateUploadUrl()
+    );
+  });
+
+export const persistTrack = mutation
+  .input(
+    z.object({
+      url: z.string().trim().min(1).max(4096),
+      title: z.string().max(500).optional(),
+      author: z.string().max(500).optional(),
+      text: z.string().trim().min(1).max(MAX_TTS_CHARS),
+      voice: z.string().trim().min(1).max(100),
+      grant: z.string().min(64).max(200),
+      storageId: z.string().min(1),
+      duration: z.number().finite().positive(),
+      words: z.array(wordTimingSchema).max(MAX_WORDS),
+    })
+  )
+  .output(
+    z.discriminatedUnion('ok', [
+      z.object({ ok: z.literal(true), articleId: z.string(), trackId: z.string() }),
+      z.object({ ok: z.literal(false), error: z.string() }),
+    ])
+  )
+  .mutation(async ({ ctx, input }) => {
+    const identity = await ctx.auth?.getUserIdentity?.();
+    if (!identity) throw new Error('Sign in is required to persist exact tracks');
+    const finalizeInput = {
+      ownerKey: identity.tokenIdentifier,
+      cacheKey: input.url,
+      title: input.title,
+      author: input.author,
+      content: input.text,
+      voice: input.voice,
+      grant: input.grant,
+      storageId: input.storageId as Id<'_storage'>,
+      duration: input.duration,
+      words: input.words,
+    };
+    try {
+      const result = await ctx.runMutation(
+        internal.routers.ttsInternal.finalizeExactTrack,
+        finalizeInput
+      );
+      return { ok: true as const, ...result };
+    } catch (error) {
+      try {
+        await ctx.runMutation(internal.routers.ttsInternal.rejectExactTrackUpload, {
+          ownerKey: identity.tokenIdentifier,
+          cacheKey: input.url,
+          content: input.text,
+          voice: input.voice,
+          grant: input.grant,
+          storageId: input.storageId as Id<'_storage'>,
+        });
+      } catch {
+        // A blob without the owner-bound grant marker cannot be deleted safely.
+      }
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : 'Exact track finalization failed',
+      };
+    }
+  });
+
+export const temporaryKey = action
+  .input(z.object({ clientId: z.string().trim().min(1).max(200).optional() }))
+  .action(async ({ ctx, input }): Promise<TemporaryKeyResult> => {
+    const sonioxApiKey = env.SONIOX_API_KEY;
+    if (!sonioxApiKey) {
+      throw new Error('SONIOX_API_KEY is not configured');
+    }
+
+    const identity = await ctx.auth?.getUserIdentity?.();
+    // Authenticated identities are server-derived; a caller-provided clientId
+    // remains only an anonymous attribution/fairness bucket. This preserves
+    // anonymous narration as an explicit product ruling.
+    const clientReferenceId = identity?.tokenIdentifier || input.clientId || 'anonymous';
+
+    const rateLimit: { ok: boolean } = await ctx.runMutation(internal.routers.ttsInternal.consumeTtsRateLimit, {
+      key: clientReferenceId,
+      purpose: 'temporaryKey',
+    });
+    if (!rateLimit.ok) {
+      throw new Error('Too many temporary key requests. Please try again in a minute.');
+    }
+
+    let response: Response;
+    try {
+      // Soniox's API reference index also names `/v1/create_temporary_api_key`,
+      // but that endpoint 404s; use this Step 0-verified spelling instead.
+      response = await fetch('https://api.soniox.com/v1/auth/temporary-api-key', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sonioxApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(10000),
+        body: JSON.stringify({
+          usage_type: 'tts_rt',
+          expires_in_seconds: 300,
+          max_session_duration_seconds: 900,
+          single_use: true,
+          client_reference_id: clientReferenceId,
+        }),
+      });
+    } catch {
+      throw new Error('Unable to reach Soniox while issuing a temporary key');
+    }
+
+    if (!response.ok) {
+      throw new Error(`Soniox rejected temporary key issuance (status ${response.status})`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new Error('Soniox returned an invalid temporary key response');
+    }
+    if (!isTemporaryKeyResponse(payload) || payload.api_key === sonioxApiKey) {
+      throw new Error('Soniox returned an invalid temporary key response');
+    }
+
+    return { apiKey: payload.api_key, expiresAt: payload.expires_at };
+  });
 
 export const synthesize = action
   .input(
@@ -252,7 +460,7 @@ export const synthesize = action
       // Split text into natural chunks (~450 chars) and synthesize sequentially
       // to respect Soniox single-session concurrency limit, then concatenate into
       // a single continuous MP3 audio buffer.
-      const textChunks = splitTextIntoSonioxChunks(text, 450);
+      const textChunks = splitTextIntoRestSonioxChunks(text);
       const chunkBuffers: ArrayBuffer[] = [];
 
       for (const chunk of textChunks) {
@@ -367,6 +575,7 @@ export const synthesize = action
           speed,
           storageId,
           duration,
+          timingsSource: 'estimated',
           words,
         });
 

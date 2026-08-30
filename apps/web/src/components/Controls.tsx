@@ -27,6 +27,8 @@ interface ControlsProps {
   viewMode?: 'kinetic' | 'full';
   onToggleViewMode?: () => void;
   isSynthesizing?: boolean;
+  isPlayable?: boolean;
+  isBuffering?: boolean;
   isDegraded?: boolean;
   isError?: boolean;
 }
@@ -48,6 +50,8 @@ export function Controls({
   viewMode = 'kinetic',
   onToggleViewMode,
   isSynthesizing = false,
+  isPlayable = true,
+  isBuffering = isSynthesizing,
   isDegraded = false,
   isError = false,
 }: ControlsProps) {
@@ -144,11 +148,19 @@ export function Controls({
           {/* Big Play / Pause Button (52px Orange Amber Gradient) */}
           <button
             onClick={onTogglePlay}
-            disabled={isSynthesizing || isError}
+            disabled={!isPlayable || isError}
             className="w-[46px] h-[46px] sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shrink-0 transition-all duration-150 active:scale-95 glow-amber-btn shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
-            title={isError ? 'Audio unavailable' : isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+            title={
+              isError
+                ? 'Audio unavailable'
+                : isBuffering
+                  ? 'Play (buffering)'
+                  : isPlaying
+                    ? 'Pause (Space)'
+                    : 'Play (Space)'
+            }
           >
-            {isSynthesizing ? (
+            {isBuffering ? (
               <Loader2 className="w-5 h-5 text-[#16130B] animate-spin" />
             ) : isPlaying ? (
               <svg width="16" height="20" viewBox="0 0 22 26">

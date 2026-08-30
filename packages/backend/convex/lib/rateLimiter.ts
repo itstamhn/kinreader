@@ -42,6 +42,18 @@ export function ttsClientRateLimiter(ctx: MutationCtx) {
   });
 }
 
+// A temporary key grants direct, paid Soniox access for several minutes, so
+// issuance needs a smaller fairness bucket than one REST synthesis request.
+// This remains a caller-keyed fairness control only; the fixed global limiter
+// below is still the security boundary for forged or rotating client ids.
+export function ttsTemporaryKeyClientRateLimiter(ctx: MutationCtx) {
+  return new Ratelimit({
+    db: dbWriter(ctx),
+    limiter: Ratelimit.slidingWindow(5, MINUTE),
+    prefix: 'tts-temporary-key-client',
+  });
+}
+
 // Global limiter: the actual security boundary. Keyed on a fixed literal
 // (TTS_GLOBAL_KEY) that no request input can influence, so it cannot be
 // bypassed by forging a new clientId per request -- unlike the per-client
