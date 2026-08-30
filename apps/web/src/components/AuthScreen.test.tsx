@@ -1,25 +1,18 @@
-import { afterEach, expect, mock, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
-import { authClient } from '../lib/auth-client';
+import { ConvexAppProvider } from '../lib/convex';
 import { AuthScreen } from './AuthScreen';
 
 afterEach(() => {
   cleanup();
-  mock.module('../lib/auth-client', () => ({ authClient }));
 });
 
 test('the sent-link confirmation promises the configured 15-minute lifetime', async () => {
-  mock.module('../lib/auth-client', () => ({
-    authClient: {
-      signIn: {
-        magicLink: async () => ({ data: { status: true }, error: null }),
-      },
-      signOut: async () => ({ data: null, error: null }),
-    },
-  }));
-
   const { container, getByLabelText, getByRole } = render(
-    <AuthScreen onBack={() => {}} />
+    <AuthScreen
+      onBack={() => {}}
+      sendMagicLink={async () => ({ error: null })}
+    />
   );
 
   fireEvent.change(getByLabelText('Email address'), {
@@ -31,4 +24,14 @@ test('the sent-link confirmation promises the configured 15-minute lifetime', as
     expect(container.textContent).toContain('The link will stay active for 15 minutes.');
   });
   expect(container.textContent).not.toContain('30 minutes');
+});
+
+test('the magic-link test double does not replace the auth client used by the app provider', () => {
+  const { getByText } = render(
+    <ConvexAppProvider>
+      <span>Provider ready</span>
+    </ConvexAppProvider>
+  );
+
+  expect(getByText('Provider ready')).toBeTruthy();
 });

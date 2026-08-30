@@ -26,6 +26,11 @@ interface AuthScreenProps {
   onLogout?: () => void;
   externalError?: string | null;
   onDismissExternalError?: () => void;
+  sendMagicLink?: (input: {
+    email: string;
+    name: string;
+    callbackURL: string;
+  }) => Promise<{ error?: { message?: string } | null }>;
 }
 
 export function AuthScreen({
@@ -35,6 +40,7 @@ export function AuthScreen({
   onLogout,
   externalError,
   onDismissExternalError,
+  sendMagicLink = (input) => (authClient.signIn as any).magicLink(input),
 }: AuthScreenProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -69,9 +75,9 @@ export function AuthScreen({
     clearErrors();
 
     try {
-      const res = await (authClient.signIn as any).magicLink({
+      const res = await sendMagicLink({
         email,
-        name: name.trim() || email.split('@')[0],
+        name: name.trim() || email.split('@')[0] || email,
         callbackURL: window.location.origin,
       });
 
