@@ -4,6 +4,7 @@ import { httpAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { getAuth } from './generated/auth';
 import { getEnv } from '../lib/get-env';
+import { handleTtsStreamRequest } from '../lib/ttsStream';
 
 const http = httpRouter();
 
@@ -18,168 +19,36 @@ registerRoutes(http, getAuth, {
   },
 });
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+// The reader's REST audio fallback. All request handling lives in
+// lib/ttsStream.ts (pure, unit-tested); this file only supplies the
+// deployment secret and the rate limiter, which needs a mutation to write
+// its state. The limiter is the same pair `tts.synthesize` and
+// `tts.temporaryKey` consume, so REST cannot become the cheap way around
+// them.
+const TTS_STREAM_ALLOWED_ORIGINS = [
+  getEnv().SITE_URL,
+  'http://localhost:3000',
+  'https://app.kinreader.com',
+  'https://kinreader.com',
+];
 
-// Handle CORS preflight for audio streaming
-http.route({
-  path: '/api/tts/stream',
-  method: 'OPTIONS',
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: corsHeaders,
-    });
-  }),
+const ttsStreamHandler = httpAction(async (ctx, req) => {
+  return handleTtsStreamRequest(req, {
+    apiKey: getEnv().SONIOX_API_KEY,
+    allowedOrigins: TTS_STREAM_ALLOWED_ORIGINS,
+    consumeRateLimit: async (key) => {
+      const status: { ok: boolean } = await ctx.runMutation(
+        internal.routers.ttsInternal.consumeTtsRateLimit,
+        { key, purpose: 'synthesize' }
+      );
+      return status.ok;
+    },
+  });
 });
 
-// GET /api/tts/stream?text=...&voice=...&speed=...
-http.route({
-  path: '/api/tts/stream',
-  method: 'GET',
-  handler: httpAction(async (ctx, req) => {
-    const url = new URL(req.url);
-    const text = url.searchParams.get('text');
-    const voice = url.searchParams.get('voice') || 'Adrian';
-    const rawSpeed = parseFloat(url.searchParams.get('speed') || '1.0');
-    const speed = Math.max(0.7, Math.min(1.3, isNaN(rawSpeed) ? 1.0 : rawSpeed));
-    const apiKey = getEnv().SONIOX_API_KEY || process.env.SONIOX_API_KEY;
-
-    if (!text || !text.trim()) {
-      return new Response(JSON.stringify({ error: 'Missing text query parameter' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (!apiKey) {
-      return new Response(JSON.stringify({ error: 'SONIOX_API_KEY not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    try {
-      const sonioxRes = await fetch('https://tts-rt.soniox.com/tts', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: text.trim(),
-          model: 'tts-rt-v2',
-          language: 'en',
-          voice,
-          audio_format: 'mp3',
-          speed,
-          reduce_silence: false,
-        }),
-      });
-
-      if (!sonioxRes.ok) {
-        return new Response(sonioxRes.body, {
-          status: sonioxRes.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(sonioxRes.body, {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'audio/mpeg',
-          'Cache-Control': 'public, max-age=86400',
-        },
-      });
-    } catch (err: any) {
-      return new Response(JSON.stringify({ error: err?.message || 'Soniox streaming error' }), {
-        status: 502,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-  }),
-});
-
-// POST /api/tts/stream with JSON body { text, voice, speed }
-http.route({
-  path: '/api/tts/stream',
-  method: 'POST',
-  handler: httpAction(async (ctx, req) => {
-    let body: any = {};
-    try {
-      body = await req.json();
-    } catch {
-      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const text = typeof body.text === 'string' ? body.text.trim() : '';
-    const voice = typeof body.voice === 'string' ? body.voice : 'Adrian';
-    const rawSpeed = typeof body.speed === 'number' ? body.speed : 1.0;
-    const speed = Math.max(0.7, Math.min(1.3, isNaN(rawSpeed) ? 1.0 : rawSpeed));
-    const apiKey = getEnv().SONIOX_API_KEY || process.env.SONIOX_API_KEY;
-
-    if (!text) {
-      return new Response(JSON.stringify({ error: 'Missing text in request body' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (!apiKey) {
-      return new Response(JSON.stringify({ error: 'SONIOX_API_KEY not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    try {
-      const sonioxRes = await fetch('https://tts-rt.soniox.com/tts', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text,
-          model: 'tts-rt-v2',
-          language: 'en',
-          voice,
-          audio_format: 'mp3',
-          speed,
-          reduce_silence: false,
-        }),
-      });
-
-      if (!sonioxRes.ok) {
-        return new Response(sonioxRes.body, {
-          status: sonioxRes.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(sonioxRes.body, {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'audio/mpeg',
-          'Cache-Control': 'public, max-age=86400',
-        },
-      });
-    } catch (err: any) {
-      return new Response(JSON.stringify({ error: err?.message || 'Soniox streaming error' }), {
-        status: 502,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-  }),
-});
+for (const method of ['OPTIONS', 'GET', 'POST'] as const) {
+  http.route({ path: '/api/tts/stream', method, handler: ttsStreamHandler });
+}
 
 // AutoSend Webhook Handler: List hygiene, bounce & complaint tracking
 http.route({

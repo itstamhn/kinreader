@@ -1,7 +1,14 @@
+const DEFAULT_CONVEX_SITE_ORIGIN = 'https://notable-camel-807.convex.site';
+
 export default {
   async fetch(
     request: Request,
-    env: { ASSETS: { fetch: (req: Request) => Promise<Response> } }
+    env: {
+      ASSETS: { fetch: (req: Request) => Promise<Response> };
+      // The Convex deployment's HTTP-actions origin (`<deployment>.convex.site`).
+      // Set per environment in wrangler.jsonc `vars`; the fallback is production.
+      CONVEX_SITE_ORIGIN?: string;
+    }
   ): Promise<Response> {
     const url = new URL(request.url);
 
@@ -48,7 +55,7 @@ export default {
       );
     } else if (url.pathname.startsWith('/api/auth') || url.pathname.startsWith('/api/tts')) {
       // Proxy Better Auth & TTS streaming endpoints directly to Convex HTTP router
-      const convexSiteOrigin = 'https://notable-camel-807.convex.site';
+      const convexSiteOrigin = env.CONVEX_SITE_ORIGIN || DEFAULT_CONVEX_SITE_ORIGIN;
       const targetUrl = `${convexSiteOrigin}${url.pathname}${url.search}`;
 
       const forwardedHeaders = new Headers(request.headers);
@@ -123,7 +130,7 @@ export default {
     newHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     newHeaders.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud ws: wss:; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://tts-rt.soniox.com; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
     );
 
     return new Response(response.body, {

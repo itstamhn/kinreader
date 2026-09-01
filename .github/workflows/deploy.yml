@@ -1,0 +1,95 @@
+name: Deploy
+
+# Ships main to production once CI has passed on it. Each job is skipped, not
+# failed, when its credentials are absent, so the workflow can be adopted one
+# secret at a time:
+#
+#   CONVEX_DEPLOY_KEY      Convex dashboard → Settings → Deploy keys (production)
+#   CLOUDFLARE_API_TOKEN   Cloudflare → API tokens, "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare dashboard → Workers & Pages → Account ID
+#
+# Order matters: the backend goes first so the Worker and the SPA never point
+# at a deployment missing a procedure they call. The two Workers then deploy
+# in parallel -- they are separate origins (plan 014) and share no state.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Deploy Convex functions
+        if: ${{ env.CONVEX_DEPLOY_KEY != '' }}
+        working-directory: packages/backend
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: bunx convex deploy --yes
+      - name: Skipped (no CONVEX_DEPLOY_KEY)
+        if: ${{ env.CONVEX_DEPLOY_KEY == '' }}
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: echo "CONVEX_DEPLOY_KEY is not set; skipping the Convex deploy."
+
+  web:
+    needs: backend
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Build the reader
+        working-directory: apps/web
+        run: bun run build
+      - name: Deploy the reader Worker (app.kinreader.com)
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        working-directory: apps/web
+        run: bunx wrangler deploy
+      - name: Skipped (no CLOUDFLARE_API_TOKEN)
+        if: ${{ env.CLOUDFLARE_API_TOKEN == '' }}
+        run: echo "CLOUDFLARE_API_TOKEN is not set; skipping the reader deploy."
+
+  marketing:
+    needs: backend
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Build the marketing site
+        working-directory: apps/marketing
+        run: bun run build
+      - name: Deploy the marketing Worker (kinreader.com)
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        working-directory: apps/marketing
+        run: bunx wrangler deploy
+      - name: Skipped (no CLOUDFLARE_API_TOKEN)
+        if: ${{ env.CLOUDFLARE_API_TOKEN == '' }}
+        run: echo "CLOUDFLARE_API_TOKEN is not set; skipping the marketing deploy."

@@ -30,10 +30,24 @@ export function getSavedArticles(): SavedArticleItem[] {
   }
 }
 
-// 2. Save / Upsert an article
+export function articleLibraryId(article: ArticleData): string {
+  return article.sourceUrl || article.title;
+}
+
+function writeSavedArticles(next: SavedArticleItem[]): void {
+  try {
+    localStorage.setItem(ARTICLES_STORAGE_KEY, JSON.stringify(next));
+  } catch (e) {
+    console.warn('LocalStorage full, trimming oldest articles', e);
+  }
+}
+
+// 2. Save / Upsert an article. Re-saving an article that is already in the
+// library keeps the reading position it had -- opening it again is not a
+// reason to forget where the listener was.
 export function saveArticleToLibrary(article: ArticleData, progress: number = 0): SavedArticleItem[] {
   const current = getSavedArticles();
-  const id = article.sourceUrl || article.title;
+  const id = articleLibraryId(article);
   const existingIdx = current.findIndex((item) => item.id === id || item.article.title === article.title);
 
   const updatedItem: SavedArticleItem = {
@@ -46,22 +60,56 @@ export function saveArticleToLibrary(article: ArticleData, progress: number = 0)
 
   let next: SavedArticleItem[];
   if (existingIdx !== -1) {
+    const existing = current[existingIdx]!;
     next = [...current];
     next[existingIdx] = {
-      ...next[existingIdx]!,
+      ...existing,
       ...updatedItem,
-      progress: progress > 0 ? progress : next[existingIdx]!.progress,
+      progress: progress > 0 ? progress : existing.progress,
+      lastWordIndex: existing.lastWordIndex,
     };
   } else {
     next = [updatedItem, ...current];
   }
 
-  try {
-    localStorage.setItem(ARTICLES_STORAGE_KEY, JSON.stringify(next));
-  } catch (e) {
-    console.warn('LocalStorage full, trimming oldest articles', e);
-  }
+  writeSavedArticles(next);
   return next;
+}
+
+// 2b. Record where the listener is in an article, so the library's
+// "Continue" actually continues (locally for everyone; the cloud copy in
+// `userArticles` is written by App.tsx for signed-in readers).
+export function updateArticleProgress(
+  id: string,
+  update: { progress: number; lastWordIndex: number }
+): SavedArticleItem[] {
+  const current = getSavedArticles();
+  const index = current.findIndex((item) => item.id === id || item.article.title === id);
+  if (index === -1) return current;
+  const next = [...current];
+  next[index] = {
+    ...next[index]!,
+    progress: Math.max(0, Math.min(100, update.progress)),
+    lastWordIndex: Math.max(0, Math.floor(update.lastWordIndex)),
+    lastReadAt: Date.now(),
+  };
+  writeSavedArticles(next);
+  return next;
+}
+
+// The word to resume from for a saved item, or 0 when the article should
+// start over: nothing recorded, barely started, or already finished.
+export const RESUME_MIN_WORD_INDEX = 3;
+export const RESUME_COMPLETED_PROGRESS = 98;
+
+export function resumeWordIndexFor(
+  item: { progress?: number; lastWordIndex?: number } | null | undefined
+): number {
+  if (!item) return 0;
+  const index = item.lastWordIndex ?? 0;
+  if (!Number.isFinite(index) || index < RESUME_MIN_WORD_INDEX) return 0;
+  if ((item.progress ?? 0) >= RESUME_COMPLETED_PROGRESS) return 0;
+  return Math.floor(index);
 }
 
 // 3. Delete an article

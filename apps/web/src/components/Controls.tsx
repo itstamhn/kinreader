@@ -31,6 +31,13 @@ interface ControlsProps {
   isBuffering?: boolean;
   isDegraded?: boolean;
   isError?: boolean;
+  /** Overrides the default degraded-notice copy (e.g. REST audio with estimated word sync). */
+  degradedMessage?: string;
+  /** Overrides the default error-notice copy when playback itself is unavailable. */
+  errorMessage?: string;
+  /** A dismissible notice (e.g. an article that failed to load) that does not block playback. */
+  noticeMessage?: string;
+  onDismissNotice?: () => void;
 }
 
 const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
@@ -54,6 +61,10 @@ export function Controls({
   isBuffering = isSynthesizing,
   isDegraded = false,
   isError = false,
+  degradedMessage = 'Neural voice unavailable (using on-device speech).',
+  errorMessage = 'Audio playback unavailable on this device.',
+  noticeMessage,
+  onDismissNotice,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -321,15 +332,32 @@ export function Controls({
       </div>
 
       {/* Synthesis / Degraded / Error Notice Banner */}
-      {isError ? (
+      {noticeMessage ? (
+        <div
+          role="alert"
+          className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-300"
+        >
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{noticeMessage}</span>
+          {onDismissNotice && (
+            <button
+              onClick={onDismissNotice}
+              className="ml-2 shrink-0 underline underline-offset-2 hover:text-white"
+              title="Dismiss"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      ) : isError ? (
         <div className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-400">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>Audio playback unavailable on this device.</span>
+          <span>{errorMessage}</span>
         </div>
       ) : isDegraded ? (
         <div className="w-full bg-[#F2A33C]/10 border-t border-[#F2A33C]/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#F2A33C]">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>Neural voice unavailable (using on-device speech).</span>
+          <span>{degradedMessage}</span>
         </div>
       ) : null}
     </footer>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Clipboard, Play, Loader2, X } from 'lucide-react';
 import { useCRPC } from '../lib/convex';
+import { getOrCreateClientId } from '../lib/storage';
 import type { ArticleData } from '../types';
 
 interface ClipboardDetectSheetProps {
@@ -36,7 +37,7 @@ export function ClipboardDetectSheet({
     setLoading(true);
     setError(null);
     try {
-      const data = await extractMutation.mutateAsync({ url: detectedUrl });
+      const data = await extractMutation.mutateAsync({ url: detectedUrl, clientId: getOrCreateClientId() });
       if (toQueue) {
         onAddToQueue(data);
       } else {

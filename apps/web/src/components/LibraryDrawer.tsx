@@ -22,6 +22,7 @@ export interface SavedArticleItem {
   article: ArticleData;
   progress: number;
   lastReadAt: number;
+  lastWordIndex?: number;
   isCachedAudio?: boolean;
 }
 
@@ -32,6 +33,29 @@ const SONIOX_VOICES = [
   { id: 'Sophie', name: 'Sophie', desc: 'Engaging & Smooth' },
   { id: 'Oliver', name: 'Oliver', desc: 'Calm & Rhythmic' },
 ];
+
+// Listening-time estimates at the Adrian voice's measured ~177 WPM (plan 022,
+// Step 0), scaled by the reader's tempo. Replaces the placeholder "14 min →
+// 6 min" strings the design mock shipped with.
+const NARRATION_WPM = 177;
+
+function wordCountOf(article: ArticleData): number {
+  return article.content ? article.content.split(/\s+/).filter(Boolean).length : 0;
+}
+
+function listenMinutes(words: number, speed: number): { base: number; atSpeed: number } {
+  const base = Math.max(1, Math.round(words / NARRATION_WPM));
+  const atSpeed = Math.max(1, Math.round(words / NARRATION_WPM / (speed > 0 ? speed : 1)));
+  return { base, atSpeed };
+}
+
+function formatRemaining(words: number, progress: number, speed: number): string {
+  const remainingWords = words * (1 - Math.max(0, Math.min(100, progress)) / 100);
+  const totalSeconds = Math.max(0, Math.round((remainingWords / NARRATION_WPM) * 60 / (speed > 0 ? speed : 1)));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `−${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
 
 const DEFAULT_READER_SETTINGS: ReaderSettings = {
   ttsProvider: 'soniox',
@@ -330,9 +354,16 @@ export function LibraryDrawer({
                   </div>
                   <div className="font-sans text-xs text-[#ECEAE4]/45 truncate">
                     <span>{currentItem.article.author || 'Author'}</span>
-                    <span> · 14 min → </span>
-                    <span className="text-[#F2A33C] font-medium">6 min</span>
-                    <span> · Adrian · {speed}×</span>
+                    {(() => {
+                      const estimate = listenMinutes(wordCountOf(currentItem.article), speed);
+                      return (
+                        <>
+                          <span> · {estimate.base} min → </span>
+                          <span className="text-[#F2A33C] font-medium">{estimate.atSpeed} min</span>
+                        </>
+                      );
+                    })()}
+                    <span> · {currentSonioxVoice} · {speed.toFixed(1)}×</span>
                   </div>
 
                   <div className="flex items-center gap-3 pt-1">
@@ -342,7 +373,9 @@ export function LibraryDrawer({
                         style={{ width: `${Math.max(10, currentItem.progress || 0)}%` }}
                       />
                     </div>
-                    <span className="font-mono text-[10px] text-[#ECEAE4]/40">−03:41</span>
+                    <span className="font-mono text-[10px] text-[#ECEAE4]/40">
+                      {formatRemaining(wordCountOf(currentItem.article), currentItem.progress || 0, speed)}
+                    </span>
                   </div>
                 </div>
 
@@ -418,7 +451,20 @@ export function LibraryDrawer({
                       <div className="flex items-center gap-1.5 text-[11px] text-[#ECEAE4]/40 font-sans">
                         <span>{item.article.author || 'Author'}</span>
                         <span>·</span>
-                        <span className="text-[#F2A33C]">9 → 4 min</span>
+                        {(() => {
+                          const estimate = listenMinutes(wordCountOf(item.article), speed);
+                          return (
+                            <span className="text-[#F2A33C]">
+                              {estimate.base} → {estimate.atSpeed} min
+                            </span>
+                          );
+                        })()}
+                        {item.progress > 0 && item.progress < 98 && (
+                          <>
+                            <span>·</span>
+                            <span>{Math.round(item.progress)}%</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

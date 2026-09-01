@@ -51,3 +51,30 @@ test('delete removes the article from the library', () => {
   expect(remaining.some((item) => item.id === article.sourceUrl)).toBe(false);
   expect(getSavedArticles().some((item) => item.id === article.sourceUrl)).toBe(false);
 });
+
+import { updateArticleProgress, resumeWordIndexFor, articleLibraryId } from './storage';
+
+test('updateArticleProgress records the position and saveArticleToLibrary keeps it', () => {
+  localStorage.clear();
+  const article = { title: 'Resume me', content: 'one two three four five six', sourceUrl: 'https://example.com/resume' };
+  saveArticleToLibrary(article);
+  updateArticleProgress(articleLibraryId(article), { progress: 40, lastWordIndex: 4 });
+
+  let item = getSavedArticles().find((entry) => entry.id === article.sourceUrl)!;
+  expect(item.progress).toBe(40);
+  expect(item.lastWordIndex).toBe(4);
+
+  // Re-opening the article (which re-saves it) must not forget the position.
+  saveArticleToLibrary(article);
+  item = getSavedArticles().find((entry) => entry.id === article.sourceUrl)!;
+  expect(item.progress).toBe(40);
+  expect(item.lastWordIndex).toBe(4);
+});
+
+test('resumeWordIndexFor starts over for fresh, barely started, or finished articles', () => {
+  expect(resumeWordIndexFor(undefined)).toBe(0);
+  expect(resumeWordIndexFor({ progress: 0, lastWordIndex: 0 })).toBe(0);
+  expect(resumeWordIndexFor({ progress: 1, lastWordIndex: 2 })).toBe(0);
+  expect(resumeWordIndexFor({ progress: 99, lastWordIndex: 400 })).toBe(0);
+  expect(resumeWordIndexFor({ progress: 40, lastWordIndex: 57 })).toBe(57);
+});

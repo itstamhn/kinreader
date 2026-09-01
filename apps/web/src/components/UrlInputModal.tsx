@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { X, Link2, FileText, Sparkles, Loader2, Clipboard, Play } from 'lucide-react';
 import { useCRPC } from '../lib/convex';
+import { getOrCreateClientId } from '../lib/storage';
 import type { ArticleData } from '../types';
 
 interface UrlInputModalProps {
@@ -65,7 +66,7 @@ export function UrlInputModal({
     setError(null);
 
     try {
-      const data = await extractMutation.mutateAsync({ url: url.trim() });
+      const data = await extractMutation.mutateAsync({ url: url.trim(), clientId: getOrCreateClientId() });
       if (shouldAddToQueue && onAddToQueue) {
         onAddToQueue(data);
       } else {

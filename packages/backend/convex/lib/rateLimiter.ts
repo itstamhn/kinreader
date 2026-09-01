@@ -73,3 +73,26 @@ export function ttsGlobalRateLimiter(ctx: MutationCtx) {
     prefix: 'tts-global',
   });
 }
+
+// Article extraction does server-side fetches (fxtwitter, Monid, the page
+// itself, Jina) on behalf of an anonymous caller. Nothing paid, but an
+// unmetered fetch amplifier is still an abuse surface, so it gets the same
+// two-bucket shape as TTS: a per-client fairness bucket and a fixed global
+// ceiling that a rotating clientId cannot dodge.
+export const EXTRACT_GLOBAL_KEY = 'extract:global';
+
+export function extractClientRateLimiter(ctx: MutationCtx) {
+  return new Ratelimit({
+    db: dbWriter(ctx),
+    limiter: Ratelimit.slidingWindow(12, MINUTE),
+    prefix: 'extract-client',
+  });
+}
+
+export function extractGlobalRateLimiter(ctx: MutationCtx) {
+  return new Ratelimit({
+    db: dbWriter(ctx),
+    limiter: Ratelimit.slidingWindow(120, MINUTE),
+    prefix: 'extract-global',
+  });
+}
