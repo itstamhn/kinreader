@@ -25,3 +25,43 @@ if (typeof window !== 'undefined' && !window.speechSynthesis) {
 }
 
 Object.assign(globalThis, nativeFetchGlobals);
+
+// Nothing in the suite talks to a live Convex deployment (procedures are
+// mocked at the client prototype), but constructing `ConvexReactClient`
+// still dials the deployment's WebSocket. Behind a proxy that answers the
+// upgrade with a non-101 status the `ws` layer emits an 'error' with no
+// listener attached, and Bun attributes that unhandled error to whichever
+// test happens to be running -- a flake that scales with suite length.
+// An inert socket that never opens keeps the client in CONNECTING forever,
+// which is exactly the state every test here already assumes.
+class InertWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSING = 2;
+  readonly CLOSED = 3;
+  readyState = 0;
+  url: string;
+  binaryType = 'blob';
+  onopen: ((event: Event) => void) | null = null;
+  onclose: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  constructor(url: string | URL) {
+    this.url = url.toString();
+  }
+  send() {}
+  close() {
+    this.readyState = 3;
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  dispatchEvent() {
+    return false;
+  }
+}
+(globalThis as any).WebSocket = InertWebSocket;
+if (typeof window !== 'undefined') (window as any).WebSocket = InertWebSocket;

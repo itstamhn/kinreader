@@ -11,7 +11,10 @@
     "not_found_handling": "none"
   },
   "vars": {
-    "APP_ORIGIN": "https://app.kinreader.com"
+    "APP_ORIGIN": "https://app.kinreader.com",
+    // Where /api/auth/* and /api/tts/* are proxied. Must match VITE_CONVEX_SITE_URL
+    // in apps/web/.env.production, or the SPA and the proxy talk to two deployments.
+    "CONVEX_SITE_ORIGIN": "https://notable-camel-807.convex.site"
   },
   // The reader only. The apex and www belong to the Astro marketing site,
   // deployed from apps/marketing with its own wrangler config (plan 014).

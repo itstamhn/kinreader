@@ -1,5 +1,17 @@
 import { z } from 'zod';
 import { action } from '../crpc';
+import { internal } from '../_generated/api';
+
+// Every upstream fetch is bounded. Without these a stalled publisher (or
+// Jina) held the reader's spinner for as long as the Convex action limit
+// allowed -- ten minutes -- with no way for the UI to tell "slow" from "dead".
+const FETCH_TIMEOUT_MS = {
+  fxtwitter: 8000,
+  monid: 10000,
+  monidPoll: 5000,
+  direct: 12000,
+  jina: 15000,
+} as const;
 
 // Convex values are capped at 1MB. Truncate well below that so JSON framing,
 // title/author fields, etc. never push the response over the limit.
@@ -81,9 +93,24 @@ interface FxTwitterTweet {
 // in the direction of this file being the single source of truth going
 // forward — the Spiceflow route is removed in the same change that lands this.
 export const extract = action
-  .input(z.object({ url: z.string().min(1) }))
-  .action(async ({ input }) => {
+  .input(
+    z.object({
+      url: z.string().min(1),
+      // Stable per-browser id (apps/web/src/lib/storage.ts) -- a fairness
+      // bucket only; the global limiter is the boundary that holds.
+      clientId: z.string().trim().min(1).max(200).optional(),
+    })
+  )
+  .action(async ({ ctx, input }) => {
     const url = assertPublicHttpUrl(input.url.trim()).toString();
+
+    const rateLimit: { ok: boolean } = await ctx.runMutation(
+      internal.routers.articlesInternal.consumeExtractRateLimit,
+      { key: input.clientId || 'anonymous' }
+    );
+    if (!rateLimit.ok) {
+      throw new Error('Too many article requests. Please try again in a minute.');
+    }
 
     const isTwitter = /twitter\.com|x\.com|fxtwitter\.com|fixupx\.com/i.test(url);
 
@@ -105,6 +132,7 @@ export const extract = action
       const statusId = xMatch[2];
       try {
         const fxRes = await fetch(`https://api.fxtwitter.com/${username}/status/${statusId}`, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS.fxtwitter),
           headers: {
             'User-Agent':
               'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -147,6 +175,7 @@ export const extract = action
       try {
         const monidRunRes = await fetch('https://api.monid.ai/v1/run', {
           method: 'POST',
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS.monid),
           headers: {
             'Authorization': `Bearer ${monidApiKey}`,
             'Content-Type': 'application/json',
@@ -170,6 +199,7 @@ export const extract = action
             for (let i = 0; i < 3; i++) {
               await new Promise((r) => setTimeout(r, 800));
               const pollRes = await fetch(`https://api.monid.ai/v1/runs/${runData.runId}`, {
+                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS.monidPoll),
                 headers: { 'Authorization': `Bearer ${monidApiKey}` },
               });
               if (pollRes.ok) {
@@ -194,6 +224,7 @@ export const extract = action
     if (!content) {
       try {
         const rawRes = await fetch(url, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS.direct),
           headers: {
             'User-Agent':
               'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -257,6 +288,7 @@ export const extract = action
       try {
         const jinaUrl = `https://r.jina.ai/${encodeURIComponent(url)}`;
         const jinaRes = await fetch(jinaUrl, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS.jina),
           headers: {
             'Accept': 'application/json',
             'X-Return-Format': 'markdown',

@@ -22,7 +22,12 @@ import type { GenericId as Id } from "convex/values";
 export declare const api: {
   routers: {
     articles: {
-      extract: FunctionReference<"action", "public", { url: string }, any>;
+      extract: FunctionReference<
+        "action",
+        "public",
+        { clientId?: string; url: string },
+        any
+      >;
     };
     tts: {
       generateTrackUploadUrl: FunctionReference<
@@ -325,6 +330,14 @@ export declare const internal: {
     };
   };
   routers: {
+    articlesInternal: {
+      consumeExtractRateLimit: FunctionReference<
+        "mutation",
+        "internal",
+        { key: string },
+        { ok: boolean }
+      >;
+    };
     digest: {
       getWeeklyDigestRecipients: FunctionReference<
         "mutation",

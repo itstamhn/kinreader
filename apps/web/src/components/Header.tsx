@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Settings, PlusCircle, ChevronLeft, Zap, Share2, Check } from 'lucide-react';
 import type { ArticleData } from '../types';
 import type { UserProfile } from './AuthScreen';
+import { buildShareLink } from '../utils/shareLink';
 
 interface HeaderProps {
   article: ArticleData | null;
@@ -37,11 +38,18 @@ export function Header({
   const handleShare = async () => {
     if (typeof window === 'undefined') return;
 
+    // Articles with a source get the kinreader.com/r/<id> share page (OG card,
+    // then a forward into the reader); pasted text has nothing a recipient
+    // could open, so the current app link is the best available.
     let shareUrl = window.location.href;
     if (article?.sourceUrl) {
-      const u = new URL(window.location.origin);
-      u.searchParams.set('url', article.sourceUrl);
-      shareUrl = u.toString();
+      shareUrl =
+        buildShareLink(article) ??
+        (() => {
+          const u = new URL(window.location.origin);
+          u.searchParams.set('url', article.sourceUrl!);
+          return u.toString();
+        })();
     }
 
     try {

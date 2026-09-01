@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } fro
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
 import { Header } from './components/Header';
-import { KineticDisplay } from './components/KineticDisplay';
+import { KineticDisplay, adjacentClauseStart } from './components/KineticDisplay';
 import { Controls } from './components/Controls';
 import { UrlInputModal } from './components/UrlInputModal';
 import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer';
@@ -16,6 +16,7 @@ import {
 } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
 import { articleCacheKey } from './utils/articleCacheKey';
+import { decodeShareId } from './utils/shareLink';
 import {
   uploadAndFinalizeExactTrack,
   type ExactTrackCacheEntry,
@@ -27,6 +28,10 @@ import {
   saveArticleToLibrary,
   deleteArticleFromLibrary,
   getOrCreateClientId,
+  updateArticleProgress,
+  resumeWordIndexFor,
+  articleLibraryId,
+  RESUME_MIN_WORD_INDEX,
 } from './lib/storage';
 import { useCRPC } from './lib/convex';
 import { authClient } from './lib/auth-client';
@@ -55,6 +60,21 @@ type PlaybackStatus =
   | 'ready' // neural audio loaded
   | 'degraded' // synthesis failed; on-device speech instead
   | 'error'; // nothing playable
+
+// Above this the article no longer fits in a GET query string (Cloudflare caps
+// URLs at 16KB and the text is percent-encoded), so the REST fallback POSTs
+// the text and plays the returned Blob instead.
+const REST_GET_MAX_CHARS = 6000;
+
+// How often reading position is written: every few seconds while audio is
+// playing, and shortly after the position settles when paused (so a timeline
+// drag or a run of arrow-key seeks is one write, not one per word).
+const PROGRESS_SAVE_INTERVAL_MS = { playing: 5000, paused: 1000 } as const;
+
+const DEGRADED_MESSAGES = {
+  audio: 'Exact word sync unavailable — using estimated timing for this article.',
+  browser: 'Neural voice unavailable (using on-device speech).',
+} as const;
 
 export interface AppProps {
   streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
@@ -143,6 +163,11 @@ export function App({
   const [authError, setAuthError] = useState<string | null>(null);
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
   const [detectedClipboardUrl, setDetectedClipboardUrl] = useState<string>('');
+  // A remote article being fetched for a deep link / quick paste, and the last
+  // load that failed. Both used to be invisible: the sample article sat on
+  // screen while extraction ran, and a failure only reached the console.
+  const [pendingLoadUrl, setPendingLoadUrl] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const saveSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -150,6 +175,10 @@ export function App({
   // in-flight synthesis requests if the user switches articles rapidly (plan 019).
   const loadIdRef = useRef(0);
   const activeStreamRef = useRef<{ cancel(): void } | null>(null);
+  // Object URL of a REST-fallback Blob, revoked on the next load / unmount.
+  const restObjectUrlRef = useRef<string | null>(null);
+  const lastProgressSaveRef = useRef(0);
+  const clauseLengthRef = useRef<4 | 6 | 9>(6);
 
   // The engine is constructed once, lazily, on the first render rather than
   // inside an effect: `useSyncExternalStore` needs `subscribe`/`getSnapshot`
@@ -203,19 +232,51 @@ export function App({
     engine.seekToWordIndex(wordIndex);
   };
 
+  const revokeRestObjectUrl = () => {
+    if (restObjectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(restObjectUrlRef.current);
+      } catch {}
+      restObjectUrlRef.current = null;
+    }
+  };
+
   // Load article audio with Soniox v2
-  const loadArticleContent = async (art: ArticleData, eng: SpeechEngine, currSettings: ReaderSettings) => {
+  const loadArticleContent = async (
+    art: ArticleData,
+    eng: SpeechEngine,
+    currSettings: ReaderSettings,
+    options: { resumeWordIndex?: number } = {}
+  ) => {
     const currentLoadId = ++loadIdRef.current;
 
     activeStreamRef.current?.cancel();
     activeStreamRef.current = null;
+    revokeRestObjectUrl();
     eng.stop();
     eng.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
+    setLoadError(null);
+
+    const isCurrentLoad = () => loadIdRef.current === currentLoadId;
+
+    // Where to pick the article back up. Applied once, as soon as a word
+    // list that covers the index is playable -- for a cached exact track
+    // immediately, for a live stream when the real timings reach it, for
+    // the fallbacks against their estimated timeline.
+    let pendingResumeIndex = Math.max(0, Math.floor(options.resumeWordIndex ?? 0));
+    const applyResume = (words: WordTiming[]) => {
+      if (pendingResumeIndex <= 0 || !isCurrentLoad()) return;
+      if (words.length <= pendingResumeIndex) return;
+      const target = pendingResumeIndex;
+      pendingResumeIndex = 0;
+      eng.seekToWordIndex(target);
+    };
 
     if (art.title === SAMPLE_ARTICLE.title) {
       try {
         eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
         if (loadIdRef.current === currentLoadId) {
+          applyResume(SAMPLE_TIMINGS);
           setPlaybackStatus('ready');
         }
       } catch {
@@ -258,8 +319,8 @@ export function App({
     eng.setWordTimings(initialWordTimings, totalDuration);
     setPlaybackStatus('synthesizing');
 
-    const isCurrentLoad = () => loadIdRef.current === currentLoadId;
     const voice = currSettings.sonioxVoice || 'Adrian';
+    const clientId = getOrCreateClientId();
     let cacheUrl: string | null = null;
     if (canUseServerExactCache) {
       try {
@@ -273,21 +334,68 @@ export function App({
       activeStreamRef.current?.cancel();
       activeStreamRef.current = null;
     };
+
+    // A fallback taken mid-article resumes where the listener was, not at the
+    // top: capture the position (and whether audio was running) before the
+    // engine is reset, and restore both once the replacement source is in.
+    const captureFallbackPosition = () => {
+      const index = eng.currentWordIndex;
+      if (index >= RESUME_MIN_WORD_INDEX) pendingResumeIndex = index;
+      return eng.isPlaying;
+    };
+    const restoreAfterFallback = (words: WordTiming[], wasPlaying: boolean) => {
+      applyResume(words);
+      if (wasPlaying && eng.playbackReady) eng.play();
+    };
+
     const useBrowserFallback = () => {
       if (!isCurrentLoad()) return;
+      const wasPlaying = captureFallbackPosition();
       const hasDeviceSpeech = eng.loadBrowserText(art.content, initialWordTimings);
       setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
+      if (hasDeviceSpeech) restoreAfterFallback(initialWordTimings, wasPlaying);
     };
     const useRestFallback = () => {
       if (!isCurrentLoad()) return;
       cancelCurrentStream();
+      const wasPlaying = captureFallbackPosition();
       eng.stop();
+      const text = art.content.trim();
       try {
         // REST has no timestamp envelope, so this deliberately keeps the
         // estimated/calibrated timeline. Speed remains client-side only.
-        const streamUrl = `/api/tts/stream?text=${encodeURIComponent(art.content)}&voice=${encodeURIComponent(currSettings.sonioxVoice || 'Adrian')}&speed=1.0`;
-        eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration, useBrowserFallback);
-        setPlaybackStatus('degraded');
+        if (text.length <= REST_GET_MAX_CHARS) {
+          const streamUrl =
+            `/api/tts/stream?text=${encodeURIComponent(text)}` +
+            `&voice=${encodeURIComponent(voice)}&speed=1.0&clientId=${encodeURIComponent(clientId)}`;
+          eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration, useBrowserFallback);
+          setPlaybackStatus('degraded');
+          restoreAfterFallback(initialWordTimings, wasPlaying);
+          return;
+        }
+
+        // Too long for a query string: POST the text and play the Blob. This
+        // waits for the whole file, but it plays -- the GET would 414.
+        setPlaybackStatus('synthesizing');
+        void fetch('/api/tts/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice, speed: 1.0, clientId }),
+        })
+          .then(async (response) => {
+            if (!response.ok) throw new Error(`REST synthesis failed (status ${response.status})`);
+            const blob = await response.blob();
+            if (!isCurrentLoad()) return;
+            revokeRestObjectUrl();
+            restObjectUrlRef.current = URL.createObjectURL(blob);
+            eng.loadAudioUrl(restObjectUrlRef.current, initialWordTimings, totalDuration, useBrowserFallback);
+            setPlaybackStatus('degraded');
+            restoreAfterFallback(initialWordTimings, wasPlaying);
+          })
+          .catch((error) => {
+            console.warn('REST synthesis fallback failed; using on-device speech:', error);
+            useBrowserFallback();
+          });
       } catch {
         useBrowserFallback();
       }
@@ -312,7 +420,6 @@ export function App({
 
     const runWebSocketAttempt = async (retryCount: number): Promise<void> => {
       try {
-        const clientId = getOrCreateClientId();
         const temporaryKey = await (requestTemporaryKey
           ? requestTemporaryKey(clientId)
           : temporaryKeyMutation.mutateAsync({ clientId }));
@@ -339,6 +446,7 @@ export function App({
           attemptActive = false;
           activeStreamRef.current = null;
           setPlaybackStatus('ready');
+          applyResume(exactWords);
 
           if (completedBlob && canUseServerExactCache && cacheUrl) {
             const persistenceInput: PersistExactTrackInput = {
@@ -374,6 +482,10 @@ export function App({
               if (exactWords.length === 0 || exactWords.length > initialWordTimings.length) return;
               const merged = mergeAuthoritativePrefix(exactWords);
               eng.appendWordTimings(merged, merged.at(-1)?.end ?? totalDuration, { authoritative: true });
+              // Resume only once the real timings reach the saved word and the
+              // element can seek (progressive playback); the Blob-only path
+              // resumes in finalizeTimings instead.
+              if (eng.playbackReady && exactWords.length > pendingResumeIndex) applyResume(merged);
             },
             onDone: () => {
               if (!attemptActive || !isCurrentLoad()) return;
@@ -390,6 +502,7 @@ export function App({
               attemptActive = false;
               cancelCurrentStream();
               if (error instanceof SonioxTemporaryKeyExpiredError && retryCount === 0) {
+                captureFallbackPosition();
                 eng.stop();
                 void runWebSocketAttempt(1);
                 return;
@@ -420,6 +533,7 @@ export function App({
             void runWebSocketAttempt(0);
           });
           setPlaybackStatus('ready');
+          applyResume(cachedTrack.words);
           return;
         }
       } catch (error) {
@@ -446,12 +560,25 @@ export function App({
         },
         progress: cp.progress || 0,
         lastReadAt: cp.updatedAt || cp.article.createdAt,
+        lastWordIndex: cp.lastWordIndex || 0,
       }));
     }
     return savedArticles;
   }, [user, cloudPlaylist, savedArticles]);
 
-  const handleLoadNewArticle = (newArticle: ArticleData) => {
+  // The saved reading position for an article, from the cloud playlist when
+  // signed in and the local library otherwise.
+  const resumeIndexFor = (target: ArticleData): number => {
+    const id = articleLibraryId(target);
+    const item =
+      effectiveSavedArticles.find((entry) => entry.id === id || entry.article.title === target.title) ??
+      getSavedArticles().find((entry) => entry.id === id || entry.article.title === target.title);
+    return resumeWordIndexFor(item);
+  };
+
+  const handleLoadNewArticle = (newArticle: ArticleData, options: { resume?: boolean } = {}) => {
+    const resumeWordIndex = options.resume === false ? 0 : resumeIndexFor(newArticle);
+    setPendingLoadUrl(null);
     setArticle(newArticle);
     saveArticleToLibrary(newArticle);
     setSavedArticles(getSavedArticles());
@@ -474,10 +601,61 @@ export function App({
         sourceType: newArticle.sourceType,
       });
     }
-    loadArticleContent(newArticle, engine, settings);
+    loadArticleContent(newArticle, engine, settings, { resumeWordIndex });
+  };
+
+  // Fetch a remote article and open it, with the reader showing that a load
+  // is in progress and saying so when it fails. Shared by the `?url=` deep
+  // link, the `?read=` share link and the library's quick-paste field.
+  const extractAndOpen = (url: string) => {
+    const decodedUrl = url.trim();
+    let host = decodedUrl;
+    try {
+      host = new URL(decodedUrl).hostname.replace(/^www\./, '');
+    } catch {}
+
+    const placeholder: ArticleData = {
+      title: 'Loading article…',
+      author: host,
+      content: '',
+      sourceUrl: decodedUrl,
+      sourceType: 'article',
+    };
+    loadIdRef.current += 1;
+    activeStreamRef.current?.cancel();
+    activeStreamRef.current = null;
+    engine.stop();
+    engine.setWordTimings([], 0);
+    setArticle(placeholder);
+    setPendingLoadUrl(decodedUrl);
+    setLoadError(null);
+    setPlaybackStatus('synthesizing');
+
+    return extractArticleMutation
+      .mutateAsync({ url: decodedUrl, clientId: getOrCreateClientId() })
+      .then((data) => {
+        if (!data.title || !data.content) {
+          throw new Error('No readable text could be extracted from this page.');
+        }
+        handleLoadNewArticle(data);
+        return data;
+      })
+      .catch((err: unknown) => {
+        console.warn('Failed to load article:', err);
+        const reason = err instanceof Error && err.message ? err.message : 'Please try again.';
+        setPendingLoadUrl(null);
+        setArticle(SAMPLE_ARTICLE);
+        setQueryUrl(null, { history: 'replace' });
+        loadArticleContent(SAMPLE_ARTICLE, engine, settings);
+        setLoadError(`Could not load ${host}: ${reason}`);
+        return null;
+      });
   };
 
   const handleViewChange = (newView: 'reader' | 'queue' | 'settings' | 'auth') => {
+    // Reading positions are written straight to storage while listening;
+    // refresh the in-memory library when it is about to be shown.
+    if (newView !== 'reader') setSavedArticles(getSavedArticles());
     setActiveView(newView === 'reader' ? null : newView, {
       history: newView === 'reader' ? 'replace' : 'push',
     });
@@ -550,24 +728,15 @@ export function App({
     );
 
     if (foundLocal) {
+      setPendingLoadUrl(null);
       setArticle(foundLocal.article);
-      loadArticleContent(foundLocal.article, engine, settings);
+      loadArticleContent(foundLocal.article, engine, settings, {
+        resumeWordIndex: resumeWordIndexFor(foundLocal),
+      });
       return;
     }
 
-    extractArticleMutation
-      .mutateAsync({ url: decodedUrl })
-      .then((data) => {
-        if (data.title && data.content) {
-          setArticle(data);
-          saveArticleToLibrary(data);
-          setSavedArticles(getSavedArticles());
-          loadArticleContent(data, engine, settings);
-        }
-      })
-      .catch((err) => {
-        console.warn('Failed to extract article from URL query:', err);
-      });
+    void extractAndOpen(decodedUrl);
   }, [queryUrl]);
 
   // 2. Initial sample audio load on mount (only if no custom ?url= query is present)
@@ -586,28 +755,57 @@ export function App({
       loadIdRef.current += 1;
       activeStreamRef.current?.cancel();
       activeStreamRef.current = null;
+      revokeRestObjectUrl();
       engine.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
-  // Sync reading progress to user's database record (debounced per clause change)
+  // "Voice off" mutes the narration; the kinetic timeline keeps running.
   useEffect(() => {
-    if (!user || !article || playback.words.length === 0) return;
+    engine.muted = !isVoiceEnabled;
+  }, [isVoiceEnabled]);
 
-    const timer = setTimeout(() => {
-      const artId = article.sourceUrl || article.title;
-      saveProgressMutation.mutate({
-        articleId: artId,
-        progress: Number(playback.progress.toFixed(1)),
-        lastWordIndex: playback.currentWordIndex,
-        currentTime: Number(playback.currentTime.toFixed(2)),
-        isCompleted: playback.progress >= 98,
-      });
-    }, 2000);
+  useEffect(() => {
+    clauseLengthRef.current = clauseLength;
+  }, [clauseLength]);
 
+  // Persist the reading position: locally for everyone (the library's
+  // "Continue" reads it back), and to the cloud playlist when signed in.
+  // Throttled, with a trailing write, so it fires during continuous playback
+  // too. The old version was a 2s debounce keyed on the word index, which
+  // during playback never fired at all -- progress only saved on pause.
+  useEffect(() => {
+    if (!article || playback.words.length === 0 || pendingLoadUrl) return;
+    // Word 0 with no progress is a fresh load (or a reset), not a position
+    // worth remembering -- and writing it would erase a real one.
+    if (playback.currentWordIndex < RESUME_MIN_WORD_INDEX && playback.progress < 1) return;
+
+    const save = () => {
+      lastProgressSaveRef.current = Date.now();
+      const artId = articleLibraryId(article);
+      const progress = Number(playback.progress.toFixed(1));
+      updateArticleProgress(artId, { progress, lastWordIndex: playback.currentWordIndex });
+      if (user) {
+        saveProgressMutation.mutate({
+          articleId: artId,
+          progress,
+          lastWordIndex: playback.currentWordIndex,
+          currentTime: Number(playback.currentTime.toFixed(2)),
+          isCompleted: playback.progress >= 98,
+        });
+      }
+    };
+
+    const interval = playback.isPlaying ? PROGRESS_SAVE_INTERVAL_MS.playing : PROGRESS_SAVE_INTERVAL_MS.paused;
+    const elapsed = Date.now() - lastProgressSaveRef.current;
+    if (elapsed >= interval) {
+      save();
+      return;
+    }
+    const timer = setTimeout(save, interval - elapsed);
     return () => clearTimeout(timer);
-  }, [playback.currentWordIndex, user]);
+  }, [playback.currentWordIndex, playback.isPlaying, user, pendingLoadUrl]);
 
   // Tempo Acceleration Ramp Effect (smooth +0.02× increase per clause transition)
   useEffect(() => {
@@ -630,6 +828,15 @@ export function App({
       } else if (e.code === 'Escape') {
         handleViewChange('reader');
         setIsInputOpen(false);
+      } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        const target = adjacentClauseStart(
+          engine.words,
+          engine.currentWordIndex,
+          e.code === 'ArrowLeft' ? -1 : 1,
+          clauseLengthRef.current
+        );
+        if (target !== null) engine.seekToWordIndex(target);
       } else if (e.code === 'ArrowUp' || (e.shiftKey && (e.key === '=' || e.key === '+'))) {
         e.preventDefault();
         handleSpeedChange(Math.min(3.5, Number((engine.rate + 0.25).toFixed(2))));
@@ -680,6 +887,26 @@ export function App({
     if (typeof window === 'undefined') return;
 
     const urlParams = new URLSearchParams(window.location.search);
+
+    // `kinreader.com/r/<id>` forwards here as `?read=<id>` (plan 016, encoded-id
+    // variant -- see utils/shareLink.ts). Resolve it into the ordinary `?url=`
+    // load so the address bar ends up on a link that reopens the same article.
+    const shareId = urlParams.get('read');
+    if (shareId !== null) {
+      const sharedUrl = decodeShareId(shareId);
+      urlParams.delete('read');
+      if (sharedUrl) {
+        urlParams.set('url', sharedUrl);
+        const search = urlParams.toString();
+        window.history.replaceState({}, document.title, `${window.location.pathname}${search ? `?${search}` : ''}`);
+        setQueryUrl(sharedUrl, { history: 'replace' });
+      } else {
+        const search = urlParams.toString();
+        window.history.replaceState({}, document.title, `${window.location.pathname}${search ? `?${search}` : ''}`);
+        setLoadError('That share link is not valid. Paste the article URL instead.');
+      }
+    }
+
     const betterAuthError = urlParams.get('error');
     const failure =
       urlParams.get('auth_error') ??
@@ -726,18 +953,8 @@ export function App({
           }}
           onDeleteArticle={handleDeleteArticle}
           onQuickExtract={(urlToExtract) => {
-            extractArticleMutation.mutate(
-              { url: urlToExtract },
-              {
-                onSuccess: (data) => {
-                  if (data.title) {
-                    handleLoadNewArticle(data);
-                    handleViewChange('reader');
-                  }
-                },
-                onError: () => {},
-              }
-            );
+            handleViewChange('reader');
+            void extractAndOpen(urlToExtract);
           }}
           user={user}
           onOpenAuth={() => handleViewChange('auth')}
@@ -774,6 +991,7 @@ export function App({
             viewMode={viewMode}
             fontSize={settings.fontSize || 'md'}
             clauseLength={clauseLength}
+            emptyMessage={pendingLoadUrl ? 'Fetching article…' : undefined}
           />
 
           {/* 3. Bottom Controls */}
@@ -799,7 +1017,10 @@ export function App({
               playbackStatus !== 'error'
             }
             isDegraded={playbackStatus === 'degraded'}
+            degradedMessage={DEGRADED_MESSAGES[playback.mode]}
             isError={playbackStatus === 'error'}
+            noticeMessage={loadError ?? undefined}
+            onDismissNotice={() => setLoadError(null)}
           />
         </div>
       )}

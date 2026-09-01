@@ -666,3 +666,58 @@ test('stopping a stream aborts source work, revokes its URL, and ignores later c
     URL.revokeObjectURL = originalRevokeObjectURL;
   }
 });
+
+test('muted silences the audio element without touching the timeline', () => {
+  const engine = new SpeechEngine();
+  engine.loadAudioUrl('/sample_audio.mp3', [
+    { text: 'one', start: 0, end: 0.2 },
+    { text: 'two', start: 0.2, end: 0.4 },
+  ], 0.4);
+  const before = engine.getSnapshot();
+
+  engine.muted = true;
+  expect(((window as any).__engine as SpeechEngine).muted).toBe(true);
+  expect((engine as any).audio.muted).toBe(true);
+  expect(engine.getSnapshot().words).toBe(before.words);
+  expect(engine.getSnapshot().currentWordIndex).toBe(0);
+
+  engine.muted = false;
+  expect((engine as any).audio.muted).toBe(false);
+});
+
+test('currentWordIndex tracks seeks so a fallback can resume from the same word', () => {
+  const engine = new SpeechEngine();
+  engine.loadAudioUrl('/sample_audio.mp3', [
+    { text: 'one', start: 0, end: 0.2 },
+    { text: 'two', start: 0.2, end: 0.4 },
+    { text: 'three', start: 0.4, end: 0.6 },
+  ], 0.6);
+  engine.seekToWordIndex(2);
+  expect(engine.currentWordIndex).toBe(2);
+  expect(engine.getSnapshot().currentWordIndex).toBe(2);
+});
+
+test('ManagedMediaSource-only browsers get remote playback disabled before attach', () => {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManaged = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  class FakeManagedMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = FakeManagedMediaSource;
+  URL.createObjectURL = () => 'blob:managed';
+  try {
+    const engine = new SpeechEngine();
+    const progressive = engine.startStreamingSession([{ text: 'a', start: 0, end: 0.2 }], 0.2);
+    expect(progressive).toBe(true);
+    expect((engine as any).audio.disableRemotePlayback).toBe(true);
+  } finally {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManaged;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});

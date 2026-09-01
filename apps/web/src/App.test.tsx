@@ -55,8 +55,12 @@ beforeEach(() => {
   window.location.href = 'http://localhost/';
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // nuqs batches URL writes on a short throttle; a `setQueryUrl` from the
+  // test that just finished can otherwise flush *after* the next test has
+  // set its own location, handing it the previous article's `?url=`.
+  await new Promise((resolve) => setTimeout(resolve, 80));
   global.fetch = originalFetch;
   localStorage.clear();
   window.location.href = 'http://localhost/';
@@ -600,11 +604,16 @@ test('a WebSocket failure falls back to REST and reports degraded playback', asy
 
     await waitFor(() => {
       expect(restUrls).toHaveLength(1);
-      expect(container.textContent).toContain('Neural voice unavailable');
+      // REST still plays the neural voice; what it lacks is exact word sync,
+      // and the notice must say that rather than claim on-device speech.
+      expect(container.textContent).toContain('Exact word sync unavailable');
     });
+    expect(container.textContent).not.toContain('Neural voice unavailable');
+    expect(restUrls[0]).toContain('clientId=');
 
     act(() => (window as any).__engine.audio.onerror(new Event('error')));
     await waitFor(() => expect(browserFallbackTexts).toContain('Fallback through REST'));
+    await waitFor(() => expect(container.textContent).toContain('Neural voice unavailable'));
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
@@ -788,5 +797,243 @@ test('exact-track persistence failure does not replace completed WebSocket playb
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
+  }
+});
+
+test('a ?read= share id is resolved into the ?url= load and stripped from the address bar', async () => {
+  const sharedUrl = 'https://paulgraham.com/lesson.html';
+  const shareId = btoa(sharedUrl).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  window.location.href = `http://localhost/?read=${shareId}`;
+
+  const extractedUrls: string[] = [];
+  const originalAction = ConvexReactClient.prototype.action;
+  ConvexReactClient.prototype.action = (async (_name: any, args: any) => {
+    extractedUrls.push(args?.url);
+    return {
+      title: 'What You (Will) Wish You Knew',
+      content: 'When I was in high school, I had to take a course in Latin.',
+      author: 'Paul Graham',
+      sourceUrl: sharedUrl,
+    };
+  }) as typeof originalAction;
+
+  try {
+    const { container } = renderApp();
+    await waitFor(() => {
+      expect(container.textContent).toContain('What You (Will) Wish You Knew');
+    });
+    expect(extractedUrls).toEqual([sharedUrl]);
+    expect(window.location.search).not.toContain('read=');
+    expect(new URLSearchParams(window.location.search).get('url')).toBe(sharedUrl);
+  } finally {
+    ConvexReactClient.prototype.action = originalAction;
+  }
+});
+
+test('an invalid ?read= id shows a notice and leaves the sample article playable', async () => {
+  window.location.href = 'http://localhost/?read=%%%not-valid';
+  const { container } = renderApp();
+  await waitFor(() => {
+    expect(container.textContent).toContain('That share link is not valid');
+  });
+  expect(window.location.search).not.toContain('read=');
+  const playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
+  expect(playButton.disabled).toBe(false);
+});
+
+test('a failed deep-link extraction shows a load notice instead of silently keeping the sample', async () => {
+  window.location.href = 'http://localhost/?url=https%3A%2F%2Fdead.example%2Fpost';
+  const originalAction = ConvexReactClient.prototype.action;
+  ConvexReactClient.prototype.action = (async () => {
+    throw new Error('Too many article requests. Please try again in a minute.');
+  }) as typeof originalAction;
+
+  try {
+    const { container } = renderApp();
+    await waitFor(() => {
+      expect(container.textContent).toContain('Could not load dead.example');
+      expect(container.textContent).toContain('Too many article requests');
+    });
+    // Back on the sample article, and it is playable.
+    expect(container.textContent).toContain('Dan Koe');
+    expect(window.location.search).not.toContain('url=');
+  } finally {
+    ConvexReactClient.prototype.action = originalAction;
+  }
+});
+
+test('a deep link shows a fetching state instead of the sample article while extraction runs', async () => {
+  window.location.href = 'http://localhost/?url=https%3A%2F%2Fslow.example%2Fpost';
+  let resolveExtract!: (value: unknown) => void;
+  const originalAction = ConvexReactClient.prototype.action;
+  ConvexReactClient.prototype.action = (() =>
+    new Promise((resolve) => {
+      resolveExtract = resolve;
+    })) as typeof originalAction;
+
+  try {
+    const { container } = renderApp();
+    await waitFor(() => {
+      expect(container.textContent).toContain('Fetching article');
+      expect(container.textContent).toContain('slow.example');
+    });
+    expect(container.textContent).not.toContain('digital renaissance');
+
+    resolveExtract({
+      title: 'Slow but here',
+      content: 'It arrived in the end after a long wait.',
+      author: 'Someone',
+      sourceUrl: 'https://slow.example/post',
+    });
+    await waitFor(() => expect(container.textContent).toContain('Slow but here'));
+  } finally {
+    ConvexReactClient.prototype.action = originalAction;
+  }
+});
+
+test('opening a saved article resumes from its recorded word once exact timings are loaded', async () => {
+  const transport = fakeStreamingTransport();
+  const seeks: number[] = [];
+  const originalSeek = SpeechEngine.prototype.seekToWordIndex;
+  SpeechEngine.prototype.seekToWordIndex = function (index) {
+    seeks.push(index);
+    return originalSeek.call(this, index);
+  };
+  const words = Array.from({ length: 12 }, (_, i) => ({
+    text: `w${i}`,
+    start: i * 0.3,
+    end: i * 0.3 + 0.25,
+  }));
+  const content = words.map((w) => w.text).join(' ');
+  localStorage.setItem(
+    'kinetic_saved_articles_v2',
+    JSON.stringify([
+      {
+        id: 'https://example.com/resume',
+        article: { title: 'Resume me', content, sourceUrl: 'https://example.com/resume' },
+        progress: 45,
+        lastWordIndex: 7,
+        lastReadAt: Date.now(),
+      },
+    ])
+  );
+  window.location.href = 'http://localhost/?url=https%3A%2F%2Fexample.com%2Fresume';
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+      loadExactTrack: async () => ({
+        audioUrl: 'https://cache.example/resume.mp3',
+        words,
+        duration: 3.6,
+        timingsSource: 'soniox',
+      }),
+    });
+    await waitFor(() => expect(container.textContent).toContain('Resume me'));
+    await waitFor(() => expect(seeks).toContain(7));
+    expect(((window as any).__engine as SpeechEngine).currentWordIndex).toBe(7);
+    expect(transport.streams).toHaveLength(0);
+  } finally {
+    SpeechEngine.prototype.seekToWordIndex = originalSeek;
+  }
+});
+
+test('a socket failure mid-article resumes the REST fallback from the current word', async () => {
+  const transport = fakeStreamingTransport();
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManagedMediaSource = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const seeks: number[] = [];
+  const originalSeek = SpeechEngine.prototype.seekToWordIndex;
+  SpeechEngine.prototype.seekToWordIndex = function (index) {
+    seeks.push(index);
+    return originalSeek.call(this, index);
+  };
+  class ProgressiveMediaSource {
+    static isTypeSupported() { return true; }
+    readyState = 'closed';
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  (window as any).MediaSource = ProgressiveMediaSource;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = () => 'blob:progressive-source';
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: 'soon' }),
+    });
+    await narrateRawText(container, 'one two three four five six seven eight nine ten');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+
+    // The listener is five words in when the socket dies.
+    act(() => ((window as any).__engine as SpeechEngine).seekToWordIndex(5));
+    seeks.length = 0;
+    act(() => transport.streams[0]!.options.handlers.onError(new Error('socket dropped')));
+
+    await waitFor(() => expect(container.textContent).toContain('Exact word sync unavailable'));
+    expect(seeks).toContain(5);
+    expect(((window as any).__engine as SpeechEngine).currentWordIndex).toBe(5);
+  } finally {
+    SpeechEngine.prototype.seekToWordIndex = originalSeek;
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManagedMediaSource;
+    URL.createObjectURL = originalCreateObjectURL;
+  }
+});
+
+test('ArrowRight and ArrowLeft move between clauses', async () => {
+  const { container } = renderApp();
+  await waitFor(() => expect(container.textContent).toContain('digital renaissance'));
+  const engine = (window as any).__engine as SpeechEngine;
+  expect(engine.currentWordIndex).toBe(0);
+
+  fireEvent.keyDown(window, { code: 'ArrowRight' });
+  const afterRight = engine.currentWordIndex;
+  expect(afterRight).toBeGreaterThan(0);
+
+  fireEvent.keyDown(window, { code: 'ArrowRight' });
+  expect(engine.currentWordIndex).toBeGreaterThan(afterRight);
+
+  fireEvent.keyDown(window, { code: 'ArrowLeft' });
+  expect(engine.currentWordIndex).toBe(afterRight);
+});
+
+test('the header voice toggle mutes the engine', async () => {
+  const { container } = renderApp();
+  const engine = (window as any).__engine as SpeechEngine;
+  expect(engine.muted).toBe(false);
+
+  const voiceButton = container.querySelector('button[title="Toggle Neural Voice"]') as HTMLButtonElement;
+  fireEvent.click(voiceButton);
+  await waitFor(() => expect(engine.muted).toBe(true));
+  expect(container.textContent).toContain('Voice off');
+
+  fireEvent.click(voiceButton);
+  await waitFor(() => expect(engine.muted).toBe(false));
+});
+
+test('the header share button copies a kinreader.com/r/ link that decodes back to the source', async () => {
+  window.location.href = 'http://localhost/';
+  const written: string[] = [];
+  const originalClipboard = navigator.clipboard;
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text: string) => { written.push(text); } },
+  });
+  try {
+    const { container } = renderApp();
+    await waitFor(() => expect(container.textContent).toContain('digital renaissance'));
+    const shareButton = container.querySelector('button[title="Share article link"]') as HTMLButtonElement;
+    fireEvent.click(shareButton);
+    await waitFor(() => expect(written).toHaveLength(1));
+    const link = new URL(written[0]!);
+    expect(link.origin).toBe('https://kinreader.com');
+    expect(link.pathname.startsWith('/r/')).toBe(true);
+    expect(link.searchParams.get('t')).toContain('DAN KOE');
+  } finally {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
   }
 });

@@ -25,13 +25,14 @@ the table when done.
 | 013 | Split into a Bun workspace — `apps/web` + `packages/backend` | P2 | M | — | DONE |
 | 014 | Astro marketing site on the apex; reader moves to `app.kinreader.com` | P2 | L | 013 | DONE |
 | 015 | Align the backend with kitcn's expected project layout | P2 | M | 013 | DONE |
-| 016 | Make `/r/:id` a real share feature, backed by a store not a query string | P3 | M | 015 | TODO |
+| 016 | Make `/r/:id` a real share feature, backed by a store not a query string | P3 | M | 015 | SUPERSEDED (encoded-id share links, see 023) |
 | 017 | `apps/mobile` — the Expo app, and the shared core it forces out | P3 | XL | 015, 008 | TODO |
 | 018 | Stop mirroring the speech engine into React (two live bugs) | P2 | M | — | DONE |
 | 019 | Core engine & lifecycle integrity (in-flight race, TTS error handling, paste detection, O(1) sync) | P1 | M | 018 | DONE |
 | 020 | Server state & full cloud library sync (articleId, addToPlaylist, resilient resolution) | P2 | M | 008, 019 | DONE |
 | 021 | UI state, design tokens, and modal a11y (eliminate duplicate state, @theme, ARIA) | P2 | S | 019, 020 | DONE |
-| 022 | Real word timings from the Soniox WebSocket API | P2 | M | 019 | TODO (Step 0 spike DONE) |
+| 022 | Real word timings from the Soniox WebSocket API | P2 | M | 019 | DONE (CSP fix in 023) |
+| 023 | Production-readiness sweep: CSP, REST tap, resume, deep links, share links, ops | P1 | M | 022 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED
 (with one-line rationale).
@@ -40,9 +41,8 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 app on the apex, because the domain split forces it. What remains of 009 after 014 is
 "delete Spiceflow and `src/server.ts`", which needs plan 008 (auth to Convex) first.
 
-**One follow-up still owed by 014**: `/r/:id` is half-built — nothing generates those links
-and nothing handles the `?read=` it redirects to. (The SVG-card follow-up is DONE; see the
-log entry below.)
+~~**One follow-up still owed by 014**: `/r/:id` is half-built~~ — closed by 023: the header
+share button generates `/r/<id>` links and the reader resolves `?read=<id>`.
 
 ## Execution log
 
@@ -655,3 +655,55 @@ are not re-audited from scratch next session.
   4. Added WAI-ARIA dialog attributes (`role="dialog"`, `aria-modal="true"`, `aria-labelledby`,
      explicit labels) across `UrlInputModal`, `ClipboardDetectSheet`, and `AuthModal`.
 
+
+- **023 — DONE** (2026-09-01, unplanned sweep from a production-readiness review of the
+  kinetic reading path; no plan file, the review itself was the plan). Findings and fixes:
+  1. **The page CSP blocked the Soniox WebSocket.** `apps/web/public/_headers` had no
+     `wss://tts-rt.soniox.com` in `connect-src`, so plan 022's browser-direct stream failed
+     on every article in production and the reader silently used REST audio with estimated
+     timings. One-line fix; the Worker's CSP was tightened from `ws: wss:` to the same host.
+     Could not be verified against the live site from the sandbox (no egress) — check
+     devtools after deploy.
+  2. **`/api/tts/stream` was an open tap on `SONIOX_API_KEY`.** The Convex HTTP route had
+     no limiter, no length cap and `Access-Control-Allow-Origin: *`. Rebuilt as a pure,
+     tested handler (`lib/ttsStream.ts`): both TTS limiters run before the first upstream
+     call, text is capped at 20,000 chars (413 above), the voice is validated, CORS is
+     reflected only for known origins, and long articles are synthesised chunk by chunk
+     into one streamed MP3 (first chunk gated so upstream errors surface as statuses).
+     The reader now sends its `clientId`, and POSTs the text for articles too long for a
+     GET query string instead of hitting Cloudflare's 16KB URL limit.
+  3. **Resume was cosmetic.** Reading position is now written locally for everyone and to
+     `userArticles` when signed in, throttled to 5s while playing and immediately on
+     pause/seek (the old 2s debounce keyed on the word index never fired during
+     playback). Opening an article seeks to the saved word as soon as playable timings
+     cover it — immediately for a cached exact track, when the real timestamps arrive for
+     a live stream. A fallback taken mid-article (socket drop → REST → on-device) resumes
+     from the current word instead of restarting at zero.
+  4. **Deep links and quick-paste** show a "Loading article… / Fetching article…" state
+     instead of the sample article, and surface failures as a dismissible notice. All
+     extraction fetches got timeouts (8–15s) and `articles.extract` got the same
+     two-bucket rate limit shape as TTS (12/min per client, 120/min global).
+  5. **Share links work end to end.** `utils/shareLink.ts` encodes the source URL as the
+     `/r/<id>` id; the header copies the marketing link; the reader resolves `?read=<id>`
+     into `?url=`. This deliberately takes the "cheaper alternative" plan 016 rejected:
+     with no share button left in the app, a stored `shares` table would have added a
+     public write endpoint for a feature nobody could trigger. The OG parameters stay on
+     the query string, escaped exactly as plan 004 left them. 016 marked SUPERSEDED.
+  6. **Dead controls fixed**: the header voice toggle now mutes the engine (timeline keeps
+     running); ArrowLeft/ArrowRight move between clauses using the display's own
+     segmentation (`segmentClauses` exported from `KineticDisplay`); the degraded banner
+     says "estimated timing" on the REST path instead of claiming on-device speech; the
+     library's hard-coded "14 min → 6 min / −03:41 / 9 → 4 min" placeholders are computed
+     from word count and tempo at the measured 177 WPM.
+  7. **iOS 17.1+ Safari** (ManagedMediaSource only) gets `disableRemotePlayback` set before
+     attach, which that API requires to open. Whether Safari's MSE accepts `audio/mpeg`
+     at all is still an on-device test to run; if not, Apple devices wait for the whole
+     synthesis before Play enables (the existing Blob path).
+  8. **Ops**: `.github/workflows/deploy.yml` deploys backend → both Workers after green CI,
+     skipping jobs whose secret is missing; the Worker's Convex origin moved to a
+     `CONVEX_SITE_ORIGIN` var. Not done: error reporting (needs a provider account) — the
+     app still only `console.warn`s.
+  Test count 193 → 224 (backend 73 → 84, web 97 → 117). Two test-harness fixes were
+  needed: an inert `WebSocket` in `test-setup.ts` (the real client dialled the
+  deployment and the proxy's non-101 answer surfaced as an unhandled `ws` error in
+  whichever test was running), and an 80ms `afterEach` wait for nuqs's URL flush.

@@ -85,14 +85,45 @@ Root scripts fan out with `bun run --filter`: `bun run typecheck`, `bun run test
 
 ---
 
-## Deployment (Cloudflare Workers)
+## Deployment
 
-Spiceflow is built from the ground up for edge runtimes:
+Three deployables, in this order (the backend first, so nothing in front of it
+calls a procedure that is not there yet):
 
 ```bash
-cd apps/web && bunx wrangler deploy          # the reader + its Worker
-cd packages/backend && bunx convex deploy    # the backend
+cd packages/backend && bunx convex deploy    # Convex functions, auth, storage
+cd apps/web && bun run build && bunx wrangler deploy        # app.kinreader.com
+cd apps/marketing && bun run build && bunx wrangler deploy  # kinreader.com
 ```
+
+`.github/workflows/deploy.yml` does the same on every green CI run on `main`
+once these repository secrets exist: `CONVEX_DEPLOY_KEY`, `CLOUDFLARE_API_TOKEN`,
+`CLOUDFLARE_ACCOUNT_ID`. Jobs whose secret is missing are skipped, not failed.
+
+Two settings must agree on which Convex deployment the reader talks to:
+`VITE_CONVEX_URL` / `VITE_CONVEX_SITE_URL` in `apps/web/.env.production` (baked
+into the SPA) and `CONVEX_SITE_ORIGIN` in `apps/web/wrangler.jsonc` (where the
+Worker proxies `/api/auth/*` and `/api/tts/*`).
+
+### Content Security Policy
+
+The reader's page headers live in `apps/web/public/_headers` (Cloudflare serves
+static assets without invoking the Worker, so the Worker's own CSP only covers
+the routes it handles). Two entries are load-bearing for narration:
+
+- `connect-src … wss://tts-rt.soniox.com` -- the browser-direct Soniox WebSocket
+  that delivers real word timestamps. Without it every article silently falls
+  back to REST audio with estimated timing.
+- the `sha256-…` hash of the inline HTTPS-redirect script in `index.html`. Edit
+  that script and the hash must be recomputed (instructions in `_headers`).
+
+### Share links
+
+The header's share button copies `https://kinreader.com/r/<id>?t=…&a=…&img=…`.
+The marketing site renders the OG card from those parameters and forwards to
+`app.kinreader.com/?read=<id>`; the reader decodes `<id>` (the source URL,
+base64url) into the ordinary `?url=` deep link. Pasted text has no source and
+shares the plain app link instead.
 
 ---
 

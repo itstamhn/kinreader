@@ -7,8 +7,10 @@ import { convexTest } from 'convex-test';
 // entirely from its public type. kitcn's generated shared/api.ts is the
 // correct, type-complete surface for cRPC procedures and is still built on
 // the same standard Convex `FunctionReference`s convex-test expects.
+import { MINUTE, Ratelimit } from 'kitcn/ratelimit';
 import { api } from '../../shared/api';
 import schema from '../schema';
+import { EXTRACT_GLOBAL_KEY } from '../../lib/rateLimiter';
 
 // convex-test needs a map of every module a called function (or anything it
 // transitively resolves through the deploy) might live in. It infers the
@@ -19,6 +21,8 @@ import schema from '../schema';
 const modules: Record<string, () => Promise<unknown>> = {
   './_generated/server.js': () => import('../_generated/server'),
   './routers/articles.ts': () => import('./articles'),
+  './routers/articlesInternal.ts': () => import('./articlesInternal'),
+  './lib/rateLimiter.ts': () => import('../../lib/rateLimiter'),
 };
 
 const originalFetch = global.fetch;
@@ -194,4 +198,60 @@ test('extract truncates content over the 1MB guard and sets truncated: true', as
 
   expect(result.truncated).toBe(true);
   expect(result.content.length).toBeLessThanOrEqual(900_000);
+});
+
+// The extraction limiters share `ratelimitState` with the TTS ones (see
+// convex/lib/rateLimiter.ts); pre-load a bucket rather than hammer it.
+async function drainExtractBucket(
+  t: ReturnType<typeof convexTest>,
+  bucket: { prefix: string; limit: number; key: string }
+) {
+  await t.run(async (ctx) => {
+    const limiter = new Ratelimit({
+      db: ctx.db as any,
+      limiter: Ratelimit.slidingWindow(bucket.limit, MINUTE),
+      prefix: bucket.prefix,
+    });
+    await limiter.limit(bucket.key, { count: bucket.limit });
+  });
+}
+
+test('extract is rate limited per client and never fetches once the bucket is drained', async () => {
+  let fetchCalled = false;
+  stubFetch(() => {
+    fetchCalled = true;
+    return htmlResponse('<html><title>x</title><body>' + 'body text. '.repeat(20) + '</body></html>');
+  });
+
+  const t = convexTest(schema, modules);
+  await drainExtractBucket(t, { prefix: 'extract-client', limit: 12, key: 'greedy-client' });
+
+  await expect(
+    t.action(api.routers.articles.extract, { url: 'https://example.com/a', clientId: 'greedy-client' })
+  ).rejects.toThrow(/Too many article requests/);
+  expect(fetchCalled).toBe(false);
+
+  // Another client is unaffected by the first one's bucket.
+  const other = await t.action(api.routers.articles.extract, {
+    url: 'https://example.com/a',
+    clientId: 'polite-client',
+  });
+  expect(fetchCalled).toBe(true);
+  expect(other.sourceUrl).toBe('https://example.com/a');
+});
+
+test('the global extraction ceiling holds regardless of clientId', async () => {
+  let fetchCalled = false;
+  stubFetch(() => {
+    fetchCalled = true;
+    return htmlResponse('<html><body>unused</body></html>');
+  });
+
+  const t = convexTest(schema, modules);
+  await drainExtractBucket(t, { prefix: 'extract-global', limit: 120, key: EXTRACT_GLOBAL_KEY });
+
+  await expect(
+    t.action(api.routers.articles.extract, { url: 'https://example.com/a', clientId: crypto.randomUUID() })
+  ).rejects.toThrow(/Too many article requests/);
+  expect(fetchCalled).toBe(false);
 });

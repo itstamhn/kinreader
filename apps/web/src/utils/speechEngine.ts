@@ -90,6 +90,33 @@ export class SpeechEngine {
     return this._rate;
   }
 
+  // The index of the word under the highlight right now -- the same value the
+  // snapshot carries, exposed so fallbacks can resume from where the listener
+  // was rather than from the top of the article.
+  public get currentWordIndex(): number {
+    return this.currentWordIdx;
+  }
+
+  private _muted: boolean = false;
+
+  public get muted(): boolean {
+    return this._muted;
+  }
+
+  // "Voice off" in the header: the timeline keeps running (the kinetic
+  // display is the product), only the sound stops. For the <audio> element
+  // that is a property flip; the on-device utterance has to be restarted at
+  // volume 0 because SpeechSynthesis reads `volume` once, at `speak()`.
+  public set muted(value: boolean) {
+    if (this._muted === value) return;
+    this._muted = value;
+    if (this.audio) this.audio.muted = value;
+    if (this.mode === 'browser' && this.isPlaying && this.synth) {
+      this.playBrowserFromWord(this.currentWordIdx);
+    }
+    this.notify();
+  }
+
   // The playback position "now". Exists so callers (e.g. the keyboard
   // shortcut handler) can read it without mirroring it into React state
   // that goes stale the instant it stops being read every frame -- it is
@@ -268,10 +295,18 @@ export class SpeechEngine {
       if (SourceConstructor) {
         try {
           const mediaSource = new SourceConstructor() as MediaSource;
+          const isManaged = SourceConstructor === managedSource && SourceConstructor !== standardSource;
           this.mediaSource = mediaSource;
           this.progressivePlaybackAvailable = true;
           this.playbackReady = true;
           if (this.audio) {
+            // iOS 17.1+ Safari only offers ManagedMediaSource, and it refuses
+            // to open (`sourceopen` never fires, playback stays silent) unless
+            // remote playback is disabled on the element first. Standard
+            // MediaSource has no such requirement, so AirPlay stays available
+            // everywhere else.
+            (this.audio as HTMLAudioElement & { disableRemotePlayback?: boolean }).disableRemotePlayback =
+              isManaged;
             this.ownedObjectUrl = URL.createObjectURL(mediaSource);
             this.audio.src = this.ownedObjectUrl;
             this.audio.playbackRate = this._rate;
@@ -444,6 +479,7 @@ export class SpeechEngine {
     const remainingText = remainingWords.map((w) => w.text).join(' ');
     const utterance = new SpeechSynthesisUtterance(remainingText);
     utterance.rate = this._rate;
+    utterance.volume = this._muted ? 0 : 1;
 
     const voices = this.synth.getVoices();
     const naturalVoice = voices.find(

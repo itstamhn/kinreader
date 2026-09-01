@@ -8,9 +8,11 @@ interface KineticDisplayProps {
   viewMode: 'kinetic' | 'full';
   fontSize?: 'sm' | 'md' | 'lg';
   clauseLength?: 4 | 6 | 9;
+  /** Shown instead of the default hint while the word list is empty. */
+  emptyMessage?: string;
 }
 
-interface RhythmicCard {
+export interface RhythmicCard {
   id: number;
   startIndex: number;
   endIndex: number;
@@ -27,6 +29,91 @@ const SYNTACTIC_CONNECTORS = new Set([
 const TERMINAL_PUNCT_REGEX = /[.!?]$/;
 const CLAUSE_PUNCT_REGEX = /[,;:]|—|–/;
 
+// Advanced Syntactic & Ergonomic Clause Segmentation. Module-level (not a
+// hook) so the keyboard clause navigation in App.tsx segments with exactly
+// the same rules the display renders -- one source of truth for "a clause".
+export function segmentClauses(words: WordTiming[], clauseLength: 4 | 6 | 9 = 6): RhythmicCard[] {
+  if (!words || words.length === 0) return [];
+  const result: RhythmicCard[] = [];
+  let cur: WordTiming[] = [];
+  let startIdx = 0;
+  let curCharLen = 0;
+
+  // Target constraints based on clauseLength setting (4 = Short, 6 = Flow, 9 = Long)
+  const targetWords = clauseLength;
+  const maxCharsPerLine = clauseLength <= 4 ? 32 : clauseLength <= 6 ? 44 : 56;
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    const text = w.text.trim();
+    const hasTerminalPunct = TERMINAL_PUNCT_REGEX.test(text);
+    const hasClausePunct = CLAUSE_PUNCT_REGEX.test(text);
+
+    // Check if we should break before a syntactic connector
+    const isNextWordConnector =
+      i < words.length - 1 &&
+      SYNTACTIC_CONNECTORS.has(
+        words[i + 1]!.text.trim().replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+      );
+
+    cur.push(w);
+    curCharLen += text.length + 1;
+
+    const isLongEnough = cur.length >= Math.max(2, targetWords - 2);
+    const isOverWordTarget = cur.length >= targetWords;
+    const isOverCharLimit = curCharLen >= maxCharsPerLine;
+
+    let shouldBreak = false;
+
+    // 1. Terminal sentence break
+    if (hasTerminalPunct) {
+      shouldBreak = true;
+    }
+    // 2. Natural punctuation break
+    else if (hasClausePunct && (isLongEnough || curCharLen >= 20)) {
+      shouldBreak = true;
+    }
+    // 3. Syntactic boundary split
+    else if (isNextWordConnector && (isLongEnough || curCharLen >= 26)) {
+      shouldBreak = true;
+    }
+    // 4. Capacity ceiling
+    else if (isOverCharLimit || (isOverWordTarget && cur.length >= targetWords + 1)) {
+      shouldBreak = true;
+    }
+
+    if (shouldBreak || i === words.length - 1) {
+      result.push({
+        id: result.length,
+        startIndex: startIdx,
+        endIndex: i,
+        words: [...cur],
+      });
+      cur = [];
+      startIdx = i + 1;
+      curCharLen = 0;
+    }
+  }
+
+  return result;
+}
+
+// The first word of the clause before/after the one containing `wordIndex`,
+// or null at either end. Backs the ArrowLeft/ArrowRight shortcuts.
+export function adjacentClauseStart(
+  words: WordTiming[],
+  wordIndex: number,
+  direction: -1 | 1,
+  clauseLength: 4 | 6 | 9 = 6
+): number | null {
+  const cards = segmentClauses(words, clauseLength);
+  if (cards.length === 0) return null;
+  let active = cards.findIndex((c) => wordIndex >= c.startIndex && wordIndex <= c.endIndex);
+  if (active === -1) active = 0;
+  const target = cards[active + direction];
+  return target ? target.startIndex : null;
+}
+
 export function KineticDisplay({
   words,
   currentWordIndex,
@@ -34,73 +121,9 @@ export function KineticDisplay({
   viewMode,
   fontSize = 'md',
   clauseLength = 6,
+  emptyMessage,
 }: KineticDisplayProps) {
-  // Advanced Syntactic & Ergonomic Clause Segmentation
-  const cards = useMemo(() => {
-    if (!words || words.length === 0) return [];
-    const result: RhythmicCard[] = [];
-    let cur: WordTiming[] = [];
-    let startIdx = 0;
-    let curCharLen = 0;
-
-    // Target constraints based on clauseLength setting (4 = Short, 6 = Flow, 9 = Long)
-    const targetWords = clauseLength;
-    const maxCharsPerLine = clauseLength <= 4 ? 32 : clauseLength <= 6 ? 44 : 56;
-
-    for (let i = 0; i < words.length; i++) {
-      const w = words[i]!;
-      const text = w.text.trim();
-      const hasTerminalPunct = TERMINAL_PUNCT_REGEX.test(text);
-      const hasClausePunct = CLAUSE_PUNCT_REGEX.test(text);
-
-      // Check if we should break before a syntactic connector
-      const isNextWordConnector =
-        i < words.length - 1 &&
-        SYNTACTIC_CONNECTORS.has(
-          words[i + 1]!.text.trim().replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
-        );
-
-      cur.push(w);
-      curCharLen += text.length + 1;
-
-      const isLongEnough = cur.length >= Math.max(2, targetWords - 2);
-      const isOverWordTarget = cur.length >= targetWords;
-      const isOverCharLimit = curCharLen >= maxCharsPerLine;
-
-      let shouldBreak = false;
-
-      // 1. Terminal sentence break
-      if (hasTerminalPunct) {
-        shouldBreak = true;
-      }
-      // 2. Natural punctuation break
-      else if (hasClausePunct && (isLongEnough || curCharLen >= 20)) {
-        shouldBreak = true;
-      }
-      // 3. Syntactic boundary split
-      else if (isNextWordConnector && (isLongEnough || curCharLen >= 26)) {
-        shouldBreak = true;
-      }
-      // 4. Capacity ceiling
-      else if (isOverCharLimit || (isOverWordTarget && cur.length >= targetWords + 1)) {
-        shouldBreak = true;
-      }
-
-      if (shouldBreak || i === words.length - 1) {
-        result.push({
-          id: result.length,
-          startIndex: startIdx,
-          endIndex: i,
-          words: [...cur],
-        });
-        cur = [];
-        startIdx = i + 1;
-        curCharLen = 0;
-      }
-    }
-
-    return result;
-  }, [words, clauseLength]);
+  const cards = useMemo(() => segmentClauses(words, clauseLength), [words, clauseLength]);
 
   // Find active clause index
   const activeCardIndex = useMemo(() => {
@@ -118,7 +141,7 @@ export function KineticDisplay({
   if (!words || words.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-[#ECEAE4]/40">
-        <p className="text-sm font-sans">No article loaded. Paste a URL or select from library.</p>
+        <p className="text-sm font-sans">{emptyMessage ?? 'No article loaded. Paste a URL or select from library.'}</p>
       </div>
     );
   }
@@ -223,7 +246,7 @@ export function KineticDisplay({
 
         {/* Keyboard Interaction Subtitle Hint */}
         <div className="absolute bottom-3 font-mono text-[10px] text-[#ECEAE4]/30 pointer-events-none hidden sm:block">
-          Space play · ←→ clauses (tap dimmed lines to re-read) · ↑↓ tempo
+          Space play · ←→ clauses · ↑↓ tempo · tap dimmed lines to re-read
         </div>
       </div>
     );
