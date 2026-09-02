@@ -147,6 +147,19 @@ export default defineSchema({
     .index('by_storage_id', ['storageId'])
     .index('by_track_id', ['trackId']),
 
+  // Server-side pre-generation of exact tracks (tts.pregenerate). One row per
+  // (content digest, voice) so concurrent requests for the same article do
+  // not pay Soniox twice; a `running` row older than the staleness window is
+  // treated as abandoned and may be claimed again.
+  ttsPregenerationJobs: defineTable({
+    contentDigest: v.string(),
+    voice: v.string(),
+    status: v.union(v.literal('running'), v.literal('done'), v.literal('failed')),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+  }).index('by_digest_voice', ['contentDigest', 'voice']),
+
   // 8. User Reading Playlists & Cross-Device Progress
   userArticles: defineTable({
     userId: v.id('user'),

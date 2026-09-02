@@ -138,6 +138,16 @@ function isTemporaryKeyResponse(value: unknown): value is { api_key: string; exp
   return Number.isFinite(expiresAt) && expiresAt > now && expiresAt <= now + 10 * 60 * 1000;
 }
 
+// The client's cache key ends in the article's content digest whether or not
+// it has a source URL (apps/web/src/utils/articleCacheKey.ts). The global
+// cache is keyed on that digest alone: the same text is the same audio
+// wherever it came from.
+const CONTENT_DIGEST_SUFFIX = /content-sha256:([0-9a-f]{64})$/;
+
+function contentDigestFromCacheKey(cacheKey: string): string | null {
+  return CONTENT_DIGEST_SUFFIX.exec(cacheKey)?.[1] ?? null;
+}
+
 export const getExactTrack = query
   .input(
     z.object({
@@ -147,16 +157,26 @@ export const getExactTrack = query
   )
   .output(exactTrackSchema.nullable())
   .query(async ({ ctx, input }) => {
-    const identity = await ctx.auth?.getUserIdentity?.();
-    if (!identity) return null;
-    const track: Doc<'audioTracks'> | null = await ctx.runQuery(
-      internal.routers.ttsInternal.findExactCachedTrackByUrl,
-      {
+    // 1. The global cache: server-generated tracks, readable by anyone.
+    const contentDigest = contentDigestFromCacheKey(input.url);
+    let track: Doc<'audioTracks'> | null = null;
+    if (contentDigest) {
+      track = await ctx.runQuery(internal.routers.ttsInternal.findGlobalExactTrack, {
+        contentDigest,
+        voice: input.voice,
+      });
+    }
+
+    // 2. The listener's own persisted streams, when signed in.
+    if (!track) {
+      const identity = await ctx.auth?.getUserIdentity?.();
+      if (!identity) return null;
+      track = await ctx.runQuery(internal.routers.ttsInternal.findExactCachedTrackByUrl, {
         ownerKey: identity.tokenIdentifier,
         cacheKey: input.url,
         voice: input.voice,
-      }
-    );
+      });
+    }
     if (!track?.storageId) return null;
 
     const audioUrl = await ctx.storage.getUrl(track.storageId);
@@ -167,6 +187,78 @@ export const getExactTrack = query
       duration: track.duration,
       timingsSource: 'soniox' as const,
     };
+  });
+
+type PregenerateStatus = 'ready' | 'running' | 'scheduled' | 'skipped';
+
+// Lets the reader wait for an in-flight pre-generation instead of opening a
+// second, paid live stream for the same article.
+export const pregenerationStatus = query
+  .input(
+    z.object({
+      contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      voice: z.string().trim().min(1).max(100),
+    })
+  )
+  .output(z.enum(['none', 'running', 'done', 'failed']))
+  .query(async ({ ctx, input }) => {
+    const status: 'none' | 'running' | 'done' | 'failed' = await ctx.runQuery(
+      internal.routers.ttsInternal.pregenerationJobStatus,
+      { contentDigest: input.contentDigest, voice: input.voice }
+    );
+    return status;
+  });
+
+// Start synthesising an article into the global cache before anyone presses
+// Play -- called when an article is extracted or added to the queue. Paid
+// work, so it runs through the same limiters as every other Soniox path, and
+// the (digest, voice) job slot stops duplicate requests from paying twice.
+export const pregenerate = action
+  .input(
+    z.object({
+      title: z.string().max(500).optional(),
+      author: z.string().max(500).optional(),
+      text: z.string().trim().min(1).max(MAX_TTS_CHARS),
+      voice: z.string().trim().min(1).max(100).optional(),
+      clientId: z.string().trim().min(1).max(200).optional(),
+    })
+  )
+  .action(async ({ ctx, input }): Promise<{ status: PregenerateStatus }> => {
+    const text = input.text.trim();
+    const voice = input.voice || 'Adrian';
+    if (text.split(/\s+/).filter(Boolean).length > MAX_WORDS) return { status: 'skipped' };
+
+    const digestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    const contentDigest = Array.from(new Uint8Array(digestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+    const existing: Doc<'audioTracks'> | null = await ctx.runQuery(
+      internal.routers.ttsInternal.findGlobalExactTrack,
+      { contentDigest, voice }
+    );
+    if (existing) return { status: 'ready' };
+
+    const identity = await ctx.auth?.getUserIdentity?.();
+    const rateLimit: { ok: boolean } = await ctx.runMutation(internal.routers.ttsInternal.consumeTtsRateLimit, {
+      key: identity?.tokenIdentifier || input.clientId || 'anonymous',
+      purpose: 'synthesize',
+    });
+    if (!rateLimit.ok) return { status: 'skipped' };
+
+    const claim: 'claimed' | 'running' | 'done' = await ctx.runMutation(
+      internal.routers.ttsInternal.claimPregenerationJob,
+      { contentDigest, voice }
+    );
+    if (claim === 'done') return { status: 'ready' };
+    if (claim === 'running') return { status: 'running' };
+
+    await ctx.scheduler.runAfter(0, internal.routers.pregenerate.generate, {
+      contentDigest,
+      text,
+      title: input.title,
+      author: input.author,
+      voice,
+    });
+    return { status: 'scheduled' };
   });
 
 export const generateTrackUploadUrl = mutation

@@ -739,3 +739,39 @@ are not re-audited from scratch next session.
   fallback. Sub-1200-character texts stay single-session. `openSonioxStream` gained a
   `textChunks` override so segments are sent untrimmed. Tests: 9 (segmenting, ordering and
   offsets, accumulator round-trip, retry, MP3 duration).
+
+- **023 follow-up 3 — global exact cache and pre-generation on queue add (2026-09-02).**
+  Two changes so the wait moves off the listener's clock entirely:
+  1. **Global cache.** `tts.getExactTrack` now checks a cross-user, anonymous-readable cache
+     first, keyed on the article's content digest alone (the client's cache key always ends
+     in it), and falls back to the signed-in owner-scoped cache. Only the server's own
+     pre-generation path can write the global cache: its storage claims carry the sentinel
+     owner key `__server__`, which no client upload can produce, so a user cannot poison the
+     track everyone else hears. Owner-scoped persistence is unchanged.
+  2. **Pre-generation.** `tts.pregenerate` (public, rate-limited through the same two TTS
+     buckets) takes a `(digest, voice)` job slot in `ttsPregenerationJobs` and schedules
+     `routers/pregenerate.generate`, a `"use node"` action that synthesises the whole article
+     with the very same parallel Soniox client the reader streams with (moved to
+     `convex/shared/tts/` and re-exported from `apps/web/src/utils/*` so the import paths did
+     not change), stores the MP3, and finalises it into the global cache. Stale `running`
+     rows (>15 min) are reclaimable. `ws` is the Node WebSocket (listed in
+     `convex.json` `node.externalPackages`).
+  3. **Reader.** "Add to queue" always requests pre-generation; "Narrate now" requests it for
+     anonymous listeners (signed-in streams persist themselves). Cache reads now happen for
+     everyone, persistence still only when signed in.
+  Not verified from the sandbox: the Node action's first real run against Soniox (no egress
+  here). It is fully covered at the transport level by the shared client's tests, and a
+  failure is recorded on the job row (`status: failed`, `error`) rather than thrown.
+
+- **023 follow-up 3b — one synthesis per article (2026-09-02).** The first cut of follow-up 3
+  paid Soniox twice in two cases: anonymous "Narrate now" streamed *and* pre-generated, and
+  opening a queued article before its job finished streamed alongside the running job.
+  Fixed: "Narrate now" never requests pre-generation (only "Add to queue" does), and a cache
+  miss now checks `tts.pregenerationStatus`; if the job is `running` the reader waits
+  ("Preparing audio…" line, polled every 1.5s, capped at 8 minutes) and plays the cached
+  track when it lands, falling through to a live stream only on `failed`/`none`/timeout.
+  Deliberately *not* done (owner's call): promoting client-uploaded tracks into the global
+  cache. A signed-in listener's own stream stays in their own cache, so a *different*
+  account opening the same article still pays once more; the server cannot verify that an
+  upload matches its text, so a global promotion would let any account poison the shared
+  track.

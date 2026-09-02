@@ -65,10 +65,12 @@
         "better-auth": "^1.7.2",
         "convex": "1.44.0",
         "kitcn": "^0.32.1",
+        "ws": "^8",
         "zod": "^4.4.3",
       },
       "devDependencies": {
         "@types/bun": "latest",
+        "@types/ws": "^8.18.1",
         "convex-test": "^0.0.56",
         "typescript": "^5",
       },

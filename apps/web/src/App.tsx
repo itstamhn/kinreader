@@ -12,7 +12,7 @@ import { SpeechEngine } from './utils/speechEngine';
 import { SonioxTemporaryKeyExpiredError, type OpenSonioxStreamOptions } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
 import { openParallelSonioxStream } from './utils/parallelSoniox';
-import { articleCacheKey } from './utils/articleCacheKey';
+import { articleCacheKey, articleContentDigest } from './utils/articleCacheKey';
 import { decodeShareId } from './utils/shareLink';
 import {
   uploadAndFinalizeExactTrack,
@@ -78,8 +78,35 @@ export interface AppProps {
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
   loadExactTrack?: (input: { url: string; voice: string }) => Promise<ExactTrackCacheEntry | null>;
   persistExactTrack?: (input: PersistExactTrackInput) => Promise<void>;
+  /** Disables both server cache reads and persistence (tests). */
   serverExactCacheEnabled?: boolean;
+  /** Asks the server to synthesise an article into the global cache ahead of play. */
+  requestPregeneration?: (input: PregenerationRequest) => Promise<unknown>;
+  /** State of the server-side job for an article, so an in-flight one is awaited rather than duplicated. */
+  pregenerationStatus?: (input: { contentDigest: string; voice: string }) => Promise<PregenerationJobStatus>;
+  /** Interval between job-status polls while waiting (tests shorten it). */
+  pregenerationPollMs?: number;
 }
+
+export type PregenerationJobStatus = 'none' | 'running' | 'done' | 'failed';
+
+export interface PregenerationRequest {
+  title?: string;
+  author?: string;
+  text: string;
+  voice: string;
+  clientId: string;
+}
+
+// Articles above this are not pre-generated (the server-side cap); they still
+// stream on demand.
+const MAX_PREGENERATION_CHARS = 50000;
+
+// How long the reader waits on a running pre-generation before giving up and
+// streaming after all. Four parallel sessions finish a long article well
+// inside this; past it the job is presumed stuck.
+const MAX_PREGENERATION_WAIT_MS = 8 * 60 * 1000;
+const DEFAULT_PREGENERATION_POLL_MS = 1500;
 
 export function App({
   // Several concurrent Soniox sessions re-serialised into one stream, so audio
@@ -89,6 +116,9 @@ export function App({
   loadExactTrack,
   persistExactTrack,
   serverExactCacheEnabled,
+  requestPregeneration,
+  pregenerationStatus,
+  pregenerationPollMs = DEFAULT_PREGENERATION_POLL_MS,
 }: AppProps = {}) {
   const crpc = useCRPC();
   const queryClient = useQueryClient();
@@ -96,10 +126,18 @@ export function App({
   const temporaryKeyMutation = useMutation(crpc.routers.tts.temporaryKey.mutationOptions());
   const trackUploadUrlMutation = useMutation(crpc.routers.tts.generateTrackUploadUrl.mutationOptions());
   const persistTrackMutation = useMutation(crpc.routers.tts.persistTrack.mutationOptions());
+  const pregenerateMutation = useMutation(crpc.routers.tts.pregenerate.mutationOptions());
   const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
   const addToPlaylistMutation = useMutation(crpc.routers.users.addToPlaylist.mutationOptions());
   const deleteUserArticleMutation = useMutation(crpc.routers.users.deleteUserArticle.mutationOptions());
 
+  const lookupPregenerationStatus =
+    pregenerationStatus ??
+    ((input: { contentDigest: string; voice: string }) =>
+      // The QueryClient's default staleTime is 0, so every poll refetches.
+      queryClient.fetchQuery(
+        crpc.routers.tts.pregenerationStatus.queryOptions(input)
+      ) as Promise<PregenerationJobStatus>);
   const lookupExactTrack =
     loadExactTrack ??
     ((input: { url: string; voice: string }) =>
@@ -121,7 +159,29 @@ export function App({
         tier: 'pro',
       }
     : null;
-  const canUseServerExactCache = serverExactCacheEnabled ?? Boolean(user);
+  // The global cache (server-generated tracks) is readable by everyone; only
+  // signed-in listeners can persist their own streamed tracks.
+  const canReadServerExactCache = serverExactCacheEnabled ?? true;
+  const canPersistExactTrack = serverExactCacheEnabled ?? Boolean(user);
+
+  // Fire-and-forget: synthesise into the global cache so the next open of this
+  // article (by anyone) is an instant cached track instead of a live stream.
+  const pregenerateArticle = (target: ArticleData) => {
+    const text = target.content.trim();
+    if (!text || text.length > MAX_PREGENERATION_CHARS || target.title === SAMPLE_ARTICLE.title) return;
+    const request: PregenerationRequest = {
+      title: target.title,
+      author: target.author,
+      text,
+      voice: settings.sonioxVoice || 'Adrian',
+      clientId: getOrCreateClientId(),
+    };
+    void Promise.resolve()
+      .then(() => (requestPregeneration ? requestPregeneration(request) : pregenerateMutation.mutateAsync(request)))
+      .catch((error) => {
+        console.warn('Pre-generation request failed; playback will stream instead:', error);
+      });
+  };
 
   const { data: cloudPlaylist } = useQuery(
     crpc.routers.users.getUserPlaylist.queryOptions({}, { enabled: !!user })
@@ -167,6 +227,7 @@ export function App({
   // screen while extraction ran, and a failure only reached the console.
   const [pendingLoadUrl, setPendingLoadUrl] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [awaitingPregeneration, setAwaitingPregeneration] = useState(false);
 
   const saveSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -255,6 +316,7 @@ export function App({
     eng.stop();
     eng.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
     setLoadError(null);
+    setAwaitingPregeneration(false);
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
 
@@ -321,7 +383,7 @@ export function App({
     const voice = currSettings.sonioxVoice || 'Adrian';
     const clientId = getOrCreateClientId();
     let cacheUrl: string | null = null;
-    if (canUseServerExactCache) {
+    if (canReadServerExactCache) {
       try {
         cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: art.content });
       } catch (error) {
@@ -447,7 +509,7 @@ export function App({
           setPlaybackStatus('ready');
           applyResume(exactWords);
 
-          if (completedBlob && canUseServerExactCache && cacheUrl) {
+          if (completedBlob && canPersistExactTrack && cacheUrl) {
             const persistenceInput: PersistExactTrackInput = {
               url: cacheUrl,
               title: art.title,
@@ -520,23 +582,60 @@ export function App({
       }
     };
 
-    if (canUseServerExactCache && cacheUrl) {
+    const loadCachedTrack = (cachedTrack: ExactTrackCacheEntry) => {
+      let cacheFailed = false;
+      eng.loadAudioUrl(cachedTrack.audioUrl, cachedTrack.words, cachedTrack.duration, () => {
+        if (cacheFailed || !isCurrentLoad()) return;
+        cacheFailed = true;
+        void runWebSocketAttempt(0);
+      });
+      setPlaybackStatus('ready');
+      applyResume(cachedTrack.words);
+    };
+
+    if (canReadServerExactCache && cacheUrl) {
       try {
         const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
         if (!isCurrentLoad()) return;
         if (cachedTrack) {
-          let cacheFailed = false;
-          eng.loadAudioUrl(cachedTrack.audioUrl, cachedTrack.words, cachedTrack.duration, () => {
-            if (cacheFailed || !isCurrentLoad()) return;
-            cacheFailed = true;
-            void runWebSocketAttempt(0);
-          });
-          setPlaybackStatus('ready');
-          applyResume(cachedTrack.words);
+          loadCachedTrack(cachedTrack);
           return;
         }
       } catch (error) {
         console.warn('Exact track cache lookup failed; continuing with synthesis:', error);
+      }
+
+      // Cache miss -- but if the server is already synthesising this article
+      // (it was added to the queue), wait for that instead of opening a
+      // second, paid stream. Every article should cost one synthesis.
+      try {
+        const contentDigest = await articleContentDigest(art.content);
+        if (!isCurrentLoad()) return;
+        let status = await lookupPregenerationStatus({ contentDigest, voice });
+        if (!isCurrentLoad()) return;
+        if (status === 'running') {
+          setAwaitingPregeneration(true);
+          const deadline = Date.now() + MAX_PREGENERATION_WAIT_MS;
+          while (status === 'running' && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, pregenerationPollMs));
+            if (!isCurrentLoad()) return;
+            status = await lookupPregenerationStatus({ contentDigest, voice });
+          }
+          if (!isCurrentLoad()) return;
+          setAwaitingPregeneration(false);
+          if (status === 'done') {
+            const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
+            if (!isCurrentLoad()) return;
+            if (cachedTrack) {
+              loadCachedTrack(cachedTrack);
+              return;
+            }
+          }
+        }
+      } catch (error) {
+        if (!isCurrentLoad()) return;
+        setAwaitingPregeneration(false);
+        console.warn('Pre-generation status unavailable; continuing with synthesis:', error);
       }
     }
 
@@ -600,6 +699,10 @@ export function App({
         sourceType: newArticle.sourceType,
       });
     }
+    // Deliberately no pre-generation here: this load streams the article
+    // itself, and running a server synthesis alongside it would pay Soniox
+    // twice for one article. Pre-generation is for articles added to the
+    // queue (handleAddToQueue), which are opened later from the cache.
     loadArticleContent(newArticle, engine, settings, { resumeWordIndex });
   };
 
@@ -663,6 +766,7 @@ export function App({
   const handleAddToQueue = (newArt: ArticleData) => {
     saveArticleToLibrary(newArt);
     setSavedArticles(getSavedArticles());
+    pregenerateArticle(newArt);
     if (user) {
       addToPlaylistMutation.mutate({
         url: newArt.sourceUrl || newArt.title,
@@ -1019,6 +1123,7 @@ export function App({
             isError={playbackStatus === 'error'}
             noticeMessage={loadError ?? undefined}
             onDismissNotice={() => setLoadError(null)}
+            infoMessage={awaitingPregeneration ? 'Preparing audio… this article is being synthesised once for everyone.' : undefined}
           />
         </div>
       )}

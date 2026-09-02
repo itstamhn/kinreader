@@ -7,6 +7,7 @@ import { MINUTE, Ratelimit } from 'kitcn/ratelimit';
 // convex/routers/articles.test.ts for the full explanation).
 import { api } from '../../shared/api';
 import { internal } from '../_generated/api';
+import { GLOBAL_TRACK_OWNER_KEY } from './ttsInternal';
 import type { Id } from '../_generated/dataModel';
 import schema from '../schema';
 import { TTS_GLOBAL_KEY } from '../../lib/rateLimiter';
@@ -21,6 +22,11 @@ const modules: Record<string, () => Promise<unknown>> = {
   './_generated/server.js': () => import('../_generated/server'),
   './routers/tts.ts': () => import('./tts'),
   './routers/ttsInternal.ts': () => import('./ttsInternal'),
+  // `tts.pregenerate` schedules this Node action; convex-test runs scheduled
+  // functions on a real timer, so the module has to be resolvable. With no
+  // SONIOX_API_KEY in the test environment it records a failed job and stops
+  // before touching the network.
+  './routers/pregenerate.ts': () => import('./pregenerate'),
   './lib/rateLimiter.ts': () => import('../../lib/rateLimiter'),
 };
 
@@ -1432,4 +1438,165 @@ test('temporaryKey rejects upstream expiry outside the future ten-minute window'
     });
     fetchCalls = [];
   }
+});
+
+// --- Global (server-generated) exact cache + pre-generation -----------------
+
+async function finalizeGlobalTestTrack(t: ReturnType<typeof convexTest>, bytes: number[]) {
+  const storageId = await storeUploadedTestAudio(t, bytes);
+  return await t.mutation(internal.routers.ttsInternal.finalizeGlobalExactTrack, {
+    contentDigest: EXACT_CONTENT_DIGEST,
+    title: 'Exact timing',
+    content: 'Exact timing',
+    voice: 'Adrian',
+    storageId,
+    duration: 0.7,
+    words: exactWords,
+  });
+}
+
+test('a server-generated track is readable anonymously and by every signed-in listener', async () => {
+  const t = convexTest(schema, modules);
+  await finalizeGlobalTestTrack(t, [1, 2, 3]);
+
+  // Content-only key (pasted text) and source-scoped key (URL article) both
+  // end in the content digest, so both resolve to the same global track.
+  for (const url of [
+    EXACT_CACHE_KEY,
+    `source-sha256:${'a'.repeat(64)}:${EXACT_CACHE_KEY}`,
+  ]) {
+    expect(await t.query(api.routers.tts.getExactTrack, { url, voice: 'Adrian' })).toMatchObject({
+      words: exactWords,
+      duration: 0.7,
+      timingsSource: 'soniox',
+    });
+  }
+  expect(
+    await t.withIdentity(BOB_IDENTITY).query(api.routers.tts.getExactTrack, { url: EXACT_CACHE_KEY, voice: 'Adrian' })
+  ).toMatchObject({ words: exactWords });
+  // A different voice is a different track.
+  expect(await t.query(api.routers.tts.getExactTrack, { url: EXACT_CACHE_KEY, voice: 'Emma' })).toBeNull();
+
+  const claims = await t.run(async (ctx) => ctx.db.query('ttsTrackStorageClaims').collect());
+  expect(claims).toHaveLength(1);
+  expect(claims[0]).toMatchObject({ kind: 'exact', ownerKey: GLOBAL_TRACK_OWNER_KEY });
+});
+
+test('a client upload never lands in the global cache', async () => {
+  const t = convexTest(schema, modules);
+  const alice = t.withIdentity(ALICE_IDENTITY);
+  const grant = (await alice.mutation(api.routers.tts.generateTrackUploadUrl, exactGrantBindings as any)) as {
+    grant: string;
+  };
+  const storageId = await storeBoundTrackUpload(t, grant.grant, new Uint8Array([1, 2, 3]));
+  expect(
+    await alice.mutation(api.routers.tts.persistTrack, {
+      url: EXACT_CACHE_KEY,
+      text: 'Exact timing',
+      voice: 'Adrian',
+      grant: grant.grant,
+      storageId,
+      duration: 0.7,
+      words: exactWords,
+    })
+  ).toMatchObject({ ok: true });
+
+  expect(await t.query(api.routers.tts.getExactTrack, { url: EXACT_CACHE_KEY, voice: 'Adrian' })).toBeNull();
+  expect(
+    await t.query(internal.routers.ttsInternal.findGlobalExactTrack, {
+      contentDigest: EXACT_CONTENT_DIGEST,
+      voice: 'Adrian',
+    })
+  ).toBeNull();
+});
+
+test('finalizeGlobalExactTrack rejects a digest that does not match the content', async () => {
+  const t = convexTest(schema, modules);
+  const storageId = await storeUploadedTestAudio(t, [1, 2, 3]);
+  await expect(
+    t.mutation(internal.routers.ttsInternal.finalizeGlobalExactTrack, {
+      contentDigest: 'f'.repeat(64),
+      content: 'Exact timing',
+      voice: 'Adrian',
+      storageId,
+      duration: 0.7,
+      words: exactWords,
+    })
+  ).rejects.toThrow(/digest/i);
+});
+
+async function waitForJobStatus(
+  t: ReturnType<typeof convexTest>,
+  status: 'running' | 'done' | 'failed'
+) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const jobs = await t.run(async (ctx) => ctx.db.query('ttsPregenerationJobs').collect());
+    if (jobs.length === 1 && jobs[0]!.status === status) return jobs[0]!;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`pre-generation job never reached ${status}`);
+}
+
+test('pregenerate takes the job slot, runs the scheduled Node action, and reports ready once cached', async () => {
+  const t = convexTest(schema, modules);
+  stubFetch(() => {
+    throw new Error('pregenerate must not call any provider from the default runtime');
+  });
+  const previousKey = process.env.SONIOX_API_KEY;
+  delete process.env.SONIOX_API_KEY;
+
+  try {
+    const first = await t.action(api.routers.tts.pregenerate, { text: 'Exact timing', voice: 'Adrian', clientId: 'c1' });
+    expect(first).toEqual({ status: 'scheduled' });
+
+    // The scheduled action ran and, with no provider key, recorded why it
+    // could not synthesise instead of throwing.
+    const job = await waitForJobStatus(t, 'failed');
+    expect(job).toMatchObject({ contentDigest: EXACT_CONTENT_DIGEST, voice: 'Adrian' });
+    expect(job.error).toMatch(/SONIOX_API_KEY/);
+    expect(fetchCalls).toEqual([]);
+
+    // The slot itself: a failed job is reclaimable once, then held as running.
+    expect(
+      await t.mutation(internal.routers.ttsInternal.claimPregenerationJob, {
+        contentDigest: EXACT_CONTENT_DIGEST,
+        voice: 'Adrian',
+      })
+    ).toBe('claimed');
+    expect(
+      await t.mutation(internal.routers.ttsInternal.claimPregenerationJob, {
+        contentDigest: EXACT_CONTENT_DIGEST,
+        voice: 'Adrian',
+      })
+    ).toBe('running');
+
+    await finalizeGlobalTestTrack(t, [1, 2, 3]);
+    const third = await t.action(api.routers.tts.pregenerate, { text: 'Exact timing', voice: 'Adrian', clientId: 'c3' });
+    expect(third).toEqual({ status: 'ready' });
+  } finally {
+    if (previousKey !== undefined) process.env.SONIOX_API_KEY = previousKey;
+  }
+});
+
+test('pregenerate honours the global rate limit and never schedules when denied', async () => {
+  const t = convexTest(schema, modules);
+  await drainGlobalRateLimit(t);
+  const result = await t.action(api.routers.tts.pregenerate, { text: 'Exact timing', voice: 'Adrian', clientId: 'c' });
+  expect(result).toEqual({ status: 'skipped' });
+  expect(await t.run(async (ctx) => ctx.db.query('ttsPregenerationJobs').collect())).toEqual([]);
+});
+
+test('pregenerationStatus reports none, then the job state, without needing sign-in', async () => {
+  const t = convexTest(schema, modules);
+  const input = { contentDigest: EXACT_CONTENT_DIGEST, voice: 'Adrian' };
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('none');
+
+  await t.mutation(internal.routers.ttsInternal.claimPregenerationJob, input);
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('running');
+
+  await t.mutation(internal.routers.ttsInternal.completePregenerationJob, { ...input, status: 'failed', error: 'x' });
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('failed');
+
+  await t.mutation(internal.routers.ttsInternal.completePregenerationJob, { ...input, status: 'done' });
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('done');
 });

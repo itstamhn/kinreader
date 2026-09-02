@@ -38,6 +38,8 @@ interface ControlsProps {
   /** A dismissible notice (e.g. an article that failed to load) that does not block playback. */
   noticeMessage?: string;
   onDismissNotice?: () => void;
+  /** A neutral progress line (e.g. waiting for a pre-generated track). */
+  infoMessage?: string;
 }
 
 const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
@@ -65,6 +67,7 @@ export function Controls({
   errorMessage = 'Audio playback unavailable on this device.',
   noticeMessage,
   onDismissNotice,
+  infoMessage,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -348,6 +351,11 @@ export function Controls({
               Dismiss
             </button>
           )}
+        </div>
+      ) : infoMessage ? (
+        <div className="w-full bg-white/[0.04] border-t border-white/10 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#ECEAE4]/70">
+          <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+          <span>{infoMessage}</span>
         </div>
       ) : isError ? (
         <div className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-400">

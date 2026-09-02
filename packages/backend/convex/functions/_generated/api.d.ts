@@ -30,6 +30,24 @@ export declare const api: {
       >;
     };
     tts: {
+      pregenerationStatus: FunctionReference<
+        "query",
+        "public",
+        { contentDigest: string; voice: string },
+        "none" | "running" | "done" | "failed"
+      >;
+      pregenerate: FunctionReference<
+        "action",
+        "public",
+        {
+          author?: string;
+          clientId?: string;
+          text: string;
+          title?: string;
+          voice?: string;
+        },
+        any
+      >;
       generateTrackUploadUrl: FunctionReference<
         "mutation",
         "public",
@@ -353,7 +371,65 @@ export declare const internal: {
         any
       >;
     };
+    pregenerate: {
+      generate: FunctionReference<
+        "action",
+        "internal",
+        {
+          author?: string;
+          contentDigest: string;
+          text: string;
+          title?: string;
+          voice: string;
+        },
+        "done" | "failed" | "skipped"
+      >;
+    };
     ttsInternal: {
+      pregenerationJobStatus: FunctionReference<
+        "query",
+        "internal",
+        { contentDigest: string; voice: string },
+        "none" | "running" | "done" | "failed"
+      >;
+      claimPregenerationJob: FunctionReference<
+        "mutation",
+        "internal",
+        { contentDigest: string; voice: string },
+        "claimed" | "running" | "done"
+      >;
+      completePregenerationJob: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          contentDigest: string;
+          error?: string;
+          status: "done" | "failed";
+          voice: string;
+        },
+        null
+      >;
+      findGlobalExactTrack: FunctionReference<
+        "query",
+        "internal",
+        { contentDigest: string; voice: string },
+        any
+      >;
+      finalizeGlobalExactTrack: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          author?: string;
+          content: string;
+          contentDigest: string;
+          duration: number;
+          storageId: Id<"_storage">;
+          title?: string;
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        },
+        { articleId: Id<"articles">; trackId: Id<"audioTracks"> }
+      >;
       cleanupAbandonedTrackUploads: FunctionReference<
         "mutation",
         "internal",
