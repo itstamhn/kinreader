@@ -18,6 +18,8 @@ export interface PlaybackSnapshot {
   progressivePlaybackAvailable: boolean;
   playbackReady: boolean;
   authoritativeTimings: boolean;
+  /** Playing, but intentionally holding the element until enough audio has streamed in. */
+  isBuffering: boolean;
 }
 
 export class SpeechEngine {
@@ -44,6 +46,7 @@ export class SpeechEngine {
   public progressivePlaybackAvailable: boolean = false;
   public playbackReady: boolean = false;
   public authoritativeTimings: boolean = false;
+  public isBuffering: boolean = false;
 
   // Playback position/progress, updated at every point the old code used to
   // push them out via `onProgressChange`. Cached rather than derived from
@@ -217,6 +220,7 @@ export class SpeechEngine {
       progressivePlaybackAvailable: this.progressivePlaybackAvailable,
       playbackReady: this.playbackReady,
       authoritativeTimings: this.authoritativeTimings,
+      isBuffering: this.isBuffering,
     };
   }
 
@@ -266,6 +270,124 @@ export class SpeechEngine {
     this.notify();
   }
 
+  // --- Streaming buffer control -------------------------------------------
+  //
+  // A live Soniox stream arrives at roughly the pace it is spoken, and the
+  // reader plays at 1.5x by default, so with playback allowed the instant the
+  // first bytes land the element ran dry every few seconds: the browser stalls
+  // silently on an empty buffer, restarts on the next few frames, and stalls
+  // again -- the "auto-pause every few seconds" a listener hears. The fix is
+  // the same one every media player uses: hold until a real cushion exists,
+  // and when the buffer does run low, pause deliberately and refill to the
+  // cushion instead of resuming on the first frame. The cushion adapts to the
+  // measured arrival rate, so a stream slower than the playback rate front-
+  // loads enough to reach the end without stopping again.
+
+  // Below this much media ahead of the playhead, hold and refill.
+  private static readonly LOW_WATERMARK_SECONDS = 0.5;
+  // Baseline cushion, in wall-clock seconds of playback (media = wall * rate).
+  private static readonly BUFFER_CUSHION_WALL_SECONDS = 2;
+  // Never front-load more than this much media, however slow the stream is.
+  private static readonly MAX_BUFFER_TARGET_SECONDS = 45;
+  // Arrival-rate estimates need this much wall time before they are trusted.
+  private static readonly MIN_RATE_SAMPLE_WALL_SECONDS = 3;
+
+  private productionFirst: { wall: number; end: number } | null = null;
+  private productionLatest: { wall: number; end: number } | null = null;
+
+  private wallNow(): number {
+    return typeof performance !== 'undefined' ? performance.now() : Date.now();
+  }
+
+  private bufferedRanges(): TimeRanges | null {
+    return (this.sourceBuffer?.buffered ?? this.audio?.buffered ?? null) as TimeRanges | null;
+  }
+
+  private bufferedEnd(): number {
+    const ranges = this.bufferedRanges();
+    if (!ranges || ranges.length === 0) return 0;
+    return ranges.end(ranges.length - 1);
+  }
+
+  // Media seconds available past the playhead in the range it sits in.
+  private bufferedAhead(): number {
+    if (!this.audio) return 0;
+    const ranges = this.bufferedRanges();
+    if (!ranges || ranges.length === 0) return 0;
+    const position = this.audio.currentTime;
+    for (let index = 0; index < ranges.length; index += 1) {
+      if (ranges.start(index) - 0.25 <= position && position <= ranges.end(index)) {
+        return Math.max(0, ranges.end(index) - position);
+      }
+    }
+    return 0;
+  }
+
+  // True while a progressive session still has audio on the way. Once the
+  // stream is complete, nothing is worth waiting for.
+  private moreAudioExpected(): boolean {
+    return this.mediaSource !== null && (this.isStreaming || this.pendingAudioChunks.length > 0);
+  }
+
+  private recordProductionSample() {
+    const end = this.bufferedEnd();
+    if (end <= 0) return;
+    const sample = { wall: this.wallNow(), end };
+    if (!this.productionFirst) this.productionFirst = sample;
+    this.productionLatest = sample;
+  }
+
+  // Media seconds arriving per wall second, or null until measured.
+  private productionRate(): number | null {
+    const first = this.productionFirst;
+    const latest = this.productionLatest;
+    if (!first || !latest) return null;
+    const wall = (latest.wall - first.wall) / 1000;
+    if (wall < SpeechEngine.MIN_RATE_SAMPLE_WALL_SECONDS) return null;
+    return (latest.end - first.end) / wall;
+  }
+
+  // How much media must be buffered ahead before playing (or resuming).
+  private bufferTarget(): number {
+    if (!this.moreAudioExpected()) return 0;
+    const cushion = SpeechEngine.BUFFER_CUSHION_WALL_SECONDS * this._rate;
+    const rate = this.productionRate();
+    let deficit = 0;
+    if (rate !== null && rate < this._rate) {
+      // The stream cannot keep up with playback: pre-buffer the shortfall the
+      // rest of the article will accrue, so it plays through once started.
+      const remaining = Math.max(0, this.duration - this.bufferedEnd());
+      deficit = remaining * (1 - rate / this._rate);
+    }
+    return Math.min(SpeechEngine.MAX_BUFFER_TARGET_SECONDS, cushion + deficit);
+  }
+
+  private shouldHoldForBuffer(): boolean {
+    return this.moreAudioExpected() && this.bufferedAhead() < this.bufferTarget();
+  }
+
+  private enterBuffering() {
+    if (this.isBuffering) return;
+    this.isBuffering = true;
+    if (this.audio && !this.audio.paused) this.audio.pause();
+    this.notify();
+  }
+
+  private maybeResumeFromBuffering() {
+    if (!this.isBuffering || !this.isPlaying || !this.audio) return;
+    if (this.shouldHoldForBuffer()) return;
+    this.isBuffering = false;
+    this.lastAudioCurrentTime = -1;
+    this.audio.play().catch(() => {});
+    this.notify();
+  }
+
+  private resetBufferControl() {
+    this.isBuffering = false;
+    this.productionFirst = null;
+    this.productionLatest = null;
+  }
+
   // --- Real-Time Audio Streaming (Soniox WebSocket) -----------------------
 
   public startStreamingSession(initialWords: WordTiming[], estimatedDuration: number): boolean {
@@ -281,6 +403,7 @@ export class SpeechEngine {
     this.duration = estimatedDuration;
     this.pendingAudioChunks = [];
     this.allAudioChunks = [];
+    this.resetBufferControl();
 
     if (typeof window !== 'undefined') {
       const standardSource = (window as any).MediaSource;
@@ -322,7 +445,9 @@ export class SpeechEngine {
             try {
               this.sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
               this.sourceUpdateEndHandler = () => {
+                this.recordProductionSample();
                 this.flushPendingChunks();
+                this.maybeResumeFromBuffering();
               };
               this.sourceErrorHandler = () => {
                 this.handleProgressiveSourceFailure(
@@ -398,6 +523,7 @@ export class SpeechEngine {
     this.isStreaming = false;
     this.streamFinishRequested = true;
     this.flushPendingChunks();
+    this.maybeResumeFromBuffering();
 
     const blob = new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
     this.installCompletedBlobPlayback(blob);
@@ -428,6 +554,7 @@ export class SpeechEngine {
     this.progressivePlaybackAvailable = false;
     this.playbackReady = false;
     this.pendingAudioChunks = [];
+    this.resetBufferControl();
     if (this.audio && !this.audio.paused) this.audio.pause();
     this.isPlaying = false;
     this.stopSyncLoop();
@@ -513,6 +640,15 @@ export class SpeechEngine {
     if (this.mode === 'audio' && this.audio) {
       this.audio.playbackRate = this._rate;
       this.audio.defaultPlaybackRate = this._rate;
+      if (this.shouldHoldForBuffer()) {
+        // Counts as playing from the listener's point of view; the element
+        // starts on its own once the cushion is there (see buffer control).
+        this.isPlaying = true;
+        this.isBuffering = true;
+        this.notify();
+        this.startSyncLoop();
+        return;
+      }
       this.audio.play().then(() => {
         this.isPlaying = true;
         this.notify();
@@ -536,6 +672,7 @@ export class SpeechEngine {
     }
 
     this.isPlaying = false;
+    this.isBuffering = false;
     this.notify();
     this.stopSyncLoop();
   }
@@ -557,6 +694,7 @@ export class SpeechEngine {
     this.streamFinishRequested = false;
     this.completedBlobPlaybackInstalled = false;
     this.calibrated = false;
+    this.resetBufferControl();
 
     if (this.audio) {
       this.audio.pause();
@@ -739,6 +877,18 @@ export class SpeechEngine {
 
     const audioTime = this.audio.currentTime;
 
+    // Streaming buffer control: refill when the cushion is gone, resume once
+    // it is back (or the stream has finished and there is nothing to wait for).
+    if (this.isBuffering) {
+      this.maybeResumeFromBuffering();
+    } else if (
+      this.moreAudioExpected() &&
+      !this.audio.paused &&
+      this.bufferedAhead() < SpeechEngine.LOW_WATERMARK_SECONDS
+    ) {
+      this.enterBuffering();
+    }
+
     // Keep `duration` honest. This used to be pinned to the estimated word
     // timeline's last `end` on every tick, so whenever that estimate ran short
     // of the real audio the run below hit `curTime >= this.duration` and ended
@@ -784,7 +934,13 @@ export class SpeechEngine {
       // frames again, rather than seeking it to match our clock the way the
       // old recovery path did -- that dragged the real audio around to fit an
       // estimated timeline.
-      if (this.isPlaying && this.audio.paused && !this.audio.ended && this.audio.readyState >= 3) {
+      if (
+        this.isPlaying &&
+        !this.isBuffering &&
+        this.audio.paused &&
+        !this.audio.ended &&
+        this.audio.readyState >= 3
+      ) {
         this.audio.play().catch(() => {});
       }
     }
