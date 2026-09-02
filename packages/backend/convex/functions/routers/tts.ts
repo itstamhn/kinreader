@@ -4,6 +4,7 @@ import { internal } from '../_generated/api';
 import { env } from '../_generated/server';
 import type { Doc, Id } from '../_generated/dataModel';
 import { splitTextIntoSonioxChunks } from '../../shared/soniox';
+import { MAX_PREGENERATION_CHARS } from '../../shared/tts/limits';
 
 // Ported from src/server.ts's `POST /api/tts` handler (plan 005's guards
 // included). The route is removed from Spiceflow in the same change that
@@ -200,13 +201,20 @@ export const pregenerationStatus = query
       voice: z.string().trim().min(1).max(100),
     })
   )
-  .output(z.enum(['none', 'running', 'done', 'failed']))
+  .output(
+    z.object({
+      status: z.enum(['none', 'running', 'done', 'failed']),
+      // When the job started, so the reader can tell a live job from one the
+      // runtime killed and left marked running.
+      startedAt: z.number().nullable(),
+    })
+  )
   .query(async ({ ctx, input }) => {
-    const status: 'none' | 'running' | 'done' | 'failed' = await ctx.runQuery(
+    const job: { status: 'none' | 'running' | 'done' | 'failed'; startedAt?: number } = await ctx.runQuery(
       internal.routers.ttsInternal.pregenerationJobStatus,
       { contentDigest: input.contentDigest, voice: input.voice }
     );
-    return status;
+    return { status: job.status, startedAt: job.startedAt ?? null };
   });
 
 // Start synthesising an article into the global cache before anyone presses
@@ -226,6 +234,8 @@ export const pregenerate = action
   .action(async ({ ctx, input }): Promise<{ status: PregenerateStatus }> => {
     const text = input.text.trim();
     const voice = input.voice || 'Adrian';
+    // Too long to finish inside an action: leave it to the live stream.
+    if (text.length > MAX_PREGENERATION_CHARS) return { status: 'skipped' };
     if (text.split(/\s+/).filter(Boolean).length > MAX_WORDS) return { status: 'skipped' };
 
     const digestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));

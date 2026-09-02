@@ -42,6 +42,8 @@ interface ControlsProps {
   infoMessage?: string;
   /** Show a spinner beside the info line (progress) rather than an info icon. */
   infoBusy?: boolean;
+  /** An optional action on the info line (e.g. stop waiting and play now). */
+  infoAction?: { label: string; onClick: () => void };
 }
 
 const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
@@ -71,6 +73,7 @@ export function Controls({
   onDismissNotice,
   infoMessage,
   infoBusy = true,
+  infoAction,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -363,6 +366,14 @@ export function Controls({
             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           )}
           <span>{infoMessage}</span>
+          {infoAction && (
+            <button
+              onClick={infoAction.onClick}
+              className="ml-2 shrink-0 font-semibold text-[#F2A33C] underline underline-offset-2 hover:text-white"
+            >
+              {infoAction.label}
+            </button>
+          )}
         </div>
       ) : isError ? (
         <div className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-400">
