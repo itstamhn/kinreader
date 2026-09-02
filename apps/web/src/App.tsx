@@ -1012,9 +1012,8 @@ export function App({
             isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
             isPlayable={playback.playbackReady}
             isBuffering={
-              !playback.playbackReady &&
-              playbackStatus !== 'degraded' &&
-              playbackStatus !== 'error'
+              playback.isBuffering ||
+              (!playback.playbackReady && playbackStatus !== 'degraded' && playbackStatus !== 'error')
             }
             isDegraded={playbackStatus === 'degraded'}
             degradedMessage={DEGRADED_MESSAGES[playback.mode]}

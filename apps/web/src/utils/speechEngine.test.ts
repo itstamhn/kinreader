@@ -721,3 +721,149 @@ test('ManagedMediaSource-only browsers get remote playback disabled before attac
     URL.createObjectURL = originalCreateObjectURL;
   }
 });
+
+// --- Streaming buffer control ---------------------------------------------
+
+// Stage a progressive session by hand: a fake element whose buffered range
+// the test grows, and a fake open SourceBuffer the engine reads it from.
+function attachStreaming(engine: SpeechEngine, audio: any, words: { text: string; start: number; end: number }[]) {
+  attach(engine, audio, words);
+  engine.isPlaying = false;
+  (engine as any).mediaSource = { readyState: 'open' };
+  (engine as any).sourceBuffer = { buffered: audio.buffered, updating: false };
+  engine.isStreaming = true;
+  engine.playbackReady = true;
+}
+
+function rangeTo(end: number) {
+  return { length: end > 0 ? 1 : 0, start: () => 0, end: () => end };
+}
+
+test('play holds for a buffer cushion while the stream is live, then starts on its own', () => {
+  const engine = new SpeechEngine();
+  let playCalls = 0;
+  const audio = fakeAudio({
+    paused: true,
+    buffered: rangeTo(0.4),
+    play() {
+      playCalls += 1;
+      this.paused = false;
+      return Promise.resolve();
+    },
+  });
+  attachStreaming(engine, audio, evenWords(120));
+  engine.rate = 1.5;
+
+  engine.play();
+  // Playing from the listener's point of view, but the element is held.
+  expect(engine.isPlaying).toBe(true);
+  expect(engine.getSnapshot().isBuffering).toBe(true);
+  expect(playCalls).toBe(0);
+
+  // 2 wall seconds of cushion at 1.5x = 3 media seconds. Not there yet...
+  audio.buffered = rangeTo(2.0);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).maybeResumeFromBuffering();
+  expect(engine.getSnapshot().isBuffering).toBe(true);
+  expect(playCalls).toBe(0);
+
+  // ...and now it is.
+  audio.buffered = rangeTo(3.2);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).maybeResumeFromBuffering();
+  expect(engine.getSnapshot().isBuffering).toBe(false);
+  expect(playCalls).toBe(1);
+});
+
+test('a stream that runs low pauses deliberately and refills to the cushion instead of stuttering', () => {
+  const engine = new SpeechEngine();
+  let playCalls = 0;
+  const audio = fakeAudio({
+    currentTime: 5.0,
+    buffered: rangeTo(10),
+    play() {
+      playCalls += 1;
+      this.paused = false;
+      return Promise.resolve();
+    },
+  });
+  attachStreaming(engine, audio, evenWords(120));
+  engine.isPlaying = true;
+  engine.rate = 1.0;
+
+  // Plenty ahead: plays normally.
+  (engine as any).syncFromAudioTick(0.1);
+  expect(audio.paused).toBe(false);
+  expect(engine.getSnapshot().isBuffering).toBe(false);
+
+  // The playhead catches the buffer: hold, do not let the browser stall.
+  audio.currentTime = 9.7;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(audio.paused).toBe(true);
+  expect(engine.getSnapshot().isBuffering).toBe(true);
+  expect(engine.isPlaying).toBe(true);
+
+  // A few frames more is not a reason to resume (that was the stutter).
+  audio.buffered = rangeTo(10.3);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(audio.paused).toBe(true);
+  expect(playCalls).toBe(0);
+
+  // The full 2-second cushion is.
+  audio.buffered = rangeTo(12.0);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(playCalls).toBe(1);
+  expect(audio.paused).toBe(false);
+  expect(engine.getSnapshot().isBuffering).toBe(false);
+});
+
+test('a stream slower than the playback rate front-loads the shortfall for the rest of the article', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ paused: true, buffered: rangeTo(6) });
+  attachStreaming(engine, audio, evenWords(100)); // 100s article
+  engine.rate = 2.0;
+
+  // Measured: 6 media seconds arrived over 4 wall seconds = 1.5x, below 2x.
+  (engine as any).productionFirst = { wall: 0, end: 0 };
+  (engine as any).productionLatest = { wall: 4000, end: 6 };
+
+  // Remaining 94s at a 25% shortfall = 23.5s deficit, plus the 4s cushion.
+  expect((engine as any).bufferTarget()).toBeCloseTo(27.5, 3);
+
+  // A stream keeping up needs only the cushion.
+  (engine as any).productionLatest = { wall: 4000, end: 10 };
+  expect((engine as any).bufferTarget()).toBeCloseTo(4, 3);
+
+  // Too little wall time to trust a rate estimate: cushion only.
+  (engine as any).productionLatest = { wall: 1000, end: 0.5 };
+  expect((engine as any).bufferTarget()).toBeCloseTo(4, 3);
+});
+
+test('once the stream is complete nothing is held back, even with a thin buffer', () => {
+  const engine = new SpeechEngine();
+  let playCalls = 0;
+  const audio = fakeAudio({
+    paused: true,
+    currentTime: 9.8,
+    buffered: rangeTo(10),
+    play() {
+      playCalls += 1;
+      this.paused = false;
+      return Promise.resolve();
+    },
+  });
+  attachStreaming(engine, audio, evenWords(10));
+  engine.isPlaying = true;
+  engine.isBuffering = true;
+
+  engine.isStreaming = false; // audio_end arrived, nothing pending
+  (engine as any).maybeResumeFromBuffering();
+  expect(playCalls).toBe(1);
+  expect(engine.getSnapshot().isBuffering).toBe(false);
+
+  // And pausing clears the buffering state so a later play starts clean.
+  engine.pause();
+  expect(engine.getSnapshot().isBuffering).toBe(false);
+});

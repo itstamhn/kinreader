@@ -707,3 +707,17 @@ are not re-audited from scratch next session.
   needed: an inert `WebSocket` in `test-setup.ts` (the real client dialled the
   deployment and the proxy's non-101 answer surfaced as an unhandled `ws` error in
   whichever test was running), and an 80ms `afterEach` wait for nuqs's URL flush.
+
+- **023 follow-up — streaming buffer control (2026-09-02).** First real listen after the
+  CSP fix: the highlight followed the voice, but playback stalled every few seconds. Cause:
+  the live Soniox stream arrives at about spoken pace while the reader plays at 1.5x, and
+  Play was allowed the instant the first bytes landed, so the browser drained the buffer,
+  stalled silently, restarted on the next frames, and stalled again. `SpeechEngine` now
+  does what every media player does: Play is honoured immediately but the element is held
+  (`isBuffering` in the snapshot, spinner in Controls) until a cushion of 2 wall-seconds of
+  media (x rate) exists; when the buffer drops under 0.5s it pauses deliberately and refills
+  to the cushion rather than resuming on the first frame; and the cushion grows by the
+  measured shortfall — arrival rate vs playback rate over the remaining article, capped at
+  45s — so a stream that cannot keep up front-loads once instead of stopping repeatedly.
+  Once `audio_end` has arrived nothing is held back. Four engine tests cover the hold, the
+  refill hysteresis, the adaptive target, and the completed-stream release.
