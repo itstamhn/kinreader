@@ -9,12 +9,9 @@ import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer
 import { AuthScreen, type UserProfile } from './components/AuthScreen';
 import { ClipboardDetectSheet } from './components/ClipboardDetectSheet';
 import { SpeechEngine } from './utils/speechEngine';
-import {
-  openSonioxStream,
-  SonioxTemporaryKeyExpiredError,
-  type OpenSonioxStreamOptions,
-} from './utils/sonioxStream';
+import { SonioxTemporaryKeyExpiredError, type OpenSonioxStreamOptions } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
+import { openParallelSonioxStream } from './utils/parallelSoniox';
 import { articleCacheKey } from './utils/articleCacheKey';
 import { decodeShareId } from './utils/shareLink';
 import {
@@ -85,7 +82,9 @@ export interface AppProps {
 }
 
 export function App({
-  streamingTransport = openSonioxStream,
+  // Several concurrent Soniox sessions re-serialised into one stream, so audio
+  // arrives faster than it is played back (see utils/parallelSoniox.ts).
+  streamingTransport = openParallelSonioxStream,
   requestTemporaryKey,
   loadExactTrack,
   persistExactTrack,

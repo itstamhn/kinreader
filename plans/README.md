@@ -721,3 +721,21 @@ are not re-audited from scratch next session.
   45s — so a stream that cannot keep up front-loads once instead of stopping repeatedly.
   Once `audio_end` has arrived nothing is held back. Four engine tests cover the hold, the
   refill hysteresis, the adaptive target, and the completed-stream release.
+
+- **023 follow-up 2 — parallel Soniox sessions (2026-09-02).** With buffer control live
+  (Worker `a97a7639`), the first listen still waited: one Soniox real-time session produces
+  audio at about spoken pace, so at 1.5x the cushion could never fill faster than it drained,
+  and the adaptive target turned constant stutter into long refills instead. The fix is
+  throughput, not buffering. `utils/parallelSoniox.ts` splits the article into up to four
+  verbatim segments at sentence boundaries (`splitIntoSegments`, concatenation is exactly
+  the text so the accumulator still validates every character), opens one Soniox session
+  per segment on the same temporary key (`single_use: false`, expiry and limiters
+  unchanged), and re-serialises the results into the single stream the engine already
+  consumes: later segments are held until the earlier one has fully arrived, then replayed
+  with their character timestamps shifted by the *decoded* MP3 duration of everything
+  before them (`utils/mp3Duration.ts`, frame-header parsing — the last spoken character's
+  end is not the audio's end). A segment rejected while waiting (a concurrency limit) is
+  retried alone when its turn comes; a failure while live propagates to the existing REST
+  fallback. Sub-1200-character texts stay single-session. `openSonioxStream` gained a
+  `textChunks` override so segments are sent untrimmed. Tests: 9 (segmenting, ordering and
+  offsets, accumulator round-trip, retry, MP3 duration).
