@@ -120,6 +120,7 @@ test('falling back to on-device speech is visible via engine.mode, not silent', 
 // stage the exact condition it is about.
 function fakeAudio(overrides: Record<string, any> = {}) {
   return {
+    src: '',
     currentTime: 0,
     duration: NaN,
     paused: false,
@@ -362,33 +363,37 @@ test('streaming uses ManagedMediaSource when it is the only supported source', (
 
 // Without MSE, finish must still make the complete bytes playable. A missing
 // Blob URL here is the iPhone Safari silent-playback failure from the plan.
-test('streaming without a supported source exposes degradation and loads the completed Blob', async () => {
+test('streaming without a supported source plays in parts and is playable from the start', async () => {
   const originalMediaSource = (window as any).MediaSource;
   const originalManagedMediaSource = (window as any).ManagedMediaSource;
   const originalCreateObjectURL = URL.createObjectURL;
-  let completedBlob: Blob | undefined;
+  const partBlobs: Blob[] = [];
 
   (window as any).MediaSource = undefined;
   (window as any).ManagedMediaSource = undefined;
   URL.createObjectURL = (source: any) => {
-    if (source instanceof Blob) completedBlob = source;
-    return 'blob:completed-audio';
+    if (source instanceof Blob) partBlobs.push(source);
+    return `blob:part-${partBlobs.length}`;
   };
 
   try {
     const engine = new SpeechEngine();
     const progressive = engine.startStreamingSession(evenWords(1), 1);
-    expect(engine.getSnapshot().playbackReady).toBe(false);
+    // Progressive in parts: Play is allowed immediately and holds until audio exists.
+    expect(progressive).toBe(true);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
     engine.appendAudioChunk(new Uint8Array([1, 2]));
     engine.appendAudioChunk(new Uint8Array([3]));
+    // Not MP3 frames, so no part can be cut yet.
+    expect(partBlobs).toHaveLength(0);
 
     const blob = engine.finishStreamingSession();
 
-    expect(progressive).toBe(false);
-    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
-    expect(engine.getSnapshot().playbackReady).toBe(true);
-    expect(completedBlob).toBe(blob);
-    expect((engine as any).audio.src).toContain('blob:completed-audio');
+    // The tail becomes the single final part, and the persistence blob holds every byte.
+    expect(partBlobs).toHaveLength(1);
+    expect((engine as any).audio.src).toContain('blob:part-1');
+    expect([...new Uint8Array(await partBlobs[0]!.arrayBuffer())]).toEqual([1, 2, 3]);
     expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([1, 2, 3]);
   } finally {
     (window as any).MediaSource = originalMediaSource;
@@ -462,7 +467,7 @@ function installThrowingAppendMediaSource() {
   return { ThrowingAppendMediaSource, created };
 }
 
-test('an appendBuffer failure before audio_end tears down MSE and installs all retained bytes at finish', async () => {
+test('an appendBuffer failure before audio_end tears down MSE and finishes in parts with every retained byte', async () => {
   const originalMediaSource = (window as any).MediaSource;
   const originalManagedMediaSource = (window as any).ManagedMediaSource;
   const originalCreateObjectURL = URL.createObjectURL;
@@ -476,8 +481,9 @@ test('an appendBuffer failure before audio_end tears down MSE and installs all r
     engine.appendAudioChunk(new Uint8Array([1, 2]));
     ThrowingAppendMediaSource.instances[0]!.open();
 
-    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
-    expect(engine.getSnapshot().playbackReady).toBe(false);
+    // MediaSource is gone; the session continues in parts with the bytes so far.
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
+    expect(engine.getSnapshot().playbackReady).toBe(true);
     expect((engine as any).mediaSource).toBeNull();
 
     engine.appendAudioChunk(new Uint8Array([3, 4]));
@@ -496,7 +502,7 @@ test('an appendBuffer failure before audio_end tears down MSE and installs all r
   }
 });
 
-test('an appendBuffer failure after audio_end immediately replaces MSE with the completed Blob', async () => {
+test('an appendBuffer failure after audio_end immediately switches to a single final part', async () => {
   const originalMediaSource = (window as any).MediaSource;
   const originalManagedMediaSource = (window as any).ManagedMediaSource;
   const originalCreateObjectURL = URL.createObjectURL;
@@ -511,7 +517,7 @@ test('an appendBuffer failure after audio_end immediately replaces MSE with the 
     engine.finishStreamingSession();
     ThrowingAppendMediaSource.instances[0]!.open();
 
-    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(false);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
     expect(engine.getSnapshot().playbackReady).toBe(true);
     expect(created.map(({ kind }) => kind)).toEqual(['media-source', 'blob']);
     expect([
@@ -866,4 +872,161 @@ test('once the stream is complete nothing is held back, even with a thin buffer'
   // And pausing clears the buffering state so a later play starts clean.
   engine.pause();
   expect(engine.getSnapshot().isBuffering).toBe(false);
+});
+
+// --- Parts mode (no MediaSource) --------------------------------------------
+
+// MPEG-1 Layer III 128 kbps 44.1 kHz: 417-byte frames, 1152/44100 s each.
+const PART_FRAME_SECONDS = 1152 / 44100;
+function mp3Frames(count: number): Uint8Array {
+  const out = new Uint8Array(417 * count);
+  for (let i = 0; i < count; i += 1) out.set([0xff, 0xfb, 0x90, 0x00], i * 417);
+  return out;
+}
+
+function withoutMediaSource<T>(run: () => T): T {
+  const originalMediaSource = (window as any).MediaSource;
+  const originalManaged = (window as any).ManagedMediaSource;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  const originalFirst = SpeechEngine.FIRST_PART_SECONDS;
+  const originalPart = SpeechEngine.PART_SECONDS;
+  let urls = 0;
+  (window as any).MediaSource = undefined;
+  (window as any).ManagedMediaSource = undefined;
+  URL.createObjectURL = () => `blob:part-${++urls}`;
+  URL.revokeObjectURL = () => {};
+  // Tiny parts so the tests need few frames: 0.5 s first, 1 s after.
+  SpeechEngine.FIRST_PART_SECONDS = 0.5;
+  SpeechEngine.PART_SECONDS = 1;
+  const restore = () => {
+    (window as any).MediaSource = originalMediaSource;
+    (window as any).ManagedMediaSource = originalManaged;
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevoke;
+    SpeechEngine.FIRST_PART_SECONDS = originalFirst;
+    SpeechEngine.PART_SECONDS = originalPart;
+  };
+  let result: T;
+  try {
+    result = run();
+  } catch (error) {
+    restore();
+    throw error;
+  }
+  // An async body keeps the stubs until it settles.
+  if (result instanceof Promise) return result.finally(restore) as T;
+  restore();
+  return result;
+}
+
+test('without MediaSource, playback becomes possible after the first short part instead of the whole article', () => {
+  withoutMediaSource(() => {
+    const engine = new SpeechEngine();
+    const playCalls: string[] = [];
+    const audio = fakeAudio({ paused: true, src: '' });
+    audio.play = function () {
+      playCalls.push(this.src);
+      this.paused = false;
+      return Promise.resolve();
+    };
+    (engine as any).audio = audio;
+    engine.startStreamingSession(evenWords(600), 600);
+    expect(engine.getSnapshot().progressivePlaybackAvailable).toBe(true);
+    // Playable at once (Play holds until audio exists), though nothing has arrived.
+    expect(engine.getSnapshot().playbackReady).toBe(true);
+    expect((engine as any).parts).toHaveLength(0);
+
+    // Listener presses Play before any audio: held, not refused.
+    engine.play();
+    expect(engine.isPlaying).toBe(true);
+    expect(engine.getSnapshot().isBuffering).toBe(true);
+
+    // 10 frames (~0.26 s) is not yet a first part...
+    engine.appendAudioChunk(mp3Frames(10));
+    expect((engine as any).parts).toHaveLength(0);
+    expect(playCalls).toEqual([]);
+    // ...30 frames (~0.78 s) is: the first part is cut, loaded, and -- since
+    // the whole stream may still be slower than playback -- held for the
+    // buffer cushion before the element starts.
+    engine.appendAudioChunk(mp3Frames(20));
+    expect((engine as any).parts).toHaveLength(1);
+    expect(audio.src).toBe('blob:part-1');
+    expect((engine as any).parts[0].duration).toBeCloseTo(30 * PART_FRAME_SECONDS, 6);
+    expect(engine.isPlaying).toBe(true);
+  });
+});
+
+test('parts play back to back on one continuous timeline, and hold at the end of what has arrived', async () => {
+  await withoutMediaSource(async () => {
+    const engine = new SpeechEngine();
+    const audio = fakeAudio({ paused: true, src: '' });
+    (engine as any).audio = audio;
+    engine.rate = 0.8; // a small cushion (2 wall seconds x 0.8) so two parts are enough to start
+    engine.startStreamingSession(evenWords(600), 600);
+    engine.appendAudioChunk(mp3Frames(30)); // part 0 (~0.78 s)
+    engine.appendAudioChunk(mp3Frames(50)); // part 1 (~1.31 s)
+    expect((engine as any).parts).toHaveLength(2);
+    const part0 = (engine as any).parts[0].duration as number;
+
+    engine.play();
+    await Promise.resolve(); // play() commits `isPlaying` once the element's play() resolves
+    expect(audio.src).toBe('blob:part-1');
+    expect(engine.getSnapshot().isBuffering).toBe(false);
+    expect(audio.paused).toBe(false);
+    expect(engine.isPlaying).toBe(true);
+
+    // Part 0 ends: part 1 loads immediately, timeline continues from part0's end.
+    audio.currentTime = 0.4;
+    (engine as any).onPartEnded();
+    expect(audio.src).toBe('blob:part-2');
+    expect(engine.isPlaying).toBe(true);
+    audio.currentTime = 0.25;
+    (engine as any).syncFromAudioTick(0.1);
+    expect(engine.currentTime).toBeCloseTo(part0 + 0.25, 5);
+
+    // Part 1 ends with nothing further yet: hold (buffering), do not end.
+    (engine as any).onPartEnded();
+    expect(engine.isPlaying).toBe(true);
+    expect(engine.getSnapshot().isBuffering).toBe(true);
+
+    // The stream finishes with a short tail: it becomes the final part, playback resumes there.
+    engine.appendAudioChunk(mp3Frames(5));
+    engine.finishStreamingSession();
+    expect((engine as any).parts).toHaveLength(3);
+    expect(audio.src).toBe('blob:part-3');
+    expect(engine.getSnapshot().isBuffering).toBe(false);
+
+    // And the last part ending is the real end.
+    (engine as any).onPartEnded();
+    expect(engine.isPlaying).toBe(false);
+    expect(engine.getSnapshot().progress).toBe(100);
+  });
+});
+
+test('seeking across parts loads the right part at the right offset', () => {
+  withoutMediaSource(() => {
+    const engine = new SpeechEngine();
+    const audio = fakeAudio({ paused: true, src: '' });
+    (engine as any).audio = audio;
+    engine.startStreamingSession(evenWords(600), 600);
+    engine.appendAudioChunk(mp3Frames(30));
+    engine.appendAudioChunk(mp3Frames(50));
+    engine.finishStreamingSession();
+    const [p0, p1] = (engine as any).parts as Array<{ start: number; duration: number }>;
+
+    // A word inside part 1.
+    const target = p1!.start + 0.5;
+    engine.seekToWordIndex(Math.floor(target)); // evenWords: word i starts at i seconds -> index 0 or 1
+    // seekToWordIndex uses word starts; drive seekAudioTo directly for a precise check.
+    (engine as any).seekAudioTo(target);
+    expect(audio.src).toBe('blob:part-2');
+    expect(audio.currentTime).toBeCloseTo(0.5, 5);
+
+    // Back into part 0.
+    (engine as any).seekAudioTo(0.2);
+    expect(audio.src).toBe('blob:part-1');
+    expect(audio.currentTime).toBeCloseTo(0.2, 5);
+    expect(p0!.start).toBe(0);
+  });
 });

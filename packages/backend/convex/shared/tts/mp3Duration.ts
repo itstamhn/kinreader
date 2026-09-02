@@ -35,10 +35,27 @@ export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
   return out;
 }
 
+export interface Mp3Scan {
+  /** Seconds of audio in the complete frames found. */
+  seconds: number;
+  /** Byte offset just past the last complete frame (a safe place to cut). */
+  consumedBytes: number;
+}
+
 /** Seconds of audio in an MPEG Layer III stream; 0 when no frame can be read. */
 export function mp3DurationSeconds(bytes: Uint8Array): number {
+  return scanMp3Frames(bytes).seconds;
+}
+
+/**
+ * Walks complete MPEG Layer III frames. Used both to measure a stream's
+ * duration and to find where a byte stream can be cut so that each piece
+ * starts on a frame header and decodes on its own.
+ */
+export function scanMp3Frames(bytes: Uint8Array): Mp3Scan {
   let index = skipId3v2(bytes);
   let seconds = 0;
+  let consumedBytes = index;
 
   while (index + 4 <= bytes.length) {
     const b1 = bytes[index]!;
@@ -77,7 +94,8 @@ export function mp3DurationSeconds(bytes: Uint8Array): number {
 
     seconds += samplesPerFrame / sampleRate;
     index += frameLength;
+    consumedBytes = index;
   }
 
-  return seconds;
+  return { seconds, consumedBytes };
 }

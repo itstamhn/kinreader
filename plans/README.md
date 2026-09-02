@@ -797,3 +797,16 @@ are not re-audited from scratch next session.
   of killed; `pregenerationStatus` returns `startedAt` and the reader ignores a `running` job
   older than 11 minutes; the wait is capped at 2 minutes; and the waiting banner has a
   "Play now" button that streams immediately (an explicit second synthesis).
+
+- **023 follow-up 6 — progressive playback without MediaSource (2026-09-02).** "Still loading
+  forever" on a browser whose MediaSource cannot take MP3 (Safari, notably iOS): the engine
+  had only two paths, MediaSource streaming or "wait for the whole article, then play one
+  Blob", and on a long article the second one looks like an endless spinner. The engine now
+  has a third path, *parts mode*: as audio arrives it is cut on MP3 frame boundaries into
+  parts (~20 s of audio first, then ~45 s each), every part gets its own object URL, and the
+  `<audio>` element plays them back to back on one continuous timeline (word sync uses
+  `partOffset + currentTime`; seeks load the part that contains the target). Running off the
+  end of what has arrived holds ("buffering") and resumes when the next part lands; the last
+  part ending is the real end. It is also the landing when MediaSource exists but the MP3
+  SourceBuffer cannot be created. Separately, the cache/key/pre-generation lookups before a
+  stream now time out at 8 s so a slow backend cannot hold the reader on "Preparing".
