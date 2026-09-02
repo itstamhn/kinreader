@@ -250,7 +250,9 @@ const wordTimingValidator = v.object({
   start: v.number(),
   end: v.number(),
 });
-const PREGENERATION_STALE_MS = 15 * 60 * 1000;
+// Just past Convex's 10-minute action limit: a job still "running" after this
+// was killed mid-flight and may be claimed again.
+const PREGENERATION_STALE_MS = 11 * 60 * 1000;
 
 export function globalCacheArticleUrl(contentDigest: string): string {
   return `tts-global:content-sha256:${contentDigest}`;
@@ -386,13 +388,17 @@ export const claimPregenerationJob = internalMutation({
 // clock here (queries must stay pure); the reader caps its own wait.
 export const pregenerationJobStatus = internalQuery({
   args: { contentDigest: v.string(), voice: v.string() },
-  returns: v.union(v.literal('none'), v.literal('running'), v.literal('done'), v.literal('failed')),
+  returns: v.object({
+    status: v.union(v.literal('none'), v.literal('running'), v.literal('done'), v.literal('failed')),
+    startedAt: v.optional(v.number()),
+  }),
   handler: async (ctx, args) => {
     const job = await ctx.db
       .query('ttsPregenerationJobs')
       .withIndex('by_digest_voice', (q) => q.eq('contentDigest', args.contentDigest).eq('voice', args.voice))
       .unique();
-    return job?.status ?? 'none';
+    if (!job) return { status: 'none' as const };
+    return { status: job.status, startedAt: job.startedAt };
   },
 });
 

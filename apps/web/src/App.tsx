@@ -12,7 +12,7 @@ import { SpeechEngine } from './utils/speechEngine';
 import { SonioxTemporaryKeyExpiredError, type OpenSonioxStreamOptions } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
 import { openParallelSonioxStream } from './utils/parallelSoniox';
-import { narrationText } from '@kinreader/backend/tts/limits';
+import { narrationText, MAX_PREGENERATION_CHARS } from '@kinreader/backend/tts/limits';
 import { articleCacheKey, articleContentDigest } from './utils/articleCacheKey';
 import { decodeShareId } from './utils/shareLink';
 import {
@@ -89,7 +89,10 @@ export interface AppProps {
   pregenerationPollMs?: number;
 }
 
-export type PregenerationJobStatus = 'none' | 'running' | 'done' | 'failed';
+export type PregenerationJobStatus = {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: number | null;
+};
 
 export interface PregenerationRequest {
   title?: string;
@@ -99,14 +102,12 @@ export interface PregenerationRequest {
   clientId: string;
 }
 
-// Articles above this are not pre-generated (the server-side cap); they still
-// stream on demand.
-const MAX_PREGENERATION_CHARS = 50000;
-
-// How long the reader waits on a running pre-generation before giving up and
-// streaming after all. Four parallel sessions finish a long article well
-// inside this; past it the job is presumed stuck.
-const MAX_PREGENERATION_WAIT_MS = 8 * 60 * 1000;
+// How long the reader waits on a running pre-generation before streaming
+// after all. Two minutes covers the tail of a job that was started when the
+// article was queued; a job older than PREGENERATION_STALE_MS was killed by
+// the runtime and is not worth waiting for at all.
+const MAX_PREGENERATION_WAIT_MS = 2 * 60 * 1000;
+const PREGENERATION_STALE_MS = 11 * 60 * 1000;
 const DEFAULT_PREGENERATION_POLL_MS = 1500;
 
 export function App({
@@ -243,6 +244,9 @@ export function App({
   const activeStreamRef = useRef<{ cancel(): void } | null>(null);
   // Object URL of a REST-fallback Blob, revoked on the next load / unmount.
   const restObjectUrlRef = useRef<string | null>(null);
+  // Set by the "Play now" button on the waiting banner: stop waiting for the
+  // server job and stream (accepting a second synthesis for this article).
+  const skipPregenerationWaitRef = useRef(false);
   const lastProgressSaveRef = useRef(0);
   const clauseLengthRef = useRef<4 | 6 | 9>(6);
 
@@ -325,6 +329,7 @@ export function App({
     setAwaitingPregeneration(false);
     setFallbackReason(null);
     setTruncationNotice(null);
+    skipPregenerationWaitRef.current = false;
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
 
@@ -642,19 +647,22 @@ export function App({
       try {
         const contentDigest = await articleContentDigest(narratedText);
         if (!isCurrentLoad()) return;
-        let status = await lookupPregenerationStatus({ contentDigest, voice });
+        let job = await lookupPregenerationStatus({ contentDigest, voice });
         if (!isCurrentLoad()) return;
-        if (status === 'running') {
+        const isLiveJob = (candidate: PregenerationJobStatus) =>
+          candidate.status === 'running' &&
+          (candidate.startedAt === null || Date.now() - candidate.startedAt < PREGENERATION_STALE_MS);
+        if (isLiveJob(job)) {
           setAwaitingPregeneration(true);
           const deadline = Date.now() + MAX_PREGENERATION_WAIT_MS;
-          while (status === 'running' && Date.now() < deadline) {
+          while (isLiveJob(job) && Date.now() < deadline && !skipPregenerationWaitRef.current) {
             await new Promise((resolve) => setTimeout(resolve, pregenerationPollMs));
             if (!isCurrentLoad()) return;
-            status = await lookupPregenerationStatus({ contentDigest, voice });
+            job = await lookupPregenerationStatus({ contentDigest, voice });
           }
           if (!isCurrentLoad()) return;
           setAwaitingPregeneration(false);
-          if (status === 'done') {
+          if (job.status === 'done') {
             const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
             if (!isCurrentLoad()) return;
             if (cachedTrack) {
@@ -1162,6 +1170,16 @@ export function App({
                 : truncationNotice ?? undefined
             }
             infoBusy={awaitingPregeneration}
+            infoAction={
+              awaitingPregeneration
+                ? {
+                    label: 'Play now',
+                    onClick: () => {
+                      skipPregenerationWaitRef.current = true;
+                    },
+                  }
+                : undefined
+            }
           />
         </div>
       )}

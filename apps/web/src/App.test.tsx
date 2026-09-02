@@ -36,7 +36,10 @@ type TestAppProps = {
     voice: string;
     clientId: string;
   }) => Promise<unknown>;
-  pregenerationStatus?: (input: { contentDigest: string; voice: string }) => Promise<'none' | 'running' | 'done' | 'failed'>;
+  pregenerationStatus?: (input: { contentDigest: string; voice: string }) => Promise<{
+    status: 'none' | 'running' | 'done' | 'failed';
+    startedAt: number | null;
+  }>;
   pregenerationPollMs?: number;
 };
 
@@ -53,7 +56,9 @@ function renderApp(props: TestAppProps = {}) {
         persistExactTrack={props.persistExactTrack ?? (() => Promise.resolve())}
         serverExactCacheEnabled={props.serverExactCacheEnabled ?? true}
         requestPregeneration={props.requestPregeneration ?? (() => Promise.resolve())}
-        pregenerationStatus={props.pregenerationStatus ?? (() => Promise.resolve('none' as const))}
+        pregenerationStatus={
+          props.pregenerationStatus ?? (() => Promise.resolve({ status: 'none' as const, startedAt: null }))
+        }
         pregenerationPollMs={props.pregenerationPollMs ?? 10}
       />
     </ConvexAppProvider>
@@ -1159,7 +1164,7 @@ test('an article whose pre-generation is running is awaited and then played from
       },
       pregenerationStatus: async () => {
         statusPolls += 1;
-        return statusPolls < 3 ? 'running' : 'done';
+        return { status: statusPolls < 3 ? 'running' : 'done', startedAt: Date.now() - 1000 };
       },
       pregenerationPollMs: 5,
     });
@@ -1182,7 +1187,7 @@ test('a failed pre-generation falls through to a normal live stream', async () =
     streamingTransport: transport.open,
     requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
     loadExactTrack: async () => null,
-    pregenerationStatus: async () => 'failed',
+    pregenerationStatus: async () => ({ status: 'failed', startedAt: Date.now() - 1000 }),
   });
   await narrateRawText(container, 'Exact timing');
   await waitFor(() => expect(transport.streams).toHaveLength(1));
@@ -1228,4 +1233,38 @@ test('the degraded banner names the reason the live stream failed', async () => 
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
   }
+});
+
+test('a job left running for longer than the action limit is ignored and the article streams', async () => {
+  const transport = fakeStreamingTransport();
+  const { container } = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+    loadExactTrack: async () => null,
+    pregenerationStatus: async () => ({ status: 'running', startedAt: Date.now() - 12 * 60 * 1000 }),
+  });
+  await narrateRawText(container, 'Exact timing');
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+  expect(container.textContent).not.toContain('Preparing audio');
+});
+
+test('Play now stops waiting for a running job and streams instead', async () => {
+  const transport = fakeStreamingTransport();
+  const { container } = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+    loadExactTrack: async () => null,
+    pregenerationStatus: async () => ({ status: 'running', startedAt: Date.now() - 1000 }),
+    pregenerationPollMs: 5,
+  });
+  await narrateRawText(container, 'Exact timing');
+  await waitFor(() => expect(container.textContent).toContain('Preparing audio'));
+  expect(transport.streams).toHaveLength(0);
+
+  const playNow = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Play now') as HTMLButtonElement;
+  expect(playNow).toBeTruthy();
+  fireEvent.click(playNow);
+
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+  expect(container.textContent).not.toContain('Preparing audio');
 });

@@ -787,3 +787,13 @@ are not re-audited from scratch next session.
   article never asks one session for more than ~6 minutes of speech. The REST cap rose to
   50,000 to match. The degraded banner now states the reason of the last failure (e.g.
   `Reason: live stream failed: …`) so the next report needs no console digging.
+
+- **023 follow-up 5 — a pre-generation job that cannot finish must not hold the reader
+  (2026-09-02).** The long article from follow-up 4 had also spawned a pre-generation job
+  (~11 minutes of synthesis) that Convex killed at its 10-minute action limit, leaving the row
+  `running`; the reader then waited its full 8 minutes on it — "loading forever". Now:
+  `tts.pregenerate` skips text over `MAX_PREGENERATION_CHARS` (24,000 chars, one wave of four
+  sessions, ~5 min); the synthesis timeout is 7 min so a stuck job is recorded `failed` instead
+  of killed; `pregenerationStatus` returns `startedAt` and the reader ignores a `running` job
+  older than 11 minutes; the wait is capped at 2 minutes; and the waiting banner has a
+  "Play now" button that streams immediately (an explicit second synthesis).

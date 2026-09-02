@@ -27,7 +27,9 @@ export interface GenerateTrackOptions {
   openStream?: (options: OpenParallelSonioxStreamOptions) => { cancel(): void };
 }
 
-const DEFAULT_TIMEOUT_MS = 8 * 60 * 1000;
+// Under Convex's 10-minute action limit, so a stuck synthesis is recorded as
+// failed rather than the action being killed with the job left "running".
+const DEFAULT_TIMEOUT_MS = 7 * 60 * 1000;
 
 export function generateTrackWithSoniox(options: GenerateTrackOptions): Promise<GeneratedTrack> {
   const text = options.text.trim();

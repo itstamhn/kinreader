@@ -6,6 +6,7 @@ import { internalAction } from '../_generated/server';
 import { internal } from '../_generated/api';
 import { generateTrackWithSoniox } from '../../shared/tts/generateTrack';
 import type { SonioxSocketConstructor } from '../../shared/tts/sonioxStream';
+import { MAX_PREGENERATION_CHARS } from '../../shared/tts/limits';
 
 // Server-side synthesis of a whole article into the global exact-track cache.
 // Runs in the Node runtime because it needs a WebSocket client (Soniox's
@@ -16,8 +17,6 @@ import type { SonioxSocketConstructor } from '../../shared/tts/sonioxStream';
 // The flow is deliberately the same as the reader's live stream -- the same
 // parallel client, accumulator and MP3 handling -- so a pre-generated track and
 // a streamed one are byte-for-byte the same kind of thing.
-
-const MAX_PREGENERATION_CHARS = 50000;
 
 export const generate = internalAction({
   args: {

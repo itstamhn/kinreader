@@ -45,3 +45,10 @@ export function narrationText(content: string): NarrationText {
   const narratedWords = text.split(/\s+/).filter(Boolean).length;
   return { text, truncated: true, totalWords: words.length, narratedWords };
 }
+
+// Server-side pre-generation runs inside a Convex action, which is killed at
+// ten minutes. Four concurrent Soniox sessions at roughly spoken pace cover
+// about 24,000 characters (~20 minutes of speech) in ~5 minutes wall time;
+// anything longer is left to stream live rather than start a job that cannot
+// finish.
+export const MAX_PREGENERATION_CHARS = 24000;

@@ -34,7 +34,10 @@ export declare const api: {
         "query",
         "public",
         { contentDigest: string; voice: string },
-        "none" | "running" | "done" | "failed"
+        {
+          startedAt: number | null;
+          status: "none" | "running" | "done" | "failed";
+        }
       >;
       pregenerate: FunctionReference<
         "action",
@@ -390,7 +393,10 @@ export declare const internal: {
         "query",
         "internal",
         { contentDigest: string; voice: string },
-        "none" | "running" | "done" | "failed"
+        {
+          startedAt?: number;
+          status: "none" | "running" | "done" | "failed";
+        }
       >;
       claimPregenerationJob: FunctionReference<
         "mutation",

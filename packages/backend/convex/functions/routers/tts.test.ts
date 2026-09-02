@@ -1589,14 +1589,27 @@ test('pregenerate honours the global rate limit and never schedules when denied'
 test('pregenerationStatus reports none, then the job state, without needing sign-in', async () => {
   const t = convexTest(schema, modules);
   const input = { contentDigest: EXACT_CONTENT_DIGEST, voice: 'Adrian' };
-  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('none');
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toEqual({ status: 'none', startedAt: null });
 
   await t.mutation(internal.routers.ttsInternal.claimPregenerationJob, input);
-  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('running');
+  const running = await t.query(api.routers.tts.pregenerationStatus, input);
+  expect(running.status).toBe('running');
+  expect(typeof running.startedAt).toBe('number');
 
   await t.mutation(internal.routers.ttsInternal.completePregenerationJob, { ...input, status: 'failed', error: 'x' });
-  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('failed');
+  expect((await t.query(api.routers.tts.pregenerationStatus, input)).status).toBe('failed');
 
   await t.mutation(internal.routers.ttsInternal.completePregenerationJob, { ...input, status: 'done' });
-  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('done');
+  expect((await t.query(api.routers.tts.pregenerationStatus, input)).status).toBe('done');
+});
+
+test('pregenerate skips articles too long to finish inside an action', async () => {
+  const t = convexTest(schema, modules);
+  const result = await t.action(api.routers.tts.pregenerate, {
+    text: 'word '.repeat(6000), // ~30k chars, over the pre-generation bound
+    voice: 'Adrian',
+    clientId: 'c',
+  });
+  expect(result).toEqual({ status: 'skipped' });
+  expect(await t.run(async (ctx) => ctx.db.query('ttsPregenerationJobs').collect())).toEqual([]);
 });
