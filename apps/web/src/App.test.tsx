@@ -417,20 +417,16 @@ test('progressive WebSocket playback is enabled immediately and Space uses the s
   }
 });
 
-test('Blob-only WebSocket playback buffers normally, blocks Space, then enables play at audio_end', async () => {
+test('without MediaSource the reader is playable at once, holds until audio exists, and plays parts as they land', async () => {
   const transport = fakeStreamingTransport();
   const originalMediaSource = (window as any).MediaSource;
   const originalManagedMediaSource = (window as any).ManagedMediaSource;
   const originalCreateObjectURL = URL.createObjectURL;
-  const originalPlay = SpeechEngine.prototype.play;
-  let playCalls = 0;
+  let elementPlays = 0;
 
   (window as any).MediaSource = undefined;
   (window as any).ManagedMediaSource = undefined;
-  URL.createObjectURL = () => 'blob:completed-source';
-  SpeechEngine.prototype.play = function () {
-    playCalls += 1;
-  };
+  URL.createObjectURL = () => 'blob:part';
 
   try {
     const { container } = renderApp({
@@ -439,12 +435,20 @@ test('Blob-only WebSocket playback buffers normally, blocks Space, then enables 
     });
     await narrateRawText(container, 'Blob playback');
     await waitFor(() => expect(transport.streams).toHaveLength(1));
+    const engine = (window as any).__engine as SpeechEngine;
+    (engine as any).audio.play = function () {
+      elementPlays += 1;
+      return Promise.resolve();
+    };
 
-    let playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
-    expect(playButton.disabled).toBe(true);
+    // Play is enabled before any audio; pressing it holds rather than refusing.
+    const playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
+    expect(playButton.disabled).toBe(false);
     expect(container.textContent).not.toContain('Neural voice unavailable');
     fireEvent.keyDown(window, { code: 'Space' });
-    expect(playCalls).toBe(0);
+    expect(engine.isPlaying).toBe(true);
+    expect(engine.getSnapshot().isBuffering).toBe(true);
+    expect(elementPlays).toBe(0);
 
     act(() => {
       transport.streams[0]!.options.handlers.onAudio(new Uint8Array([1, 2, 3]));
@@ -452,18 +456,14 @@ test('Blob-only WebSocket playback buffers normally, blocks Space, then enables 
       transport.streams[0]!.options.handlers.onDone();
     });
 
-    await waitFor(() => {
-      playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
-      expect(playButton.disabled).toBe(false);
-    });
+    // The stream's end turns the retained bytes into the final part and playback starts.
+    await waitFor(() => expect(elementPlays).toBe(1));
+    expect(engine.getSnapshot().isBuffering).toBe(false);
     expect(container.textContent).not.toContain('Neural voice unavailable');
-    fireEvent.keyDown(window, { code: 'Space' });
-    expect(playCalls).toBe(1);
   } finally {
     (window as any).MediaSource = originalMediaSource;
     (window as any).ManagedMediaSource = originalManagedMediaSource;
     URL.createObjectURL = originalCreateObjectURL;
-    SpeechEngine.prototype.play = originalPlay;
   }
 });
 

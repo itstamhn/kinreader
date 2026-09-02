@@ -110,6 +110,27 @@ const MAX_PREGENERATION_WAIT_MS = 2 * 60 * 1000;
 const PREGENERATION_STALE_MS = 11 * 60 * 1000;
 const DEFAULT_PREGENERATION_POLL_MS = 1500;
 
+// No lookup on the way to playback may hang the reader: a cache read, a job
+// status or a key request that does not answer in time is treated as a miss
+// and the next step runs. The spinner must always resolve to something.
+const LOOKUP_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 export function App({
   // Several concurrent Soniox sessions re-serialised into one stream, so audio
   // arrives faster than it is played back (see utils/parallelSoniox.ts).
@@ -515,9 +536,11 @@ export function App({
 
     const runWebSocketAttempt = async (retryCount: number): Promise<void> => {
       try {
-        const temporaryKey = await (requestTemporaryKey
-          ? requestTemporaryKey(clientId)
-          : temporaryKeyMutation.mutateAsync({ clientId }));
+        const temporaryKey = await withTimeout(
+          requestTemporaryKey ? requestTemporaryKey(clientId) : temporaryKeyMutation.mutateAsync({ clientId }),
+          LOOKUP_TIMEOUT_MS,
+          'temporary key request'
+        );
         if (!isCurrentLoad()) return;
 
         const accumulator = createWordTimingAccumulator(narratedText);
@@ -631,7 +654,11 @@ export function App({
 
     if (canReadServerExactCache && cacheUrl) {
       try {
-        const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
+        const cachedTrack = await withTimeout(
+          lookupExactTrack({ url: cacheUrl, voice }),
+          LOOKUP_TIMEOUT_MS,
+          'cache lookup'
+        );
         if (!isCurrentLoad()) return;
         if (cachedTrack) {
           loadCachedTrack(cachedTrack);
@@ -647,7 +674,11 @@ export function App({
       try {
         const contentDigest = await articleContentDigest(narratedText);
         if (!isCurrentLoad()) return;
-        let job = await lookupPregenerationStatus({ contentDigest, voice });
+        let job = await withTimeout(
+          lookupPregenerationStatus({ contentDigest, voice }),
+          LOOKUP_TIMEOUT_MS,
+          'pre-generation status'
+        );
         if (!isCurrentLoad()) return;
         const isLiveJob = (candidate: PregenerationJobStatus) =>
           candidate.status === 'running' &&
@@ -658,12 +689,20 @@ export function App({
           while (isLiveJob(job) && Date.now() < deadline && !skipPregenerationWaitRef.current) {
             await new Promise((resolve) => setTimeout(resolve, pregenerationPollMs));
             if (!isCurrentLoad()) return;
-            job = await lookupPregenerationStatus({ contentDigest, voice });
+            job = await withTimeout(
+              lookupPregenerationStatus({ contentDigest, voice }),
+              LOOKUP_TIMEOUT_MS,
+              'pre-generation status'
+            );
           }
           if (!isCurrentLoad()) return;
           setAwaitingPregeneration(false);
           if (job.status === 'done') {
-            const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
+            const cachedTrack = await withTimeout(
+              lookupExactTrack({ url: cacheUrl, voice }),
+              LOOKUP_TIMEOUT_MS,
+              'cache lookup'
+            );
             if (!isCurrentLoad()) return;
             if (cachedTrack) {
               loadCachedTrack(cachedTrack);

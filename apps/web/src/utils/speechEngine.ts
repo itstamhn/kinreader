@@ -1,4 +1,5 @@
 import type { WordTiming } from '../types';
+import { concatBytes, scanMp3Frames } from './mp3Duration';
 
 // The reactive surface `useSyncExternalStore` subscribes to (plan 018,
 // Step 3). One object per change, replaced only when something in it
@@ -40,8 +41,33 @@ export class SpeechEngine {
   private sourceUpdateEndHandler: (() => void) | null = null;
   private sourceErrorHandler: (() => void) | null = null;
   private streamFinishRequested: boolean = false;
-  private completedBlobPlaybackInstalled: boolean = false;
   private streamGeneration: number = 0;
+
+  // --- Progressive playback without MediaSource ("parts" mode) -----------
+  //
+  // Safari's MediaSource does not accept audio/mpeg and older iPhones have no
+  // MediaSource at all. Without it the old engine waited for the *entire*
+  // article before Play would enable -- ten-plus minutes on a long piece,
+  // which read as "loading forever". Instead the incoming MP3 bytes are cut at
+  // frame boundaries into parts of a few dozen seconds, each its own Blob URL,
+  // and the element plays them back to back: part N+1 is loaded the moment
+  // part N ends. The word timeline stays one continuous clock because media
+  // time is `parts[current].start + audio.currentTime`.
+  //
+  // The first part is short so listening starts within seconds; later parts
+  // are longer so the seams (a few milliseconds each) are rare.
+  public static FIRST_PART_SECONDS = 20;
+  public static PART_SECONDS = 45;
+  private partsMode: boolean = false;
+  private parts: Array<{ url: string; start: number; duration: number }> = [];
+  private partsTotalSeconds: number = 0;
+  private pendingPartBytes: Uint8Array[] = [];
+  private pendingPartByteLength: number = 0;
+  private currentPart: number = -1;
+  private partOffset: number = 0;
+  private awaitingNextPart: boolean = false;
+  private streamComplete: boolean = false;
+
   public isStreaming: boolean = false;
   public progressivePlaybackAvailable: boolean = false;
   public playbackReady: boolean = false;
@@ -76,7 +102,10 @@ export class SpeechEngine {
         this.audioErrorHandler = null;
         handler?.();
       };
-      this.audio.onended = () => this.handleEnded();
+      this.audio.onended = () => {
+        if (this.partsMode) this.onPartEnded();
+        else this.handleEnded();
+      };
       // The real audio duration only becomes knowable once enough of the
       // stream has arrived, and which event delivers it varies by browser --
       // `calibrateToAudioDuration` is a cheap no-op until it is trustworthy.
@@ -304,6 +333,7 @@ export class SpeechEngine {
   }
 
   private bufferedEnd(): number {
+    if (this.partsMode) return this.partsTotalSeconds;
     const ranges = this.bufferedRanges();
     if (!ranges || ranges.length === 0) return 0;
     return ranges.end(ranges.length - 1);
@@ -312,6 +342,10 @@ export class SpeechEngine {
   // Media seconds available past the playhead in the range it sits in.
   private bufferedAhead(): number {
     if (!this.audio) return 0;
+    if (this.partsMode) {
+      if (this.currentPart < 0) return 0;
+      return Math.max(0, this.partsTotalSeconds - (this.partOffset + this.audio.currentTime));
+    }
     const ranges = this.bufferedRanges();
     if (!ranges || ranges.length === 0) return 0;
     const position = this.audio.currentTime;
@@ -326,6 +360,7 @@ export class SpeechEngine {
   // True while a progressive session still has audio on the way. Once the
   // stream is complete, nothing is worth waiting for.
   private moreAudioExpected(): boolean {
+    if (this.partsMode) return !this.streamComplete;
     return this.mediaSource !== null && (this.isStreaming || this.pendingAudioChunks.length > 0);
   }
 
@@ -375,6 +410,16 @@ export class SpeechEngine {
 
   private maybeResumeFromBuffering() {
     if (!this.isBuffering || !this.isPlaying || !this.audio) return;
+    if (this.partsMode) {
+      // Nothing loaded yet, or the element ran off the end of a part: the next
+      // part has to exist before there is anything to resume.
+      if (this.currentPart < 0 || this.awaitingNextPart) {
+        const next = this.currentPart + 1;
+        if (!this.parts[next]) return;
+        this.loadPart(next, 0);
+        this.awaitingNextPart = false;
+      }
+    }
     if (this.shouldHoldForBuffer()) return;
     this.isBuffering = false;
     this.lastAudioCurrentTime = -1;
@@ -386,6 +431,132 @@ export class SpeechEngine {
     this.isBuffering = false;
     this.productionFirst = null;
     this.productionLatest = null;
+  }
+
+  // --- Parts mode internals -------------------------------------------------
+
+  private enablePartsMode() {
+    this.partsMode = true;
+    this.progressivePlaybackAvailable = true;
+    // Playable in the same sense as a MediaSource session: pressing Play
+    // before the first part has arrived holds (buffering) and starts on its
+    // own, rather than being refused.
+    this.playbackReady = true;
+  }
+
+  private resetParts() {
+    for (const part of this.parts) {
+      try {
+        URL.revokeObjectURL(part.url);
+      } catch {}
+    }
+    this.partsMode = false;
+    this.parts = [];
+    this.partsTotalSeconds = 0;
+    this.pendingPartBytes = [];
+    this.pendingPartByteLength = 0;
+    this.currentPart = -1;
+    this.partOffset = 0;
+    this.awaitingNextPart = false;
+    this.streamComplete = false;
+  }
+
+  // Cut the pending bytes into a part once enough audio has accumulated (or
+  // unconditionally at the end of the stream). Cuts land on MP3 frame
+  // boundaries so each part decodes on its own.
+  private maybeCutPart(force: boolean) {
+    if (!this.partsMode || this.pendingPartBytes.length === 0) return;
+    const target = this.parts.length === 0 ? SpeechEngine.FIRST_PART_SECONDS : SpeechEngine.PART_SECONDS;
+    // ~16 KB/s at 128 kbps: skip the scan until a part could plausibly fit.
+    if (!force && this.pendingPartByteLength < target * 12000) return;
+
+    const bytes = concatBytes(this.pendingPartBytes);
+    const scan = scanMp3Frames(bytes);
+    if (!force && scan.seconds < target) return;
+
+    let partBytes: Uint8Array;
+    let remainder: Uint8Array | null;
+    if (force || scan.consumedBytes >= bytes.byteLength) {
+      partBytes = bytes;
+      remainder = null;
+    } else {
+      partBytes = bytes.slice(0, scan.consumedBytes);
+      remainder = bytes.slice(scan.consumedBytes);
+    }
+    this.pendingPartBytes = remainder && remainder.byteLength > 0 ? [remainder] : [];
+    this.pendingPartByteLength = remainder?.byteLength ?? 0;
+    if (partBytes.byteLength === 0) return;
+    this.addPart(partBytes, force ? scan.seconds : Math.min(scan.seconds, scanMp3Frames(partBytes).seconds));
+  }
+
+  private addPart(bytes: Uint8Array, seconds: number) {
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'audio/mpeg' }));
+    this.parts.push({ url, start: this.partsTotalSeconds, duration: seconds });
+    this.partsTotalSeconds += seconds;
+    this.recordProductionSample();
+    this.playbackReady = true;
+    if (this.currentPart < 0) {
+      this.loadPart(0, 0);
+    }
+    // Waiting listeners (Play pressed before the first part, or the element
+    // ran off the end of the last available part) can move on now.
+    this.maybeResumeFromBuffering();
+    this.notify();
+  }
+
+  private loadPart(index: number, offsetWithin: number) {
+    const part = this.parts[index];
+    if (!part || !this.audio) return;
+    this.currentPart = index;
+    this.partOffset = part.start;
+    this.audio.src = part.url;
+    this.audio.playbackRate = this._rate;
+    this.audio.defaultPlaybackRate = this._rate;
+    if (offsetWithin > 0) this.audio.currentTime = offsetWithin;
+    this.lastAudioCurrentTime = -1;
+  }
+
+  private onPartEnded() {
+    const next = this.currentPart + 1;
+    if (this.parts[next]) {
+      this.loadPart(next, 0);
+      if (this.isPlaying && !this.isBuffering && this.audio) this.audio.play().catch(() => {});
+      return;
+    }
+    if (this.streamComplete) {
+      this.handleEnded();
+      return;
+    }
+    // Ran off the end of what has arrived: hold until the next part lands.
+    this.awaitingNextPart = true;
+    if (this.isPlaying) this.enterBuffering();
+  }
+
+  // Position the element at a point on the continuous timeline, loading the
+  // part that contains it when it is not the current one.
+  private seekAudioTo(targetTime: number) {
+    if (!this.audio) return;
+    if (!this.partsMode) {
+      this.audio.currentTime = targetTime;
+      return;
+    }
+    if (this.parts.length === 0) return;
+    const clamped = Math.max(0, Math.min(targetTime, Math.max(0, this.partsTotalSeconds - 0.05)));
+    let index = this.parts.length - 1;
+    for (let i = 0; i < this.parts.length; i += 1) {
+      const part = this.parts[i]!;
+      if (clamped < part.start + part.duration) {
+        index = i;
+        break;
+      }
+    }
+    const within = Math.max(0, clamped - this.parts[index]!.start);
+    this.awaitingNextPart = false;
+    if (index !== this.currentPart) {
+      loadPartAndMaybePlay(this, index, within);
+    } else {
+      this.audio.currentTime = within;
+    }
   }
 
   // --- Real-Time Audio Streaming (Soniox WebSocket) -----------------------
@@ -404,6 +575,7 @@ export class SpeechEngine {
     this.pendingAudioChunks = [];
     this.allAudioChunks = [];
     this.resetBufferControl();
+    this.resetParts();
 
     if (typeof window !== 'undefined') {
       const standardSource = (window as any).MediaSource;
@@ -469,6 +641,9 @@ export class SpeechEngine {
           console.warn('MediaSource creation error:', err);
         }
       }
+      // No usable MediaSource (Safari, older iOS): play in parts instead of
+      // waiting for the whole article.
+      if (!this.mediaSource) this.enablePartsMode();
     }
     this.notify();
     return this.progressivePlaybackAvailable;
@@ -501,6 +676,10 @@ export class SpeechEngine {
     if (this.mediaSource) {
       this.pendingAudioChunks.push(chunk);
       this.flushPendingChunks();
+    } else if (this.partsMode) {
+      this.pendingPartBytes.push(chunk);
+      this.pendingPartByteLength += chunk.byteLength;
+      this.maybeCutPart(false);
     }
   }
 
@@ -523,30 +702,25 @@ export class SpeechEngine {
     this.isStreaming = false;
     this.streamFinishRequested = true;
     this.flushPendingChunks();
-    this.maybeResumeFromBuffering();
 
     const blob = new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
-    this.installCompletedBlobPlayback(blob);
+    if (this.partsMode) {
+      // Whatever is left becomes the final part; the whole track is now here.
+      this.maybeCutPart(true);
+      this.streamComplete = true;
+      if (this.awaitingNextPart && this.parts[this.currentPart + 1]) {
+        this.awaitingNextPart = false;
+        this.loadPart(this.currentPart + 1, 0);
+        if (this.isPlaying && this.audio) this.audio.play().catch(() => {});
+      } else if (this.awaitingNextPart) {
+        // Ended on the last part while waiting for more: that was the end.
+        this.awaitingNextPart = false;
+        this.handleEnded();
+      }
+    }
+    this.maybeResumeFromBuffering();
     this.notify();
     return blob;
-  }
-
-  private installCompletedBlobPlayback(blob?: Blob) {
-    if (
-      this.completedBlobPlaybackInstalled ||
-      this.mediaSource ||
-      !this.audio ||
-      this.allAudioChunks.length === 0
-    ) return;
-
-    const completedBlob = blob ?? new Blob(this.allAudioChunks as any[], { type: 'audio/mpeg' });
-    this.revokeOwnedObjectUrl();
-    this.ownedObjectUrl = URL.createObjectURL(completedBlob);
-    this.audio.src = this.ownedObjectUrl;
-    this.audio.playbackRate = this._rate;
-    this.audio.defaultPlaybackRate = this._rate;
-    this.completedBlobPlaybackInstalled = true;
-    this.playbackReady = true;
   }
 
   private handleProgressiveSourceFailure(error: unknown) {
@@ -559,10 +733,16 @@ export class SpeechEngine {
     this.isPlaying = false;
     this.stopSyncLoop();
     this.cleanupStreamingSource();
-    if (this.audio && !this.streamFinishRequested) this.audio.src = '';
-    if (this.streamFinishRequested) this.installCompletedBlobPlayback();
+    if (this.audio) this.audio.src = '';
+    // Carry on in parts with everything received so far; the stream keeps
+    // feeding appendAudioChunk, which now cuts parts instead of appending.
+    this.enablePartsMode();
+    this.pendingPartBytes = [...this.allAudioChunks];
+    this.pendingPartByteLength = this.allAudioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+    this.maybeCutPart(this.streamFinishRequested);
+    if (this.streamFinishRequested) this.streamComplete = true;
     this.notify();
-    console.warn('Progressive audio source failed; retaining bytes for Blob playback:', error);
+    console.warn('Progressive audio source failed; continuing in parts:', error);
   }
 
   public isSpeechSynthesisSupported(): boolean {
@@ -692,9 +872,9 @@ export class SpeechEngine {
     this.playbackReady = false;
     this.authoritativeTimings = false;
     this.streamFinishRequested = false;
-    this.completedBlobPlaybackInstalled = false;
     this.calibrated = false;
     this.resetBufferControl();
+    this.resetParts();
 
     if (this.audio) {
       this.audio.pause();
@@ -763,7 +943,7 @@ export class SpeechEngine {
     this._progress = this.duration > 0 ? (targetTime / this.duration) * 100 : 0;
 
     if (this.mode === 'audio' && this.audio) {
-      this.audio.currentTime = targetTime;
+      this.seekAudioTo(targetTime);
       this.notify();
     } else if (this.mode === 'browser') {
       this.notify();
@@ -799,7 +979,7 @@ export class SpeechEngine {
     this._progress = clampedPercent;
 
     if (this.mode === 'audio' && this.audio) {
-      this.audio.currentTime = targetTime;
+      this.seekAudioTo(targetTime);
       this.notify();
     } else if (this.mode === 'browser') {
       this.notify();
@@ -831,7 +1011,7 @@ export class SpeechEngine {
   // it. Without this the highlight drifts further from the voice with every
   // sentence, at any speed.
   private calibrateToAudioDuration() {
-    if (this.calibrated || this.authoritativeTimings || !this.audio || this.mode !== 'audio') return;
+    if (this.calibrated || this.authoritativeTimings || this.partsMode || !this.audio || this.mode !== 'audio') return;
 
     const real = this.audio.duration;
     if (!Number.isFinite(real) || real <= 0) return;
@@ -875,7 +1055,9 @@ export class SpeechEngine {
   private syncFromAudioTick(dt: number = 0) {
     if (!this.audio || this.mode !== 'audio') return;
 
-    const audioTime = this.audio.currentTime;
+    // In parts mode the element only knows its current part; the timeline is
+    // the part's start plus the element's position.
+    const audioTime = this.partOffset + this.audio.currentTime;
 
     // Streaming buffer control: refill when the cushion is gone, resume once
     // it is back (or the stream has finished and there is nothing to wait for).
@@ -895,8 +1077,13 @@ export class SpeechEngine {
     // playback while Soniox was still talking.
     const lastWord = this.words[this.words.length - 1];
     const wordsDuration = lastWord ? lastWord.end : 0;
-    const realDuration =
-      Number.isFinite(this.audio.duration) && this.audio.duration > 0 ? this.audio.duration : 0;
+    const realDuration = this.partsMode
+      ? this.streamComplete
+        ? this.partsTotalSeconds
+        : 0
+      : Number.isFinite(this.audio.duration) && this.audio.duration > 0
+        ? this.audio.duration
+        : 0;
     this.duration = realDuration || wordsDuration || this.duration;
 
     // The audio element is the clock, full stop. `currentTime` is media time
@@ -952,7 +1139,8 @@ export class SpeechEngine {
     // Only the audio decides when playback is over. While a chunked stream is
     // still arriving there is no real duration, and the estimate is not
     // evidence of the end -- the highlight simply holds on the last word.
-    if (this.audio.ended || (realDuration > 0 && curTime >= realDuration - 0.05)) {
+    // In parts mode `ended` is a part boundary, handled by onPartEnded.
+    if (!this.partsMode && (this.audio.ended || (realDuration > 0 && curTime >= realDuration - 0.05))) {
       this.handleEnded();
       return;
     }
@@ -1036,4 +1224,16 @@ export class SpeechEngine {
     this.notify();
     this.stopSyncLoop();
   }
+}
+
+// Load a part for a seek and keep playing if playback was running.
+function loadPartAndMaybePlay(engine: SpeechEngine, index: number, offsetWithin: number) {
+  const self = engine as unknown as {
+    loadPart(index: number, offsetWithin: number): void;
+    isPlaying: boolean;
+    isBuffering: boolean;
+    audio: HTMLAudioElement | null;
+  };
+  self.loadPart(index, offsetWithin);
+  if (self.isPlaying && !self.isBuffering && self.audio) self.audio.play().catch(() => {});
 }
