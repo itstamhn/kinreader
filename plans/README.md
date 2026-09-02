@@ -810,3 +810,23 @@ are not re-audited from scratch next session.
   part ending is the real end. It is also the landing when MediaSource exists but the MP3
   SourceBuffer cannot be created. Separately, the cache/key/pre-generation lookups before a
   stream now time out at 8 s so a slow backend cannot hold the reader on "Preparing".
+
+- **023 follow-up 7 — exact sync must survive a character Soniox does not echo (2026-09-02).**
+  First report after the parts-mode deploy: "Exact word sync unavailable … Reason: live stream
+  failed: Soniox character stream mismatch at offset 935". The word-timing accumulator
+  required every character Soniox returned to equal the article's, and one difference (a
+  normalised quote, a dropped soft hyphen or symbol, a no-break space read as a space) failed
+  the whole live stream, which then re-synthesised over REST with estimated timing: exact sync
+  lost and Soniox paid twice for one article. Now: (1) `shared/tts/limits.ts` strips invisible
+  format/control characters and normalises to NFC before the text is displayed, streamed,
+  hashed or pre-generated; (2) the accumulator *aligns* Soniox's characters to the article
+  (whitespace of any kind is a boundary, invisible and skipped punctuation take no time, a
+  one-for-one substitution keeps the voiced time, extra trailing sound extends the last word)
+  and word text always comes from the article, so cached tracks still pass the server's
+  coverage check; only letters Soniox never voiced remain an error, from `flush()`; (3) in the
+  reader an alignment failure no longer tears the stream down: the audio keeps playing, words
+  before the failure stay exact, the rest keep their estimated spacing fitted onto the audio
+  that arrived (`fitEstimatedTail`), the banner says how many words are exact, and nothing is
+  persisted to the cache. Soniox's docs are unreachable from the sandbox, so the exact
+  normalisation it applies is unconfirmed; the alignment is written to tolerate the whole
+  family rather than one guessed case.

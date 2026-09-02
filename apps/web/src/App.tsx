@@ -69,6 +69,29 @@ const REST_GET_MAX_CHARS = 6000;
 // drag or a run of arrow-key seeks is one write, not one per word).
 const PROGRESS_SAVE_INTERVAL_MS = { playing: 5000, paused: 1000 } as const;
 
+// When exact timings stop partway through a live stream, the words after the
+// last exact one keep their estimated spacing but are fitted onto the audio
+// that actually arrived, so the highlight ends when the voice does.
+export function fitEstimatedTail(words: WordTiming[], exactCount: number, audioSeconds: number): WordTiming[] {
+  if (exactCount >= words.length || exactCount < 0) return words;
+  const joinAt = exactCount > 0 ? words[exactCount - 1]!.end : 0;
+  const tail = words.slice(exactCount);
+  const tailStart = tail[0]!.start;
+  const tailEnd = tail.at(-1)!.end;
+  if (!(audioSeconds > joinAt) || !(tailEnd > tailStart)) return words;
+  const scale = (audioSeconds - joinAt) / (tailEnd - tailStart);
+  // A wild ratio means the estimate and the audio are not the same text.
+  if (scale < 0.3 || scale > 4) return words;
+  return [
+    ...words.slice(0, exactCount),
+    ...tail.map((word) => ({
+      ...word,
+      start: Number((joinAt + (word.start - tailStart) * scale).toFixed(3)),
+      end: Number((joinAt + (word.end - tailStart) * scale).toFixed(3)),
+    })),
+  ];
+}
+
 const DEGRADED_MESSAGES = {
   audio: 'Exact word sync unavailable — using estimated timing for this article.',
   browser: 'Neural voice unavailable (using on-device speech).',
@@ -548,12 +571,38 @@ export function App({
         let audioFinished = false;
         let completedBlob: Blob | null = null;
         let attemptActive = true;
+        // Set once the timestamps can no longer be aligned to the article.
+        // The audio is fine and paid for, so it keeps playing; only the sync
+        // after this point falls back to the estimate.
+        let timingsLost: string | null = null;
         eng.startStreamingSession(initialWordTimings, totalDuration);
         setPlaybackStatus('ready');
 
+        const loseExactTimings = (error: unknown) => {
+          if (timingsLost) return;
+          timingsLost = error instanceof Error ? error.message : 'invalid timestamps';
+          console.warn('Exact word timings lost; keeping the audio with estimated timing from here:', error);
+          noteFallback(`exact word sync lost partway (${exactWords.length} words are exact): ${timingsLost}`);
+          setPlaybackStatus('degraded');
+        };
+
         const finalizeTimings = () => {
           if (!attemptActive || !isCurrentLoad()) return;
-          exactWords.push(...accumulator.flush());
+          if (!timingsLost) {
+            try {
+              exactWords.push(...accumulator.flush());
+            } catch (error) {
+              loseExactTimings(error);
+            }
+          }
+          if (timingsLost) {
+            const fitted = fitEstimatedTail(mergeAuthoritativePrefix(exactWords), exactWords.length, eng.receivedAudioSeconds);
+            eng.appendWordTimings(fitted, fitted.at(-1)?.end ?? totalDuration, { authoritative: true });
+            attemptActive = false;
+            activeStreamRef.current = null;
+            applyResume(fitted);
+            return;
+          }
           if (exactWords.length !== initialWordTimings.length) {
             attemptActive = false;
             useRestFallback('the word timings did not cover the article');
@@ -595,8 +644,13 @@ export function App({
               eng.appendAudioChunk(chunk);
             },
             onTimestamps: (batch) => {
-              if (!attemptActive || !isCurrentLoad()) return;
-              exactWords.push(...accumulator.append(batch));
+              if (!attemptActive || !isCurrentLoad() || timingsLost) return;
+              try {
+                exactWords.push(...accumulator.append(batch));
+              } catch (error) {
+                loseExactTimings(error);
+                return;
+              }
               if (exactWords.length === 0 || exactWords.length > initialWordTimings.length) return;
               const merged = mergeAuthoritativePrefix(exactWords);
               eng.appendWordTimings(merged, merged.at(-1)?.end ?? totalDuration, { authoritative: true });

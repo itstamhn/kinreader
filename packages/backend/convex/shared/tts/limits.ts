@@ -17,8 +17,23 @@ export interface NarrationText {
   narratedWords: number;
 }
 
+// Invisible characters web pages carry (soft hyphens, zero-width spaces,
+// byte-order marks, directional marks, stray controls) that a speech engine
+// never voices; taking them out here keeps the displayed text, the stream and
+// the character timestamps Soniox echoes back describing the same string.
+// The zero-width joiner survives because it holds emoji sequences together.
+const INVISIBLE_CHARACTERS = /[\p{Cf}\p{Cc}]/gu;
+const KEPT_INVISIBLE = new Set(['\n', '\t', '\u200d']);
+
+export function sanitiseNarration(content: string): string {
+  return content
+    .normalize('NFC')
+    .replace(/\r\n?/g, '\n')
+    .replace(INVISIBLE_CHARACTERS, (character) => (KEPT_INVISIBLE.has(character) ? character : ''));
+}
+
 export function narrationText(content: string): NarrationText {
-  const full = content.trim();
+  const full = sanitiseNarration(content).trim();
   const words = full.split(/\s+/).filter(Boolean);
   if (full.length <= MAX_NARRATION_CHARS && words.length <= MAX_NARRATION_WORDS) {
     return { text: full, truncated: false, totalWords: words.length, narratedWords: words.length };
