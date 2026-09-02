@@ -305,7 +305,10 @@ export const temporaryKey = action
           usage_type: 'tts_rt',
           expires_in_seconds: 300,
           max_session_duration_seconds: 900,
-          single_use: true,
+          // The reader opens several concurrent sessions per article
+          // (apps/web/src/utils/parallelSoniox.ts) on one key. The 300s
+          // expiry and the limiters above bound what a leaked key is worth.
+          single_use: false,
           client_reference_id: clientReferenceId,
         }),
       });

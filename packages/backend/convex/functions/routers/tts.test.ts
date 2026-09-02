@@ -1283,7 +1283,7 @@ test('temporaryKey posts the constrained Soniox request and returns only the tem
     usage_type: 'tts_rt',
     expires_in_seconds: 300,
     max_session_duration_seconds: 900,
-    single_use: true,
+    single_use: false,
     client_reference_id: 'browser-client-123',
   });
 });

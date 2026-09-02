@@ -37,6 +37,13 @@ export interface OpenSonioxStreamOptions {
   text: string;
   voice: string;
   handlers: SonioxStreamHandlers;
+  /**
+   * Exact messages to send instead of splitting (and trimming) `text`. The
+   * parallel transport uses this so a segment that begins or ends with
+   * whitespace is sent verbatim and its characters still line up with the
+   * article.
+   */
+  textChunks?: string[];
 }
 
 const SONIOX_WEBSOCKET_URL = 'wss://tts-rt.soniox.com/tts-websocket';
@@ -93,7 +100,13 @@ function asError(value: unknown, fallback: string): Error {
  * deliberately independent callbacks because Soniox does not co-locate them
  * in every server message.
  */
-export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxStreamOptions): { cancel(): void } {
+export function openSonioxStream({
+  apiKey,
+  text,
+  voice,
+  handlers,
+  textChunks,
+}: OpenSonioxStreamOptions): { cancel(): void } {
   const streamId = createStreamId();
   let socket: WebSocket | null = null;
   let cancelled = false;
@@ -150,7 +163,7 @@ export function openSonioxStream({ apiKey, text, voice, handlers }: OpenSonioxSt
       return_timestamps: true,
     });
 
-    const chunks = splitTextIntoSonioxChunks(text);
+    const chunks = textChunks && textChunks.length > 0 ? textChunks : splitTextIntoSonioxChunks(text);
     for (let index = 0; index < chunks.length && !failed; index += 1) {
       send({ text: chunks[index], text_end: index === chunks.length - 1, stream_id: streamId });
     }
