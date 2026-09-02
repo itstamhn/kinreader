@@ -8,9 +8,10 @@ import { splitTextIntoSonioxChunks } from '../shared/soniox';
 // origin by anyone. Everything here is pure request/response so it can be
 // unit-tested without a Convex runtime; http.ts only supplies the limiter.
 
-// Sized for a long essay (~3,500 words), not a book. Above this the reader is
-// told to use on-device speech rather than the deployment paying for it.
-export const MAX_REST_FALLBACK_CHARS = 20000;
+// Matches the reader's narration ceiling (shared/tts/limits.ts rounds down to
+// 45,000 characters and cuts at a sentence), so anything the reader can stream
+// it can also fall back to. Above this is a hand-written request.
+export const MAX_REST_FALLBACK_CHARS = 50000;
 export const MAX_CLIENT_ID_CHARS = 200;
 
 const VOICE_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;

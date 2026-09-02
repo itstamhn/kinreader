@@ -25,13 +25,20 @@ import { concatBytes, mp3DurationSeconds } from './mp3Duration';
 // real time even at 3.5x playback, which is what lets the buffer control's
 // cushion stay small and playback run without refills.
 
+// How many Soniox sessions are open at once. Segments beyond this wait for a
+// slot, so a long article becomes waves of sessions rather than a burst.
 export const MAX_PARALLEL_SEGMENTS = 4;
 // Below this a second session costs more in setup than it saves.
 export const MIN_CHARS_PER_SEGMENT = 1200;
+// No single session is asked for more than this (~6 minutes of speech), which
+// keeps each one well inside Soniox's session limits however long the article.
+export const MAX_CHARS_PER_SEGMENT = 6000;
 const SONIOX_MESSAGE_CHARS = 450;
 
 export function chooseSegmentCount(text: string): number {
-  return Math.max(1, Math.min(MAX_PARALLEL_SEGMENTS, Math.round(text.length / MIN_CHARS_PER_SEGMENT)));
+  const forThroughput = Math.min(MAX_PARALLEL_SEGMENTS, Math.round(text.length / MIN_CHARS_PER_SEGMENT));
+  const forSessionSize = Math.ceil(text.length / MAX_CHARS_PER_SEGMENT);
+  return Math.max(1, forThroughput, forSessionSize);
 }
 
 // Contiguous, verbatim slices whose concatenation is exactly `text` -- the
@@ -127,6 +134,8 @@ interface SegmentState {
 
 export interface OpenParallelSonioxStreamOptions extends OpenSonioxStreamOptions {
   segments?: number;
+  /** Sessions open at the same time; defaults to MAX_PARALLEL_SEGMENTS. */
+  maxConcurrent?: number;
   /** Injectable for tests; defaults to the real WebSocket transport. */
   openStream?: (options: OpenSonioxStreamOptions) => { cancel(): void };
 }
@@ -154,12 +163,15 @@ export function openParallelSonioxStream(options: OpenParallelSonioxStreamOption
     handle: null,
   }));
 
+  const maxConcurrent = Math.max(1, options.maxConcurrent ?? MAX_PARALLEL_SEGMENTS);
   let active = 0;
   let offset = 0;
   let lastForwardedEnd = 0;
   let cancelled = false;
   let finished = false;
   let failed = false;
+  let nextToStart = 0;
+  let inFlight = 0;
 
   const isLast = (index: number) => index === segments.length - 1;
 
@@ -221,6 +233,12 @@ export function openParallelSonioxStream(options: OpenParallelSonioxStreamOption
         start(active);
         return;
       }
+      if (next.attempts === 0) {
+        // Not started yet (it was waiting for a slot): it is the live segment
+        // now, so it goes first regardless of the pool.
+        start(active);
+        return;
+      }
       for (const event of next.events) forward(event);
       next.events = [];
       if (next.done && isLast(active)) handlers.onDone();
@@ -228,9 +246,27 @@ export function openParallelSonioxStream(options: OpenParallelSonioxStreamOption
     }
   };
 
+  // Fill free session slots with the next unstarted segments, in order.
+  const startMore = () => {
+    while (!cancelled && !failed && !finished && inFlight < maxConcurrent && nextToStart < segments.length) {
+      const index = nextToStart;
+      nextToStart += 1;
+      if (segments[index]!.attempts === 0) start(index);
+    }
+  };
+
   const start = (index: number) => {
     const segment = segments[index]!;
     segment.attempts += 1;
+    inFlight += 1;
+    if (index >= nextToStart) nextToStart = index + 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      inFlight -= 1;
+      startMore();
+    };
     const segmentHandlers: SonioxStreamHandlers = {
       onAudio: (chunk) => {
         if (cancelled || failed) return;
@@ -252,10 +288,12 @@ export function openParallelSonioxStream(options: OpenParallelSonioxStreamOption
       onTerminated: () => {
         if (cancelled || failed) return;
         segment.terminated = true;
+        release();
         if (index === active) advance();
       },
       onError: (error) => {
         if (cancelled || failed) return;
+        release();
         if (index === active) {
           fail(error);
           return;
@@ -275,7 +313,7 @@ export function openParallelSonioxStream(options: OpenParallelSonioxStreamOption
     });
   };
 
-  for (let index = 0; index < segments.length; index += 1) start(index);
+  startMore();
 
   return {
     cancel() {

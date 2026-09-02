@@ -12,6 +12,7 @@ import { SpeechEngine } from './utils/speechEngine';
 import { SonioxTemporaryKeyExpiredError, type OpenSonioxStreamOptions } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
 import { openParallelSonioxStream } from './utils/parallelSoniox';
+import { narrationText } from '@kinreader/backend/tts/limits';
 import { articleCacheKey, articleContentDigest } from './utils/articleCacheKey';
 import { decodeShareId } from './utils/shareLink';
 import {
@@ -167,7 +168,7 @@ export function App({
   // Fire-and-forget: synthesise into the global cache so the next open of this
   // article (by anyone) is an instant cached track instead of a live stream.
   const pregenerateArticle = (target: ArticleData) => {
-    const text = target.content.trim();
+    const text = narrationText(target.content).text;
     if (!text || text.length > MAX_PREGENERATION_CHARS || target.title === SAMPLE_ARTICLE.title) return;
     const request: PregenerationRequest = {
       title: target.title,
@@ -228,6 +229,11 @@ export function App({
   const [pendingLoadUrl, setPendingLoadUrl] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [awaitingPregeneration, setAwaitingPregeneration] = useState(false);
+  // Why the last fallback happened, so the degraded banner can say it instead
+  // of leaving the listener to guess (a Soniox rejection, a 413, a dropped
+  // socket...). Cleared on every new load.
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const [truncationNotice, setTruncationNotice] = useState<string | null>(null);
 
   const saveSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -317,6 +323,8 @@ export function App({
     eng.updateMediaSession({ title: art.title, author: art.author || 'Author', image: art.image });
     setLoadError(null);
     setAwaitingPregeneration(false);
+    setFallbackReason(null);
+    setTruncationNotice(null);
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
 
@@ -349,10 +357,22 @@ export function App({
       return;
     }
 
+    // 0. What gets narrated. Very long pieces are cut to a sentence-aligned
+    // prefix the cache and a Soniox session can hold (shared/tts/limits.ts);
+    // the displayed words, the stream, the cache key and pre-generation all
+    // use this same text so they agree word for word.
+    const narration = narrationText(art.content);
+    const narratedText = narration.text;
+    if (narration.truncated) {
+      setTruncationNotice(
+        `Long article: narrating the first ${narration.narratedWords.toLocaleString()} of ${narration.totalWords.toLocaleString()} words.`
+      );
+    }
+
     // 1. Estimated word timings, shown until real ones arrive. The Soniox REST
     // stream carries no alignment data, so this is a guess -- see plan 022 for
     // the WebSocket path that replaces it with measured timestamps.
-    const wordsList = art.content.split(/\s+/).filter(Boolean);
+    const wordsList = narratedText.split(/\s+/).filter(Boolean);
     let curTime = 0;
     const initialWordTimings: WordTiming[] = wordsList.map((w) => {
       const start = curTime;
@@ -385,7 +405,7 @@ export function App({
     let cacheUrl: string | null = null;
     if (canReadServerExactCache) {
       try {
-        cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: art.content });
+        cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: narratedText });
       } catch (error) {
         console.warn('Exact track cache identity unavailable; continuing without server cache:', error);
       }
@@ -409,19 +429,24 @@ export function App({
       if (wasPlaying && eng.playbackReady) eng.play();
     };
 
-    const useBrowserFallback = () => {
+    const noteFallback = (reason: string | undefined) => {
+      if (reason && isCurrentLoad()) setFallbackReason(reason.replace(/\s+/g, ' ').slice(0, 160));
+    };
+    const useBrowserFallback = (reason?: string) => {
       if (!isCurrentLoad()) return;
+      noteFallback(reason);
       const wasPlaying = captureFallbackPosition();
-      const hasDeviceSpeech = eng.loadBrowserText(art.content, initialWordTimings);
+      const hasDeviceSpeech = eng.loadBrowserText(narratedText, initialWordTimings);
       setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
       if (hasDeviceSpeech) restoreAfterFallback(initialWordTimings, wasPlaying);
     };
-    const useRestFallback = () => {
+    const useRestFallback = (reason?: string) => {
       if (!isCurrentLoad()) return;
+      noteFallback(reason);
       cancelCurrentStream();
       const wasPlaying = captureFallbackPosition();
       eng.stop();
-      const text = art.content.trim();
+      const text = narratedText;
       try {
         // REST has no timestamp envelope, so this deliberately keeps the
         // estimated/calibrated timeline. Speed remains client-side only.
@@ -429,7 +454,9 @@ export function App({
           const streamUrl =
             `/api/tts/stream?text=${encodeURIComponent(text)}` +
             `&voice=${encodeURIComponent(voice)}&speed=1.0&clientId=${encodeURIComponent(clientId)}`;
-          eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration, useBrowserFallback);
+          eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration, () =>
+            useBrowserFallback('the audio fallback could not be loaded')
+          );
           setPlaybackStatus('degraded');
           restoreAfterFallback(initialWordTimings, wasPlaying);
           return;
@@ -444,21 +471,23 @@ export function App({
           body: JSON.stringify({ text, voice, speed: 1.0, clientId }),
         })
           .then(async (response) => {
-            if (!response.ok) throw new Error(`REST synthesis failed (status ${response.status})`);
+            if (!response.ok) throw new Error(`audio fallback returned status ${response.status}`);
             const blob = await response.blob();
             if (!isCurrentLoad()) return;
             revokeRestObjectUrl();
             restObjectUrlRef.current = URL.createObjectURL(blob);
-            eng.loadAudioUrl(restObjectUrlRef.current, initialWordTimings, totalDuration, useBrowserFallback);
+            eng.loadAudioUrl(restObjectUrlRef.current, initialWordTimings, totalDuration, () =>
+              useBrowserFallback('the audio fallback could not be loaded')
+            );
             setPlaybackStatus('degraded');
             restoreAfterFallback(initialWordTimings, wasPlaying);
           })
           .catch((error) => {
             console.warn('REST synthesis fallback failed; using on-device speech:', error);
-            useBrowserFallback();
+            useBrowserFallback(error instanceof Error ? error.message : 'the audio fallback failed');
           });
-      } catch {
-        useBrowserFallback();
+      } catch (error) {
+        useBrowserFallback(error instanceof Error ? error.message : undefined);
       }
     };
     const mergeAuthoritativePrefix = (exactWords: WordTiming[]): WordTiming[] => {
@@ -486,7 +515,7 @@ export function App({
           : temporaryKeyMutation.mutateAsync({ clientId }));
         if (!isCurrentLoad()) return;
 
-        const accumulator = createWordTimingAccumulator(art.content.trim());
+        const accumulator = createWordTimingAccumulator(narratedText);
         const exactWords: WordTiming[] = [];
         let audioFinished = false;
         let completedBlob: Blob | null = null;
@@ -499,7 +528,7 @@ export function App({
           exactWords.push(...accumulator.flush());
           if (exactWords.length !== initialWordTimings.length) {
             attemptActive = false;
-            useRestFallback();
+            useRestFallback('the word timings did not cover the article');
             return;
           }
           const exactDuration = exactWords.at(-1)?.end ?? 0;
@@ -514,7 +543,7 @@ export function App({
               url: cacheUrl,
               title: art.title,
               author: art.author,
-              text: art.content.trim(),
+              text: narratedText,
               voice,
               blob: completedBlob,
               duration: exactDuration,
@@ -530,7 +559,7 @@ export function App({
 
         const stream = streamingTransport({
           apiKey: temporaryKey.apiKey,
-          text: art.content.trim(),
+          text: narratedText,
           voice,
           handlers: {
             onAudio: (chunk) => {
@@ -568,7 +597,7 @@ export function App({
                 void runWebSocketAttempt(1);
                 return;
               }
-              useRestFallback();
+              useRestFallback(`live stream failed: ${error.message}`);
             },
           },
         });
@@ -577,8 +606,10 @@ export function App({
         } else {
           stream.cancel();
         }
-      } catch {
-        useRestFallback();
+      } catch (error) {
+        useRestFallback(
+          error instanceof Error ? `could not start the live stream: ${error.message}` : 'could not start the live stream'
+        );
       }
     };
 
@@ -609,7 +640,7 @@ export function App({
       // (it was added to the queue), wait for that instead of opening a
       // second, paid stream. Every article should cost one synthesis.
       try {
-        const contentDigest = await articleContentDigest(art.content);
+        const contentDigest = await articleContentDigest(narratedText);
         if (!isCurrentLoad()) return;
         let status = await lookupPregenerationStatus({ contentDigest, voice });
         if (!isCurrentLoad()) return;
@@ -1119,11 +1150,18 @@ export function App({
               (!playback.playbackReady && playbackStatus !== 'degraded' && playbackStatus !== 'error')
             }
             isDegraded={playbackStatus === 'degraded'}
-            degradedMessage={DEGRADED_MESSAGES[playback.mode]}
+            degradedMessage={
+              fallbackReason ? `${DEGRADED_MESSAGES[playback.mode]} Reason: ${fallbackReason}.` : DEGRADED_MESSAGES[playback.mode]
+            }
             isError={playbackStatus === 'error'}
             noticeMessage={loadError ?? undefined}
             onDismissNotice={() => setLoadError(null)}
-            infoMessage={awaitingPregeneration ? 'Preparing audio… this article is being synthesised once for everyone.' : undefined}
+            infoMessage={
+              awaitingPregeneration
+                ? 'Preparing audio… this article is being synthesised once for everyone.'
+                : truncationNotice ?? undefined
+            }
+            infoBusy={awaitingPregeneration}
           />
         </div>
       )}

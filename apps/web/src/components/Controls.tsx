@@ -40,6 +40,8 @@ interface ControlsProps {
   onDismissNotice?: () => void;
   /** A neutral progress line (e.g. waiting for a pre-generated track). */
   infoMessage?: string;
+  /** Show a spinner beside the info line (progress) rather than an info icon. */
+  infoBusy?: boolean;
 }
 
 const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
@@ -68,6 +70,7 @@ export function Controls({
   noticeMessage,
   onDismissNotice,
   infoMessage,
+  infoBusy = true,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -354,7 +357,11 @@ export function Controls({
         </div>
       ) : infoMessage ? (
         <div className="w-full bg-white/[0.04] border-t border-white/10 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#ECEAE4]/70">
-          <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+          {infoBusy ? (
+            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+          ) : (
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          )}
           <span>{infoMessage}</span>
         </div>
       ) : isError ? (
