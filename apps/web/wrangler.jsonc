@@ -10,6 +10,17 @@
     "binding": "ASSETS",
     "not_found_handling": "none"
   },
+  // The deployed `kinetic-reader` script once exported a `NarrationSession`
+  // Durable Object (an out-of-repo experiment during the plan 022 spike). The
+  // API refuses a new version that drops a class with live objects unless a
+  // migration deletes them explicitly, so this does. Keep the entry: removing
+  // it makes every later deploy fail the same way.
+  "migrations": [
+    {
+      "tag": "v1-delete-narration-session",
+      "deleted_classes": ["NarrationSession"]
+    }
+  ],
   "vars": {
     "APP_ORIGIN": "https://app.kinreader.com",
     // Where /api/auth/* and /api/tts/* are proxied. Must match VITE_CONVEX_SITE_URL
