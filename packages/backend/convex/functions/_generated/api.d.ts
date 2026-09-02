@@ -30,6 +30,12 @@ export declare const api: {
       >;
     };
     tts: {
+      pregenerationStatus: FunctionReference<
+        "query",
+        "public",
+        { contentDigest: string; voice: string },
+        "none" | "running" | "done" | "failed"
+      >;
       pregenerate: FunctionReference<
         "action",
         "public",
@@ -380,6 +386,12 @@ export declare const internal: {
       >;
     };
     ttsInternal: {
+      pregenerationJobStatus: FunctionReference<
+        "query",
+        "internal",
+        { contentDigest: string; voice: string },
+        "none" | "running" | "done" | "failed"
+      >;
       claimPregenerationJob: FunctionReference<
         "mutation",
         "internal",

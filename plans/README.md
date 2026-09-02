@@ -762,3 +762,16 @@ are not re-audited from scratch next session.
   Not verified from the sandbox: the Node action's first real run against Soniox (no egress
   here). It is fully covered at the transport level by the shared client's tests, and a
   failure is recorded on the job row (`status: failed`, `error`) rather than thrown.
+
+- **023 follow-up 3b — one synthesis per article (2026-09-02).** The first cut of follow-up 3
+  paid Soniox twice in two cases: anonymous "Narrate now" streamed *and* pre-generated, and
+  opening a queued article before its job finished streamed alongside the running job.
+  Fixed: "Narrate now" never requests pre-generation (only "Add to queue" does), and a cache
+  miss now checks `tts.pregenerationStatus`; if the job is `running` the reader waits
+  ("Preparing audio…" line, polled every 1.5s, capped at 8 minutes) and plays the cached
+  track when it lands, falling through to a live stream only on `failed`/`none`/timeout.
+  Deliberately *not* done (owner's call): promoting client-uploaded tracks into the global
+  cache. A signed-in listener's own stream stays in their own cache, so a *different*
+  account opening the same article still pays once more; the server cannot verify that an
+  upload matches its text, so a global promotion would let any account poison the shared
+  track.

@@ -1585,3 +1585,18 @@ test('pregenerate honours the global rate limit and never schedules when denied'
   expect(result).toEqual({ status: 'skipped' });
   expect(await t.run(async (ctx) => ctx.db.query('ttsPregenerationJobs').collect())).toEqual([]);
 });
+
+test('pregenerationStatus reports none, then the job state, without needing sign-in', async () => {
+  const t = convexTest(schema, modules);
+  const input = { contentDigest: EXACT_CONTENT_DIGEST, voice: 'Adrian' };
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('none');
+
+  await t.mutation(internal.routers.ttsInternal.claimPregenerationJob, input);
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('running');
+
+  await t.mutation(internal.routers.ttsInternal.completePregenerationJob, { ...input, status: 'failed', error: 'x' });
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('failed');
+
+  await t.mutation(internal.routers.ttsInternal.completePregenerationJob, { ...input, status: 'done' });
+  expect(await t.query(api.routers.tts.pregenerationStatus, input)).toBe('done');
+});

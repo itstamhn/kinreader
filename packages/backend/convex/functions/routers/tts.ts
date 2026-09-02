@@ -191,6 +191,24 @@ export const getExactTrack = query
 
 type PregenerateStatus = 'ready' | 'running' | 'scheduled' | 'skipped';
 
+// Lets the reader wait for an in-flight pre-generation instead of opening a
+// second, paid live stream for the same article.
+export const pregenerationStatus = query
+  .input(
+    z.object({
+      contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      voice: z.string().trim().min(1).max(100),
+    })
+  )
+  .output(z.enum(['none', 'running', 'done', 'failed']))
+  .query(async ({ ctx, input }) => {
+    const status: 'none' | 'running' | 'done' | 'failed' = await ctx.runQuery(
+      internal.routers.ttsInternal.pregenerationJobStatus,
+      { contentDigest: input.contentDigest, voice: input.voice }
+    );
+    return status;
+  });
+
 // Start synthesising an article into the global cache before anyone presses
 // Play -- called when an article is extracted or added to the queue. Paid
 // work, so it runs through the same limiters as every other Soniox path, and

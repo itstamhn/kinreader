@@ -36,6 +36,8 @@ type TestAppProps = {
     voice: string;
     clientId: string;
   }) => Promise<unknown>;
+  pregenerationStatus?: (input: { contentDigest: string; voice: string }) => Promise<'none' | 'running' | 'done' | 'failed'>;
+  pregenerationPollMs?: number;
 };
 
 function renderApp(props: TestAppProps = {}) {
@@ -51,6 +53,8 @@ function renderApp(props: TestAppProps = {}) {
         persistExactTrack={props.persistExactTrack ?? (() => Promise.resolve())}
         serverExactCacheEnabled={props.serverExactCacheEnabled ?? true}
         requestPregeneration={props.requestPregeneration ?? (() => Promise.resolve())}
+        pregenerationStatus={props.pregenerationStatus ?? (() => Promise.resolve('none' as const))}
+        pregenerationPollMs={props.pregenerationPollMs ?? 10}
       />
     </ConvexAppProvider>
   );
@@ -1112,4 +1116,75 @@ test('anonymous listeners read the global exact cache and skip persistence', asy
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
   }
+});
+
+test('narrate now streams once and does not also request server pre-generation', async () => {
+  const transport = fakeStreamingTransport();
+  const requests: unknown[] = [];
+  const { container } = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+    requestPregeneration: async (input) => {
+      requests.push(input);
+    },
+  });
+  await narrateRawText(container, 'Stream this exactly once.');
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  expect(requests).toEqual([]);
+});
+
+test('an article whose pre-generation is running is awaited and then played from the cache, not streamed', async () => {
+  const transport = fakeStreamingTransport();
+  let statusPolls = 0;
+  let cacheReads = 0;
+  const loadedUrls: string[] = [];
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'must-not-be-used', expiresAt: 'soon' }),
+      loadExactTrack: async () => {
+        cacheReads += 1;
+        // Miss until the job has finished.
+        if (statusPolls < 3) return null;
+        return { audioUrl: 'https://cache.example/pregenerated.mp3', words: exactWords, duration: 0.7, timingsSource: 'soniox' };
+      },
+      pregenerationStatus: async () => {
+        statusPolls += 1;
+        return statusPolls < 3 ? 'running' : 'done';
+      },
+      pregenerationPollMs: 5,
+    });
+    await narrateRawText(container, 'Exact timing');
+
+    await waitFor(() => expect(container.textContent).toContain('Preparing audio'));
+    await waitFor(() => expect(loadedUrls).toContain('https://cache.example/pregenerated.mp3'));
+    expect(transport.streams).toHaveLength(0);
+    expect(statusPolls).toBe(3);
+    expect(cacheReads).toBe(2);
+    expect(container.textContent).not.toContain('Preparing audio');
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
+
+test('a failed pre-generation falls through to a normal live stream', async () => {
+  const transport = fakeStreamingTransport();
+  const { container } = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+    loadExactTrack: async () => null,
+    pregenerationStatus: async () => 'failed',
+  });
+  await narrateRawText(container, 'Exact timing');
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+  expect(container.textContent).not.toContain('Preparing audio');
 });

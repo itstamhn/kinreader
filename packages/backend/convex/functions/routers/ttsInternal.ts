@@ -382,6 +382,20 @@ export const claimPregenerationJob = internalMutation({
   },
 });
 
+// Raw job state for the reader's "wait for the running job" path. No wall
+// clock here (queries must stay pure); the reader caps its own wait.
+export const pregenerationJobStatus = internalQuery({
+  args: { contentDigest: v.string(), voice: v.string() },
+  returns: v.union(v.literal('none'), v.literal('running'), v.literal('done'), v.literal('failed')),
+  handler: async (ctx, args) => {
+    const job = await ctx.db
+      .query('ttsPregenerationJobs')
+      .withIndex('by_digest_voice', (q) => q.eq('contentDigest', args.contentDigest).eq('voice', args.voice))
+      .unique();
+    return job?.status ?? 'none';
+  },
+});
+
 export const completePregenerationJob = internalMutation({
   args: {
     contentDigest: v.string(),
