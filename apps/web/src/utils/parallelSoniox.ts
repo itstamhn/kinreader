@@ -4,6 +4,7 @@
 export {
   chooseSegmentCount,
   MAX_PARALLEL_SEGMENTS,
+  MAX_CHARS_PER_SEGMENT,
   MIN_CHARS_PER_SEGMENT,
   openParallelSonioxStream,
   splitIntoSegments,

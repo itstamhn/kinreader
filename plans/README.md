@@ -775,3 +775,15 @@ are not re-audited from scratch next session.
   account opening the same article still pays once more; the server cannot verify that an
   upload matches its text, so a global promotion would let any account poison the shared
   track.
+
+- **023 follow-up 4 — long articles (2026-09-02).** First real failure report after the
+  pre-generation deploy: a long paste dropped straight to on-device speech. The REST
+  fallback capped text at 20,000 chars (413), and nothing bounded what one Soniox session was
+  asked for. Now: `shared/tts/limits.ts` narrates a sentence-aligned prefix of at most 45,000
+  chars / 8,000 words (the Convex 8192-array ceiling behind cached `words`), and the reader
+  shows "Long article: narrating the first N of M words"; the same text feeds display, stream,
+  cache key and pre-generation. The parallel client now sizes segments to ≤6,000 chars each
+  and runs them through a pool of 4 concurrent sessions (waves, not a burst), so a long
+  article never asks one session for more than ~6 minutes of speech. The REST cap rose to
+  50,000 to match. The degraded banner now states the reason of the last failure (e.g.
+  `Reason: live stream failed: …`) so the next report needs no console digging.

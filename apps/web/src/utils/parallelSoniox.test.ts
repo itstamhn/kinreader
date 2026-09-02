@@ -86,6 +86,58 @@ test('text with no sentence ends still splits on whitespace, and short text does
   expect(chooseSegmentCount('x'.repeat(500))).toBe(1);
   expect(chooseSegmentCount('x'.repeat(2500))).toBe(2);
   expect(chooseSegmentCount('x'.repeat(20000))).toBe(4);
+  // Very long text gets more segments so no single session carries too much.
+  expect(chooseSegmentCount('x'.repeat(45000))).toBe(8);
+});
+
+test('a long article runs as waves: at most maxConcurrent sessions open, the rest start as slots free', () => {
+  const text = Array.from({ length: 6 }, (_, i) => `Segment ${i} says a few words here.`).join(' ');
+  const opener = fakeOpener();
+  const { events, handlers } = recorder();
+  openParallelSonioxStream({
+    apiKey: 'k',
+    text,
+    voice: 'Adrian',
+    handlers,
+    segments: 6,
+    maxConcurrent: 2,
+    openStream: opener.open,
+  });
+  expect(opener.streams).toHaveLength(2);
+
+  // Segment 1 (waiting, not live) finishes: a slot frees, segment 2 starts.
+  opener.streams[1]!.handlers.onAudio(frames(5));
+  opener.streams[1]!.handlers.onTimestamps(timestampsFor(opener.streams[1]!.options.text, 0.1));
+  opener.streams[1]!.handlers.onDone();
+  opener.streams[1]!.handlers.onTerminated?.();
+  expect(opener.streams).toHaveLength(3);
+  expect(events).toEqual([]);
+
+  // The live segment 0 finishes: its slot frees (segment 3 starts) and the
+  // buffered segment 1 replays; segment 2 is now live.
+  opener.streams[0]!.handlers.onAudio(frames(5));
+  opener.streams[0]!.handlers.onTimestamps(timestampsFor(opener.streams[0]!.options.text, 0.1));
+  opener.streams[0]!.handlers.onDone();
+  opener.streams[0]!.handlers.onTerminated?.();
+  expect(opener.streams).toHaveLength(4);
+  expect(events.filter((e) => e.kind === 'timestamps').map((e: any) => e.text)).toEqual([
+    opener.streams[0]!.options.text,
+    opener.streams[1]!.options.text,
+  ]);
+
+  // Drain the rest in order; the pool never exceeds two open sessions.
+  for (let i = 2; i < 6; i += 1) {
+    const s = opener.streams[i]!;
+    s.handlers.onAudio(frames(5));
+    s.handlers.onTimestamps(timestampsFor(s.options.text, 0.1));
+    s.handlers.onDone();
+    s.handlers.onTerminated?.();
+    expect(opener.streams.length).toBeLessThanOrEqual(6);
+  }
+  expect(opener.streams).toHaveLength(6);
+  expect(opener.streams.map((s) => s.options.text).join('')).toBe(text);
+  expect(events.at(-2)).toEqual({ kind: 'done' });
+  expect(events.at(-1)).toEqual({ kind: 'terminated' });
 });
 
 test('a single segment is a plain pass-through to the underlying transport', () => {

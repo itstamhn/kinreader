@@ -1188,3 +1188,44 @@ test('a failed pre-generation falls through to a normal live stream', async () =
   await waitFor(() => expect(transport.streams).toHaveLength(1));
   expect(container.textContent).not.toContain('Preparing audio');
 });
+
+test('a very long article is narrated as a sentence-aligned prefix and says so', async () => {
+  const transport = fakeStreamingTransport();
+  const sentence = 'Every sentence in this long article has exactly ten words in it. ';
+  const longText = sentence.repeat(1200); // ~80k chars, ~12k words
+  const { container } = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+  });
+  await narrateRawText(container, longText);
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+
+  const streamed = transport.streams[0]!.options.text;
+  expect(streamed.length).toBeLessThanOrEqual(45000);
+  expect(streamed.endsWith('.')).toBe(true);
+  expect(longText.startsWith(streamed)).toBe(true);
+  await waitFor(() => expect(container.textContent).toMatch(/Long article: narrating the first [\d,]+ of [\d,]+ words/));
+  // The displayed word list is the narrated prefix, not the whole text.
+  const engine = (window as any).__engine as SpeechEngine;
+  expect(engine.words.length).toBe(streamed.split(/\s+/).length);
+});
+
+test('the degraded banner names the reason the live stream failed', async () => {
+  const transport = fakeStreamingTransport();
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+    });
+    await narrateRawText(container, 'Explain the failure please');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+    act(() => transport.streams[0]!.options.handlers.onError(new Error('Soniox returned too_many_sessions')));
+    await waitFor(() => expect(container.textContent).toContain('Reason: live stream failed: Soniox returned too_many_sessions'));
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
