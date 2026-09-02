@@ -1,7 +1,7 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { render, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
 import { ConvexReactClient } from 'convex/react';
-import { App } from './App';
+import { App, fitEstimatedTail } from './App';
 import { ConvexAppProvider } from './lib/convex';
 import { SpeechEngine } from './utils/speechEngine';
 import {
@@ -635,6 +635,69 @@ test('a WebSocket failure falls back to REST and reports degraded playback', asy
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
   }
+});
+
+test('timestamps that stop lining up mid-stream keep the audio and degrade only the sync, without a second synthesis', async () => {
+  const transport = fakeStreamingTransport();
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  const restUrls: string[] = [];
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    if (url.startsWith('/api/tts/stream')) restUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+
+  try {
+    const { container } = renderApp({
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'temporary-key', expiresAt: '2026-08-29T12:00:00Z' }),
+    });
+    await narrateRawText(container, 'Exact timing lost here');
+    await waitFor(() => expect(transport.streams).toHaveLength(1));
+    const { handlers } = transport.streams[0]!.options;
+
+    // The first word arrives cleanly; the next batch is unusable (its clock
+    // runs backwards), which is the one thing the accumulator still refuses.
+    act(() => handlers.onTimestamps(timestampBatch('Exact ')));
+    act(() => handlers.onTimestamps(timestampBatch('timing', 0.0)));
+    act(() => {
+      handlers.onDone();
+      handlers.onTerminated?.();
+    });
+
+    await waitFor(() => expect(container.textContent).toContain('Exact word sync unavailable'));
+    expect(container.textContent).toContain('Reason: exact word sync lost partway (1 words are exact)');
+    // No REST re-synthesis, and the live stream was not torn down.
+    expect(restUrls).toHaveLength(0);
+    expect(transport.streams[0]!.cancelCalls).toBe(0);
+    // The exact prefix survives; the rest keeps its estimated spacing.
+    const words = (window as any).__engine.words as Array<{ text: string; start: number; end: number }>;
+    expect(words.map((word) => word.text)).toEqual(['Exact', 'timing', 'lost', 'here']);
+    expect(words[0]).toEqual({ text: 'Exact', start: 0.1, end: 0.35 });
+    expect(words[1]!.start).toBeGreaterThanOrEqual(0.35);
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
+  }
+});
+
+test('fitEstimatedTail stretches only the estimated words onto the audio that arrived', () => {
+  const words = [
+    { text: 'a', start: 0, end: 1 },
+    { text: 'b', start: 1, end: 2 },
+    { text: 'c', start: 2, end: 3 },
+    { text: 'd', start: 3, end: 4 },
+  ];
+  expect(fitEstimatedTail(words, 2, 6)).toEqual([
+    { text: 'a', start: 0, end: 1 },
+    { text: 'b', start: 1, end: 2 },
+    { text: 'c', start: 2, end: 4 },
+    { text: 'd', start: 4, end: 6 },
+  ]);
+  // Nothing exact yet: the whole timeline is fitted.
+  expect(fitEstimatedTail(words, 0, 2).at(-1)).toEqual({ text: 'd', start: 1.5, end: 2 });
+  // Unknown or implausible audio length: leave the estimate alone.
+  expect(fitEstimatedTail(words, 2, 0)).toBe(words);
+  expect(fitEstimatedTail(words, 2, 40)).toBe(words);
+  expect(fitEstimatedTail(words, 4, 6)).toBe(words);
 });
 
 test('an exact cache hit loads stored audio before minting a key or opening a socket', async () => {

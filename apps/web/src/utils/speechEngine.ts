@@ -1,5 +1,5 @@
 import type { WordTiming } from '../types';
-import { concatBytes, scanMp3Frames } from './mp3Duration';
+import { concatBytes, scanMp3Frames, mp3DurationSeconds } from './mp3Duration';
 
 // The reactive surface `useSyncExternalStore` subscribes to (plan 018,
 // Step 3). One object per change, replaced only when something in it
@@ -116,6 +116,14 @@ export class SpeechEngine {
       (window as any).__engine = this;
     }
     this.snapshot = this.buildSnapshot();
+  }
+
+  // Seconds of audio received so far in the current stream, measured from the
+  // MP3 frames themselves. Available as soon as the bytes are, unlike the
+  // element's `duration`, which lags the end of a MediaSource stream.
+  public get receivedAudioSeconds(): number {
+    if (this.allAudioChunks.length === 0) return 0;
+    return mp3DurationSeconds(concatBytes(this.allAudioChunks));
   }
 
   public get rate(): number {

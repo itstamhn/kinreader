@@ -234,7 +234,7 @@ test('contains an exception from the error handler and reports a close failure o
   expect(errorCalls).toBe(1);
 });
 
-test('turns a complete-stream character mismatch into one WebSocket failure', () => {
+test('turns an incomplete character stream into one WebSocket failure', () => {
   const accumulator = createWordTimingAccumulator('Exact timing');
   const received = handlers();
   openSonioxStream({
@@ -253,7 +253,8 @@ test('turns a complete-stream character mismatch into one WebSocket failure', ()
   });
   const socket = FakeWebSocket.instances[0]!;
   socket.open();
-  const characters = [...'Exact txming'];
+  // Only the first word is ever voiced; `flush()` on termination rejects it.
+  const characters = [...'Exact'];
   socket.receive({
     timestamps: {
       characters,

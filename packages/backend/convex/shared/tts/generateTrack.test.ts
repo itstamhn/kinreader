@@ -38,7 +38,7 @@ test('collects audio and exact word timings for the whole text and resolves on t
   expect(track.duration).toBe(track.words.at(-1)!.end);
 });
 
-test('a transport error rejects and cancels; a timestamp mismatch rejects too', async () => {
+test('a transport error rejects and cancels; an incomplete character stream rejects too', async () => {
   let captured: OpenParallelSonioxStreamOptions | null = null;
   let cancelled = 0;
   const failing = generateTrackWithSoniox({
@@ -63,8 +63,9 @@ test('a transport error rejects and cancels; a timestamp mismatch rejects too', 
       return { cancel() {} };
     },
   });
-  captured!.handlers.onTimestamps(timestampsFor('Wrong'));
-  await expect(mismatched).rejects.toThrow(/mismatch/);
+  captured!.handlers.onTimestamps(timestampsFor('Some'));
+  captured!.handlers.onTerminated?.();
+  await expect(mismatched).rejects.toThrow(/incomplete/i);
 });
 
 test('gives up after the timeout', async () => {

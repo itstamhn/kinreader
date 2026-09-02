@@ -97,23 +97,78 @@ test('emits exactly the rendered whitespace tokens after single-character and wh
   ]);
 });
 
+function batchFor(received: string, start = 0, step = 0.1) {
+  const characters = [...received];
+  return {
+    characters,
+    starts: characters.map((_, index) => Number((start + index * step).toFixed(3))),
+    ends: characters.map((_, index) => Number((start + index * step + 0.05).toFixed(3))),
+  };
+}
+
+function wordsFor(expected: string, received: string) {
+  const accumulator = createWordTimingAccumulator(expected);
+  return [...accumulator.append(batchFor(received)), ...accumulator.flush()];
+}
+
+// Soniox does not promise to echo the article byte for byte: it may read a
+// newline as a space, fold a curly quote, or skip a symbol it cannot say. The
+// word text always comes from the article, and the characters Soniox sends
+// only supply the times, so every rendered word still gets a timing.
 test.each([
   ['substituted character', 'Hello world', 'Hxllo world'],
+  ['normalised quote', 'It’s “fine”', "It's \"fine\""],
   ['missing whitespace', 'Hello world', 'Helloworld'],
   ['normalised whitespace', 'Hello\nworld', 'Hello world'],
+  ['no-break space', 'Hello\u00a0world', 'Hello world'],
   ['duplicated character', 'Hello world', 'Helloo world'],
+  ['inserted whitespace', 'Hello world', 'Hel lo world'],
   ['reordered characters', 'Hello world', 'Hlelo world'],
-])('rejects a %s instead of substituting displayed word text', (_name, expected, received) => {
-  const accumulator = createWordTimingAccumulator(expected);
-  const characters = [...received];
+  ['dropped soft hyphen', 'Hel\u00adlo world', 'Hello world'],
+  ['dropped zero-width space', 'Hello\u200b world', 'Hello world'],
+  ['dropped punctuation', 'Hello — world', 'Hello world'],
+  ['dropped trailing punctuation', 'Hello world.”', 'Hello world'],
+  ['expanded symbol', 'Hello & world', 'Hello and world'],
+  ['extra trailing characters', 'Hello world', 'Hello world!!'],
+])('aligns a %s to the article and still emits every rendered word', (_name, expected, received) => {
+  const words = wordsFor(expected, received);
+  expect(words.map((word) => word.text)).toEqual(expected.split(/\s+/).filter(Boolean));
+  let previousEnd = 0;
+  for (const word of words) {
+    expect(word.start).toBeGreaterThanOrEqual(previousEnd);
+    expect(word.end).toBeGreaterThan(word.start);
+    previousEnd = word.end;
+  }
+});
 
-  expect(() =>
-    accumulator.append({
-      characters,
-      starts: characters.map((_, index) => index * 0.1),
-      ends: characters.map((_, index) => index * 0.1 + 0.05),
-    })
-  ).toThrow(/character stream/i);
+test('a substituted character keeps the voiced time; a word Soniox skipped gets its own slot', () => {
+  expect(wordsFor('Hello world', 'Hxllo world')).toEqual([
+    { text: 'Hello', start: 0, end: 0.45 },
+    { text: 'world', start: 0.6, end: 1.05 },
+  ]);
+  // "—" is never voiced: it lands right after "Hello" and "world" follows it.
+  expect(wordsFor('Hello — world', 'Hello world')).toEqual([
+    { text: 'Hello', start: 0, end: 0.45 },
+    { text: '—', start: 0.45, end: 0.451 },
+    { text: 'world', start: 0.6, end: 1.05 },
+  ]);
+});
+
+test('a multi-code-point entry shares one timing across its characters', () => {
+  const accumulator = createWordTimingAccumulator('e\u0301a b');
+  const words = [
+    ...accumulator.append({ characters: ['e\u0301', 'a', ' ', 'b'], starts: [0, 0.1, 0.2, 0.3], ends: [0.05, 0.15, 0.25, 0.35] }),
+    ...accumulator.flush(),
+  ];
+  expect(words).toEqual([
+    { text: 'e\u0301a', start: 0, end: 0.15 },
+    { text: 'b', start: 0.3, end: 0.35 },
+  ]);
+});
+
+test('rejects an empty character entry', () => {
+  const accumulator = createWordTimingAccumulator('A');
+  expect(() => accumulator.append({ characters: [''], starts: [0], ends: [0.1] })).toThrow(/non-character/i);
 });
 
 test('rejects incomplete final character consumption when the stream terminates', () => {

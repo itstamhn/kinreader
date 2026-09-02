@@ -1,5 +1,18 @@
 import { test, expect } from 'bun:test';
-import { MAX_NARRATION_CHARS, MAX_NARRATION_WORDS, narrationText } from './limits';
+import { MAX_NARRATION_CHARS, MAX_NARRATION_WORDS, narrationText, sanitiseNarration } from './limits';
+
+test('invisible characters are removed and line endings normalised, visible text is untouched', () => {
+  const soft = 'in\u00advisible'; // soft hyphen
+  const marks = '\ufeffstart \u200bzero\u200c width\u200e mark';
+  expect(sanitiseNarration(soft)).toBe('invisible');
+  expect(sanitiseNarration(marks)).toBe('start zero width mark');
+  expect(sanitiseNarration('one\r\ntwo\rthree\tfour')).toBe('one\ntwo\nthree\tfour');
+  // Emoji sequences keep their joiner; accents come out composed.
+  expect(sanitiseNarration('\u{1f468}\u200d\u{1f4bb}')).toBe('\u{1f468}\u200d\u{1f4bb}');
+  expect(sanitiseNarration('e\u0301')).toBe('\u00e9');
+  expect(sanitiseNarration('“Curly” — and… non\u00a0breaking')).toBe('“Curly” — and… non\u00a0breaking');
+  expect(narrationText('  A soft\u00adhyphen.  ').text).toBe('A softhyphen.');
+});
 
 test('short articles pass through untouched', () => {
   const result = narrationText('  One sentence. Another one.  ');
