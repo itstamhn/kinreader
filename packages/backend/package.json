@@ -5,7 +5,8 @@
   "exports": {
     "./api": "./convex/shared/api.ts",
     "./dataModel": "./convex/functions/_generated/dataModel.d.ts",
-    "./soniox": "./convex/shared/soniox.ts"
+    "./soniox": "./convex/shared/soniox.ts",
+    "./tts/*": "./convex/shared/tts/*.ts"
   },
   "scripts": {
     "dev": "convex dev",
@@ -18,11 +19,13 @@
     "better-auth": "^1.7.2",
     "convex": "1.44.0",
     "kitcn": "^0.32.1",
+    "ws": "^8",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "convex-test": "^0.0.56",
     "@types/bun": "latest",
+    "@types/ws": "^8.18.1",
+    "convex-test": "^0.0.56",
     "typescript": "^5"
   }
 }

@@ -117,6 +117,14 @@ the routes it handles). Two entries are load-bearing for narration:
 - the `sha256-…` hash of the inline HTTPS-redirect script in `index.html`. Edit
   that script and the hash must be recomputed (instructions in `_headers`).
 
+### Audio cache and pre-generation
+
+Finished tracks (MP3 plus exact word timings) live in Convex file storage. A track the
+server generated itself is in the **global cache**, readable by anyone; a track a signed-in
+listener streamed is in their **own cache**. Adding an article to the queue asks the server
+to pre-generate it (`tts.pregenerate`, a Node action using the Soniox WebSocket), so it
+opens as an instant cached track. The Node runtime needs `ws`, declared in `convex.json`.
+
 ### Share links
 
 The header's share button copies `https://kinreader.com/r/<id>?t=…&a=…&img=…`.

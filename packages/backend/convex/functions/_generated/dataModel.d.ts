@@ -261,6 +261,34 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  ttsPregenerationJobs: {
+    document: {
+      contentDigest: string;
+      error?: string;
+      finishedAt?: number;
+      startedAt: number;
+      status: "running" | "done" | "failed";
+      voice: string;
+      _id: Id<"ttsPregenerationJobs">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "contentDigest"
+      | "error"
+      | "finishedAt"
+      | "startedAt"
+      | "status"
+      | "voice";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_digest_voice: ["contentDigest", "voice", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   ttsTrackStorageClaims: {
     document: {
       claimedAt: number;

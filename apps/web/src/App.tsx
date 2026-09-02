@@ -78,8 +78,23 @@ export interface AppProps {
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
   loadExactTrack?: (input: { url: string; voice: string }) => Promise<ExactTrackCacheEntry | null>;
   persistExactTrack?: (input: PersistExactTrackInput) => Promise<void>;
+  /** Disables both server cache reads and persistence (tests). */
   serverExactCacheEnabled?: boolean;
+  /** Asks the server to synthesise an article into the global cache ahead of play. */
+  requestPregeneration?: (input: PregenerationRequest) => Promise<unknown>;
 }
+
+export interface PregenerationRequest {
+  title?: string;
+  author?: string;
+  text: string;
+  voice: string;
+  clientId: string;
+}
+
+// Articles above this are not pre-generated (the server-side cap); they still
+// stream on demand.
+const MAX_PREGENERATION_CHARS = 50000;
 
 export function App({
   // Several concurrent Soniox sessions re-serialised into one stream, so audio
@@ -89,6 +104,7 @@ export function App({
   loadExactTrack,
   persistExactTrack,
   serverExactCacheEnabled,
+  requestPregeneration,
 }: AppProps = {}) {
   const crpc = useCRPC();
   const queryClient = useQueryClient();
@@ -96,6 +112,7 @@ export function App({
   const temporaryKeyMutation = useMutation(crpc.routers.tts.temporaryKey.mutationOptions());
   const trackUploadUrlMutation = useMutation(crpc.routers.tts.generateTrackUploadUrl.mutationOptions());
   const persistTrackMutation = useMutation(crpc.routers.tts.persistTrack.mutationOptions());
+  const pregenerateMutation = useMutation(crpc.routers.tts.pregenerate.mutationOptions());
   const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
   const addToPlaylistMutation = useMutation(crpc.routers.users.addToPlaylist.mutationOptions());
   const deleteUserArticleMutation = useMutation(crpc.routers.users.deleteUserArticle.mutationOptions());
@@ -121,7 +138,29 @@ export function App({
         tier: 'pro',
       }
     : null;
-  const canUseServerExactCache = serverExactCacheEnabled ?? Boolean(user);
+  // The global cache (server-generated tracks) is readable by everyone; only
+  // signed-in listeners can persist their own streamed tracks.
+  const canReadServerExactCache = serverExactCacheEnabled ?? true;
+  const canPersistExactTrack = serverExactCacheEnabled ?? Boolean(user);
+
+  // Fire-and-forget: synthesise into the global cache so the next open of this
+  // article (by anyone) is an instant cached track instead of a live stream.
+  const pregenerateArticle = (target: ArticleData) => {
+    const text = target.content.trim();
+    if (!text || text.length > MAX_PREGENERATION_CHARS || target.title === SAMPLE_ARTICLE.title) return;
+    const request: PregenerationRequest = {
+      title: target.title,
+      author: target.author,
+      text,
+      voice: settings.sonioxVoice || 'Adrian',
+      clientId: getOrCreateClientId(),
+    };
+    void Promise.resolve()
+      .then(() => (requestPregeneration ? requestPregeneration(request) : pregenerateMutation.mutateAsync(request)))
+      .catch((error) => {
+        console.warn('Pre-generation request failed; playback will stream instead:', error);
+      });
+  };
 
   const { data: cloudPlaylist } = useQuery(
     crpc.routers.users.getUserPlaylist.queryOptions({}, { enabled: !!user })
@@ -321,7 +360,7 @@ export function App({
     const voice = currSettings.sonioxVoice || 'Adrian';
     const clientId = getOrCreateClientId();
     let cacheUrl: string | null = null;
-    if (canUseServerExactCache) {
+    if (canReadServerExactCache) {
       try {
         cacheUrl = await articleCacheKey({ sourceUrl: art.sourceUrl, content: art.content });
       } catch (error) {
@@ -447,7 +486,7 @@ export function App({
           setPlaybackStatus('ready');
           applyResume(exactWords);
 
-          if (completedBlob && canUseServerExactCache && cacheUrl) {
+          if (completedBlob && canPersistExactTrack && cacheUrl) {
             const persistenceInput: PersistExactTrackInput = {
               url: cacheUrl,
               title: art.title,
@@ -520,7 +559,7 @@ export function App({
       }
     };
 
-    if (canUseServerExactCache && cacheUrl) {
+    if (canReadServerExactCache && cacheUrl) {
       try {
         const cachedTrack = await lookupExactTrack({ url: cacheUrl, voice });
         if (!isCurrentLoad()) return;
@@ -600,6 +639,10 @@ export function App({
         sourceType: newArticle.sourceType,
       });
     }
+    // A signed-in listener's stream is persisted to their own cache when it
+    // finishes; an anonymous one is not, so have the server fill the global
+    // cache for next time.
+    if (!user) pregenerateArticle(newArticle);
     loadArticleContent(newArticle, engine, settings, { resumeWordIndex });
   };
 
@@ -663,6 +706,7 @@ export function App({
   const handleAddToQueue = (newArt: ArticleData) => {
     saveArticleToLibrary(newArt);
     setSavedArticles(getSavedArticles());
+    pregenerateArticle(newArt);
     if (user) {
       addToPlaylistMutation.mutate({
         url: newArt.sourceUrl || newArt.title,

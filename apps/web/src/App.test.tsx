@@ -29,6 +29,13 @@ type TestAppProps = {
     words: Array<{ text: string; start: number; end: number }>;
   }) => Promise<void>;
   serverExactCacheEnabled?: boolean;
+  requestPregeneration?: (input: {
+    title?: string;
+    author?: string;
+    text: string;
+    voice: string;
+    clientId: string;
+  }) => Promise<unknown>;
 };
 
 function renderApp(props: TestAppProps = {}) {
@@ -43,6 +50,7 @@ function renderApp(props: TestAppProps = {}) {
         loadExactTrack={props.loadExactTrack ?? (() => Promise.resolve(null))}
         persistExactTrack={props.persistExactTrack ?? (() => Promise.resolve())}
         serverExactCacheEnabled={props.serverExactCacheEnabled ?? true}
+        requestPregeneration={props.requestPregeneration ?? (() => Promise.resolve())}
       />
     </ConvexAppProvider>
   );
@@ -1035,5 +1043,73 @@ test('the header share button copies a kinreader.com/r/ link that decodes back t
     expect(link.searchParams.get('t')).toContain('DAN KOE');
   } finally {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
+  }
+});
+
+test('adding an article to the queue asks the server to pre-generate it', async () => {
+  const requests: Array<{ text: string; voice: string; title?: string }> = [];
+  const { container } = renderApp({
+    requestPregeneration: async (input) => {
+      requests.push(input);
+    },
+  });
+
+  const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
+  fireEvent.click(addButton);
+  const textTabButton = Array.from(container.querySelectorAll('button')).find((b) =>
+    b.textContent?.includes('Paste Raw Text')
+  ) as HTMLButtonElement;
+  fireEvent.click(textTabButton);
+  fireEvent.change(container.querySelector('textarea') as HTMLTextAreaElement, {
+    target: { value: 'Queue this for later listening.' },
+  });
+  const queueButton = Array.from(container.querySelectorAll('button')).find((b) =>
+    /add to queue/i.test(b.textContent ?? '')
+  ) as HTMLButtonElement;
+  expect(queueButton).toBeTruthy();
+  fireEvent.click(queueButton);
+
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0]).toMatchObject({ text: 'Queue this for later listening.', voice: 'Adrian' });
+});
+
+test('anonymous listeners read the global exact cache and skip persistence', async () => {
+  const transport = fakeStreamingTransport();
+  const cacheReads: Array<{ url: string; voice: string }> = [];
+  let persistenceCalls = 0;
+  const loadedUrls: string[] = [];
+  const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
+  SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
+    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    return originalLoadAudioUrl.call(this, url, words, duration, onError);
+  };
+
+  try {
+    const { container } = renderApp({
+      // No serverExactCacheEnabled override: reads are on for everyone,
+      // persistence follows sign-in (none here).
+      serverExactCacheEnabled: undefined,
+      streamingTransport: transport.open,
+      requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+      loadExactTrack: async (input) => {
+        cacheReads.push(input);
+        return {
+          audioUrl: 'https://cache.example/global.mp3',
+          words: exactWords,
+          duration: 0.7,
+          timingsSource: 'soniox',
+        };
+      },
+      persistExactTrack: async () => {
+        persistenceCalls += 1;
+      },
+    });
+    await narrateRawText(container, 'Exact timing');
+    await waitFor(() => expect(loadedUrls).toContain('https://cache.example/global.mp3'));
+    expect(cacheReads).toHaveLength(1);
+    expect(transport.streams).toHaveLength(0);
+    expect(persistenceCalls).toBe(0);
+  } finally {
+    SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
   }
 });

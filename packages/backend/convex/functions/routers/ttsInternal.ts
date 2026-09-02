@@ -240,6 +240,278 @@ function hasFullExactCoverage(track: Doc<'audioTracks'>, expectedWordCount: numb
   return Math.abs(previousEnd - track.duration) <= 0.01;
 }
 
+// The global (cross-user, anonymous-readable) exact cache. Only the server's
+// own pre-generation path writes it -- a client upload can never carry this
+// owner key, so nobody can poison the track everyone else hears.
+export const GLOBAL_TRACK_OWNER_KEY = '__server__';
+
+const wordTimingValidator = v.object({
+  text: v.string(),
+  start: v.number(),
+  end: v.number(),
+});
+const PREGENERATION_STALE_MS = 15 * 60 * 1000;
+
+export function globalCacheArticleUrl(contentDigest: string): string {
+  return `tts-global:content-sha256:${contentDigest}`;
+}
+
+// Word timings that exactly cover `content`, in order, ending at `duration`.
+// Shared by the owner-scoped and the global finalizers.
+function assertExactWordCoverage(
+  content: string,
+  words: Array<{ text: string; start: number; end: number }>,
+  duration: number
+): string[] {
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error('Invalid duration');
+  const rawWords = content.split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0 || rawWords.length > 8192 || words.length !== rawWords.length) {
+    throw new Error('Exact timings must cover every article word within the 8192-word limit');
+  }
+  let previousEnd = 0;
+  for (const [index, word] of words.entries()) {
+    if (
+      word.text !== rawWords[index] ||
+      !Number.isFinite(word.start) ||
+      !Number.isFinite(word.end) ||
+      word.start < previousEnd ||
+      word.end <= word.start
+    ) {
+      throw new Error(`Invalid exact word timing at index ${index}`);
+    }
+    previousEnd = word.end;
+  }
+  if (Math.abs(previousEnd - duration) > 0.01) {
+    throw new Error('Exact duration must match the final word timing');
+  }
+  return rawWords;
+}
+
+async function exactTrackForArticleUrl(
+  ctx: { db: MutationCtx['db'] },
+  articleUrl: string,
+  voice: string,
+  expectedOwnerKey: string | null
+): Promise<Doc<'audioTracks'> | null> {
+  const article = await ctx.db
+    .query('articles')
+    .withIndex('by_url', (q) => q.eq('url', articleUrl))
+    .unique();
+  if (!article) return null;
+
+  const track = await ctx.db
+    .query('audioTracks')
+    .withIndex('by_article_voice_speed', (q) =>
+      q.eq('articleId', article._id).eq('voice', voice).eq('speed', 1)
+    )
+    .first();
+  if (!track?.storageId || !hasFullExactCoverage(track, article.wordCount)) return null;
+
+  const storedAudio = await ctx.db.system.get('_storage', track.storageId);
+  if (
+    !storedAudio ||
+    storedAudio.size <= 0 ||
+    storedAudio.size > MAX_EXACT_TRACK_BYTES ||
+    !isMpegContentType(storedAudio.contentType)
+  ) return null;
+
+  const claim = await ctx.db
+    .query('ttsTrackStorageClaims')
+    .withIndex('by_storage_id', (q) => q.eq('storageId', track.storageId!))
+    .unique();
+  if (
+    !claim ||
+    claim.trackId !== track._id ||
+    claim.kind !== 'exact' ||
+    (expectedOwnerKey !== null && claim.ownerKey !== expectedOwnerKey)
+  ) return null;
+  return track;
+}
+
+// Readable by anyone, including anonymous listeners: the track was produced
+// by the deployment itself, not uploaded by a user.
+export const findGlobalExactTrack = internalQuery({
+  args: { contentDigest: v.string(), voice: v.string() },
+  returns: v.union(v.null(), schema.doc('audioTracks')),
+  handler: async (ctx, args) => {
+    if (!CONTENT_DIGEST_PATTERN.test(args.contentDigest)) return null;
+    return await exactTrackForArticleUrl(
+      ctx as unknown as { db: MutationCtx['db'] },
+      globalCacheArticleUrl(args.contentDigest),
+      args.voice,
+      GLOBAL_TRACK_OWNER_KEY
+    );
+  },
+});
+
+// Take the (digest, voice) slot for one pre-generation run. Returns the state
+// the caller should act on: `claimed` means run it; `running` means another
+// run owns it; `done` means the track already exists.
+export const claimPregenerationJob = internalMutation({
+  args: { contentDigest: v.string(), voice: v.string() },
+  returns: v.union(v.literal('claimed'), v.literal('running'), v.literal('done')),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query('ttsPregenerationJobs')
+      .withIndex('by_digest_voice', (q) => q.eq('contentDigest', args.contentDigest).eq('voice', args.voice))
+      .unique();
+    if (existing) {
+      if (existing.status === 'done') {
+        // Trust the row only while the track it points at still exists.
+        const track = await exactTrackForArticleUrl(
+          ctx,
+          globalCacheArticleUrl(args.contentDigest),
+          args.voice,
+          GLOBAL_TRACK_OWNER_KEY
+        );
+        if (track) return 'done';
+      } else if (existing.status === 'running' && now - existing.startedAt < PREGENERATION_STALE_MS) {
+        return 'running';
+      }
+      await ctx.db.patch(existing._id, { status: 'running', startedAt: now, finishedAt: undefined, error: undefined });
+      return 'claimed';
+    }
+    await ctx.db.insert('ttsPregenerationJobs', {
+      contentDigest: args.contentDigest,
+      voice: args.voice,
+      status: 'running',
+      startedAt: now,
+    });
+    return 'claimed';
+  },
+});
+
+export const completePregenerationJob = internalMutation({
+  args: {
+    contentDigest: v.string(),
+    voice: v.string(),
+    status: v.union(v.literal('done'), v.literal('failed')),
+    error: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('ttsPregenerationJobs')
+      .withIndex('by_digest_voice', (q) => q.eq('contentDigest', args.contentDigest).eq('voice', args.voice))
+      .unique();
+    const patch = {
+      status: args.status,
+      finishedAt: Date.now(),
+      error: args.error?.slice(0, 500),
+    };
+    if (existing) await ctx.db.patch(existing._id, patch);
+    else {
+      await ctx.db.insert('ttsPregenerationJobs', {
+        contentDigest: args.contentDigest,
+        voice: args.voice,
+        startedAt: Date.now(),
+        ...patch,
+      });
+    }
+    return null;
+  },
+});
+
+// Records a server-generated track in the global cache. The blob must already
+// be in storage; on any validation failure the caller deletes it.
+export const finalizeGlobalExactTrack = internalMutation({
+  args: {
+    contentDigest: v.string(),
+    title: v.optional(v.string()),
+    author: v.optional(v.string()),
+    content: v.string(),
+    voice: v.string(),
+    storageId: v.id('_storage'),
+    duration: v.number(),
+    words: v.array(wordTimingValidator),
+  },
+  returns: v.object({ articleId: v.id('articles'), trackId: v.id('audioTracks') }),
+  handler: async (ctx, args) => {
+    const content = args.content.trim();
+    const voice = args.voice.trim();
+    if (!CONTENT_DIGEST_PATTERN.test(args.contentDigest)) throw new Error('Invalid content digest');
+    if ((await sha256Hex(content)) !== args.contentDigest) {
+      throw new Error('Content digest does not match article content');
+    }
+    if (!content || content.length > 50000) throw new Error('Invalid article content');
+    if (!voice || voice.length > 100) throw new Error('Invalid voice');
+    const rawWords = assertExactWordCoverage(content, args.words, args.duration);
+
+    const storedAudio = await ctx.db.system.get('_storage', args.storageId);
+    if (!storedAudio || storedAudio.size <= 0 || !isMpegContentType(storedAudio.contentType)) {
+      throw new Error('storageId must reference stored audio/mpeg data');
+    }
+    if (storedAudio.size > MAX_EXACT_TRACK_BYTES) {
+      throw new Error(`Generated track exceeds the ${MAX_EXACT_TRACK_BYTES}-byte limit`);
+    }
+    const existingClaim = await ctx.db
+      .query('ttsTrackStorageClaims')
+      .withIndex('by_storage_id', (q) => q.eq('storageId', args.storageId))
+      .unique();
+    if (existingClaim) throw new Error('storageId was already finalized');
+
+    const articleUrl = globalCacheArticleUrl(args.contentDigest);
+    let article = await ctx.db
+      .query('articles')
+      .withIndex('by_url', (q) => q.eq('url', articleUrl))
+      .unique();
+    if (article) {
+      await ctx.db.patch(article._id, {
+        title: args.title?.trim() || article.title,
+        author: args.author?.trim() || article.author,
+        content: content.slice(0, 2000),
+        wordCount: rawWords.length,
+      });
+    } else {
+      const articleId = await ctx.db.insert('articles', {
+        url: articleUrl,
+        title: args.title?.trim() || 'Untitled',
+        content: content.slice(0, 2000),
+        author: args.author?.trim() || 'Unknown',
+        sourceType: 'text',
+        wordCount: rawWords.length,
+        createdAt: Date.now(),
+      });
+      article = await ctx.db.get('articles', articleId);
+    }
+    if (!article) throw new Error('Failed to create the global cache entry');
+
+    const existing = await ctx.db
+      .query('audioTracks')
+      .withIndex('by_article_voice_speed', (q) =>
+        q.eq('articleId', article._id).eq('voice', voice).eq('speed', 1)
+      )
+      .first();
+    const row = {
+      articleId: article._id,
+      voice,
+      speed: 1,
+      storageId: args.storageId,
+      duration: args.duration,
+      timingsSource: 'soniox' as const,
+      words: args.words,
+      createdAt: Date.now(),
+    };
+    let trackId: Id<'audioTracks'>;
+    if (existing) {
+      const oldClaim = await storageClaimForTrack(ctx, existing._id);
+      await ctx.db.replace(existing._id, row);
+      trackId = existing._id;
+      await removeSupersededClaimedStorage(ctx, oldClaim, args.storageId);
+    } else {
+      trackId = await ctx.db.insert('audioTracks', row);
+    }
+    await claimTrackStorage(ctx, {
+      storageId: args.storageId,
+      trackId,
+      kind: 'exact',
+      ownerKey: GLOBAL_TRACK_OWNER_KEY,
+    });
+    return { articleId: article._id, trackId };
+  },
+});
+
 // This is the strict cache path used before browser WebSocket synthesis. Old
 // rows deliberately miss: exact playback requires explicit Soniox provenance,
 // complete word coverage, speed 1.0, and a live audio/mpeg storage object.
@@ -288,11 +560,6 @@ export const findExactCachedTrackByUrl = internalQuery({
   },
 });
 
-const wordTimingValidator = v.object({
-  text: v.string(),
-  start: v.number(),
-  end: v.number(),
-});
 
 type TrackStorageClaimKind = 'exact' | 'rest';
 
@@ -432,29 +699,7 @@ export const finalizeExactTrack = internalMutation({
     if (!cacheKey || cacheKey.length > 5000) throw new Error('Invalid exact cache key');
     if (!content || content.length > 50000) throw new Error('Invalid article content');
     if (!voice || voice.length > 100) throw new Error('Invalid voice');
-    if (!Number.isFinite(args.duration) || args.duration <= 0) throw new Error('Invalid duration');
-
-    const rawWords = content.split(/\s+/).filter(Boolean);
-    if (rawWords.length === 0 || rawWords.length > 8192 || args.words.length !== rawWords.length) {
-      throw new Error('Exact timings must cover every article word within the 8192-word limit');
-    }
-
-    let previousEnd = 0;
-    for (const [index, word] of args.words.entries()) {
-      if (
-        word.text !== rawWords[index] ||
-        !Number.isFinite(word.start) ||
-        !Number.isFinite(word.end) ||
-        word.start < previousEnd ||
-        word.end <= word.start
-      ) {
-        throw new Error(`Invalid exact word timing at index ${index}`);
-      }
-      previousEnd = word.end;
-    }
-    if (Math.abs(previousEnd - args.duration) > 0.01) {
-      throw new Error('Exact duration must match the final word timing');
-    }
+    const rawWords = assertExactWordCoverage(content, args.words, args.duration);
 
     const grant = await ctx.db
       .query('ttsExactUploadGrants')
