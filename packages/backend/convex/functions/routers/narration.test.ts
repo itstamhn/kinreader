@@ -81,3 +81,16 @@ test('manual retry keeps increasing attempt tokens so old watchdogs cannot inter
   expect(retried?.attempt).toBe(4);
   await t.finishInProgressScheduledFunctions();
 });
+
+test('a long article does not monopolize provider slots when another article needs its opening', async () => {
+  const t = convexTest(schema, modules);
+  const firstJob = await t.mutation(internal.routers.narrationInternal.prepare, input);
+  const newJob = await t.mutation(internal.routers.narrationInternal.prepare, { ...input, contentDigest: 'b'.repeat(64) });
+  const first = (await t.run(ctx => ctx.db.query('narrationSections').withIndex('by_jobId_and_index', q => q.eq('jobId', firstJob)).first()))!;
+  const words = first.text.split(/\s+/).map((text, i) => ({ text, start: i, end: i + 0.5 }));
+  const storageId = await t.run(ctx => ctx.storage.store(new Blob(['mp3'], { type: 'audio/mpeg' })));
+  await t.mutation(internal.routers.narrationInternal.complete, { sectionId: first._id, attempt: 1, storageId, words, duration: words.length });
+  const opening = await t.run(ctx => ctx.db.query('narrationSections').withIndex('by_jobId_and_index', q => q.eq('jobId', newJob)).first());
+  expect(opening?.status).toBe('running');
+  await t.finishInProgressScheduledFunctions();
+});

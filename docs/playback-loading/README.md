@@ -13,7 +13,7 @@ The new reader uses durable preparation by default. The older browser/REST imple
 ## Current behavior
 
 - Each roughly 650-character section runs as a bounded server action and saves both its MP3 and validated word timings. Short sections fit within Soniox's two-minute request limit and Convex's action limit.
-- Two shared worker slots cap concurrency across articles. Soniox limits apply to the account and project, so limiting each article independently is insufficient. Capacity errors retry after a delay.
+- Two shared worker slots cap concurrency across articles. Soniox limits apply to the account and project, so limiting each article independently is insufficient. Capacity errors retry after a delay. Articles with fewer saved sections get the next free slot, so a long article does not block preparation of another article’s opening.
 - Job creation, scheduling, completion and claiming the next section happen transactionally. Attempt tokens keep delayed watchdogs from interrupting a later retry. Failed sections can retry; completed sections retain their files.
 - The browser downloads only contiguous completed sections. Timing offsets include each MP3's frame duration, including silence, rather than scaling timestamps to an estimated article duration.
 - Play unlocks after one minute of audio at the selected speed is buffered. Short finished recordings unlock immediately. The existing 15-second refill behavior remains.
@@ -34,7 +34,7 @@ The exact Nicolascole77 article from the user's library was used, with 66,129 ch
 - The long recording filled the browser MediaSource buffer. The existing MP3-parts fallback retained the audio and position; the production sample continued without an observed reset or refill. This still warrants physical mobile testing.
 - A production storage read confirmed the first two sections still had their original storage IDs and attempt count of one after reloads. Preparation continued in the background. At that check, 22 sections were saved, two were running, 78 were queued and none had failed.
 
-All 296 tests passed, workspace type checks passed, and the web production build passed. Existing marketing deprecation hints and the bundle-size advisory remain.
+All 297 tests passed, workspace type checks passed, and the web production build passed. Existing marketing deprecation hints and the bundle-size advisory remain.
 
 ```sh
 bun run test

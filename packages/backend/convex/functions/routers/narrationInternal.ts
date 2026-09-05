@@ -21,6 +21,8 @@ async function pump(ctx: MutationCtx) {
   let slots = NARRATION_CONCURRENCY - active.length;
   if (slots <= 0) return;
   const jobs = await ctx.db.query('narrationJobs').withIndex('by_status', q => q.eq('status', 'running')).take(32);
+  // Give newly added articles their opening audio before extending a long buffer.
+  jobs.sort((a, b) => a.completed - b.completed || a.createdAt - b.createdAt);
   for (const job of jobs) {
     const next = await ctx.db.query('narrationSections').withIndex('by_jobId_and_status', q => q.eq('jobId', job._id).eq('status', 'queued')).take(slots);
     for (const section of next) await schedule(ctx, section);
