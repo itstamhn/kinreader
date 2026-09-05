@@ -84,10 +84,10 @@ test('text with no sentence ends still splits on whitespace, and short text does
   expect(segments.length).toBe(4);
   expect(splitIntoSegments('too short to bother', 3).join('')).toBe('too short to bother');
   expect(chooseSegmentCount('x'.repeat(500))).toBe(1);
-  expect(chooseSegmentCount('x'.repeat(2500))).toBe(2);
-  expect(chooseSegmentCount('x'.repeat(20000))).toBe(4);
+  expect(chooseSegmentCount('x'.repeat(2500))).toBe(6);
+  expect(chooseSegmentCount('x'.repeat(20000))).toBe(50);
   // Very long text gets more segments so no single session carries too much.
-  expect(chooseSegmentCount('x'.repeat(45000))).toBe(8);
+  expect(chooseSegmentCount('x'.repeat(45000))).toBe(113);
 });
 
 test('a long article runs as waves: at most maxConcurrent sessions open, the rest start as slots free', () => {

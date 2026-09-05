@@ -373,7 +373,7 @@ function fakeStreamingTransport() {
   };
 }
 
-test('progressive WebSocket playback is enabled immediately and Space uses the same guard', async () => {
+test('progressive WebSocket playback and Space wait for buffered audio', async () => {
   const transport = fakeStreamingTransport();
   const originalMediaSource = (window as any).MediaSource;
   const originalManagedMediaSource = (window as any).ManagedMediaSource;
@@ -404,11 +404,11 @@ test('progressive WebSocket playback is enabled immediately and Space uses the s
     await waitFor(() => expect(transport.streams).toHaveLength(1));
 
     const playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
-    expect(playButton.disabled).toBe(false);
+    expect(playButton.disabled).toBe(true);
     expect(container.textContent).not.toContain('Neural voice unavailable');
 
     fireEvent.keyDown(window, { code: 'Space' });
-    expect(playCalls).toBe(1);
+    expect(playCalls).toBe(0);
   } finally {
     (window as any).MediaSource = originalMediaSource;
     (window as any).ManagedMediaSource = originalManagedMediaSource;
@@ -417,7 +417,7 @@ test('progressive WebSocket playback is enabled immediately and Space uses the s
   }
 });
 
-test('without MediaSource the reader is playable at once, holds until audio exists, and plays parts as they land', async () => {
+test('without MediaSource Play unlocks when audio is ready', async () => {
   const transport = fakeStreamingTransport();
   const originalMediaSource = (window as any).MediaSource;
   const originalManagedMediaSource = (window as any).ManagedMediaSource;
@@ -441,13 +441,13 @@ test('without MediaSource the reader is playable at once, holds until audio exis
       return Promise.resolve();
     };
 
-    // Play is enabled before any audio; pressing it holds rather than refusing.
+    // An empty stream cannot start via either the button or Space.
     const playButton = container.querySelector('button[title*="Play"]') as HTMLButtonElement;
-    expect(playButton.disabled).toBe(false);
+    expect(playButton.disabled).toBe(true);
     expect(container.textContent).not.toContain('Neural voice unavailable');
     fireEvent.keyDown(window, { code: 'Space' });
-    expect(engine.isPlaying).toBe(true);
-    expect(engine.getSnapshot().isBuffering).toBe(true);
+    expect(engine.isPlaying).toBe(false);
+    expect(engine.getSnapshot().canStartPlayback).toBe(false);
     expect(elementPlays).toBe(0);
 
     act(() => {
@@ -456,7 +456,9 @@ test('without MediaSource the reader is playable at once, holds until audio exis
       transport.streams[0]!.options.handlers.onDone();
     });
 
-    // The stream's end turns the retained bytes into the final part and playback starts.
+    // A short completed recording unlocks immediately, without a minute-long wait.
+    expect(playButton.disabled).toBe(false);
+    fireEvent.keyDown(window, { code: 'Space' });
     await waitFor(() => expect(elementPlays).toBe(1));
     expect(engine.getSnapshot().isBuffering).toBe(false);
     expect(container.textContent).not.toContain('Neural voice unavailable');
@@ -1238,7 +1240,7 @@ test('an article whose pre-generation is running is awaited and then played from
     expect(transport.streams).toHaveLength(0);
     expect(statusPolls).toBe(3);
     expect(cacheReads).toBe(2);
-    expect(container.textContent).not.toContain('Preparing audio');
+    expect(container.textContent).not.toContain('checking for a saved recording');
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
   }
@@ -1254,7 +1256,7 @@ test('a failed pre-generation falls through to a normal live stream', async () =
   });
   await narrateRawText(container, 'Exact timing');
   await waitFor(() => expect(transport.streams).toHaveLength(1));
-  expect(container.textContent).not.toContain('Preparing audio');
+  expect(container.textContent).not.toContain('checking for a saved recording');
 });
 
 test('a very long article is narrated as a sentence-aligned prefix and says so', async () => {
@@ -1308,7 +1310,7 @@ test('a job left running for longer than the action limit is ignored and the art
   });
   await narrateRawText(container, 'Exact timing');
   await waitFor(() => expect(transport.streams).toHaveLength(1));
-  expect(container.textContent).not.toContain('Preparing audio');
+  expect(container.textContent).not.toContain('checking for a saved recording');
 });
 
 test('Play now stops waiting for a running job and streams instead', async () => {
@@ -1329,5 +1331,94 @@ test('Play now stops waiting for a running job and streams instead', async () =>
   fireEvent.click(playNow);
 
   await waitFor(() => expect(transport.streams).toHaveLength(1));
-  expect(container.textContent).not.toContain('Preparing audio');
+  expect(container.textContent).not.toContain('checking for a saved recording');
+});
+
+test('long REST fallback unlocks playback before its response finishes downloading', async () => {
+  const transport = fakeStreamingTransport();
+  let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const responseBody = new ReadableStream<Uint8Array>({ start(controller) { body = controller; } });
+  global.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/tts/stream') return new Response(responseBody);
+    return originalFetch(input);
+  }) as typeof fetch;
+  const { container } = renderApp({
+    streamingTransport: transport.open,
+    requestTemporaryKey: async () => ({ apiKey: 'k', expiresAt: 'soon' }),
+  });
+  await narrateRawText(container, 'This is a long article about progressive listening. '.repeat(180));
+  await waitFor(() => expect(transport.streams).toHaveLength(1));
+  act(() => transport.streams[0]!.options.handlers.onError(new Error('socket unavailable')));
+  const frames = new Uint8Array(417 * 4000);
+  for (let i = 0; i < 4000; i++) frames.set([0xff, 0xfb, 0x90, 0x00], i * 417);
+  act(() => body!.enqueue(frames));
+  const engine = (window as any).__engine as SpeechEngine;
+  await waitFor(() => expect(engine.getSnapshot().canStartPlayback).toBe(true));
+  expect(engine.isStreaming).toBe(true);
+  expect((container.querySelector('button[title="Play (Space)"]') as HTMLButtonElement).disabled).toBe(false);
+  act(() => body!.close());
+  await waitFor(() => expect(engine.isStreaming).toBe(false));
+});
+
+test('the real cache lookup runs outside render and opens saved audio without generating it again', async () => {
+  const originalQuery = ConvexReactClient.prototype.query;
+  let cacheReads = 0;
+  let keyRequests = 0;
+  ConvexReactClient.prototype.query = (async () => {
+    cacheReads += 1;
+    return {
+      audioUrl: '/sample_audio.mp3',
+      words: [{ text: 'Cached', start: 0, end: 0.5 }, { text: 'recording', start: 0.5, end: 1 }],
+      duration: 1,
+      timingsSource: 'soniox',
+    };
+  }) as typeof ConvexReactClient.prototype.query;
+  try {
+    const { container } = render(<ConvexAppProvider><App
+      requestTemporaryKey={async () => { keyRequests += 1; return { apiKey: 'k', expiresAt: 'soon' }; }}
+      pregenerationStatus={async () => ({ status: 'none', startedAt: null })}
+    /></ConvexAppProvider>);
+    await narrateRawText(container, 'Cached recording');
+    await waitFor(() => expect(cacheReads).toBe(1));
+    const engine = (window as any).__engine as SpeechEngine;
+    expect(engine.getSnapshot().canStartPlayback).toBe(true);
+    expect(engine.isStreaming).toBe(false);
+    expect(keyRequests).toBe(0);
+  } finally {
+    cleanup();
+    ConvexReactClient.prototype.query = originalQuery;
+  }
+});
+
+test('the real job-status lookup polls fresh results and opens the completed cache entry', async () => {
+  const originalQuery = ConvexReactClient.prototype.query;
+  let cacheReads = 0;
+  let statusReads = 0;
+  let keyRequests = 0;
+  ConvexReactClient.prototype.query = (async (_reference: unknown, input: any) => {
+    if (input.contentDigest) {
+      statusReads += 1;
+      return { status: statusReads === 1 ? 'running' : 'done', startedAt: Date.now() };
+    }
+    cacheReads += 1;
+    if (cacheReads === 1) return null;
+    return {
+      audioUrl: '/sample_audio.mp3', words: [{ text: 'Ready', start: 0, end: 1 }],
+      duration: 1, timingsSource: 'soniox',
+    };
+  }) as typeof ConvexReactClient.prototype.query;
+  try {
+    const { container } = render(<ConvexAppProvider><App
+      requestTemporaryKey={async () => { keyRequests += 1; return { apiKey: 'k', expiresAt: 'soon' }; }}
+      pregenerationPollMs={5}
+    /></ConvexAppProvider>);
+    await narrateRawText(container, 'Ready');
+    await waitFor(() => expect(cacheReads).toBe(2));
+    expect(statusReads).toBe(2);
+    expect(keyRequests).toBe(0);
+    expect(((window as any).__engine as SpeechEngine).getSnapshot().canStartPlayback).toBe(true);
+  } finally {
+    cleanup();
+    ConvexReactClient.prototype.query = originalQuery;
+  }
 });

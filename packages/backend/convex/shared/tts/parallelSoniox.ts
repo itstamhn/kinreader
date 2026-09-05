@@ -21,24 +21,15 @@ import { concatBytes, mp3DurationSeconds } from './mp3Duration';
 // headers (mp3Duration.ts), not from the last spoken character, because
 // Soniox leaves trailing silence after the final word.
 //
-// With three or four sessions the article arrives several times faster than
-// real time even at 3.5x playback, which is what lets the buffer control's
-// cushion stay small and playback run without refills.
-
-// How many Soniox sessions are open at once. Segments beyond this wait for a
-// slot, so a long article becomes waves of sessions rather than a burst.
+// Keep segments near twenty seconds of speech. Long first segments used to
+// block already-generated later audio for several minutes.
 export const MAX_PARALLEL_SEGMENTS = 4;
-// Below this a second session costs more in setup than it saves.
-export const MIN_CHARS_PER_SEGMENT = 1200;
-// No single session is asked for more than this (~6 minutes of speech), which
-// keeps each one well inside Soniox's session limits however long the article.
-export const MAX_CHARS_PER_SEGMENT = 6000;
+export const MIN_CHARS_PER_SEGMENT = 400;
+export const MAX_CHARS_PER_SEGMENT = 600;
 const SONIOX_MESSAGE_CHARS = 450;
 
 export function chooseSegmentCount(text: string): number {
-  const forThroughput = Math.min(MAX_PARALLEL_SEGMENTS, Math.round(text.length / MIN_CHARS_PER_SEGMENT));
-  const forSessionSize = Math.ceil(text.length / MAX_CHARS_PER_SEGMENT);
-  return Math.max(1, forThroughput, forSessionSize);
+  return Math.max(1, Math.round(text.length / MIN_CHARS_PER_SEGMENT), Math.ceil(text.length / MAX_CHARS_PER_SEGMENT));
 }
 
 // Contiguous, verbatim slices whose concatenation is exactly `text` -- the

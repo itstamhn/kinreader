@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
 import { Header } from './components/Header';
 import { KineticDisplay, adjacentClauseStart } from './components/KineticDisplay';
@@ -31,7 +31,7 @@ import {
   articleLibraryId,
   RESUME_MIN_WORD_INDEX,
 } from './lib/storage';
-import { useCRPC } from './lib/convex';
+import { useCRPC, useCRPCClient } from './lib/convex';
 import { authClient } from './lib/auth-client';
 import type { ArticleData, ReaderSettings, WordTiming } from './types';
 
@@ -126,10 +126,9 @@ export interface PregenerationRequest {
 }
 
 // How long the reader waits on a running pre-generation before streaming
-// after all. Two minutes covers the tail of a job that was started when the
-// article was queued; a job older than PREGENERATION_STALE_MS was killed by
-// the runtime and is not worth waiting for at all.
-const MAX_PREGENERATION_WAIT_MS = 2 * 60 * 1000;
+// after all. Give a nearly finished job a brief chance to reach the cache.
+// Older jobs may have been killed by the runtime.
+const MAX_PREGENERATION_WAIT_MS = 5000;
 const PREGENERATION_STALE_MS = 11 * 60 * 1000;
 const DEFAULT_PREGENERATION_POLL_MS = 1500;
 
@@ -167,7 +166,7 @@ export function App({
   pregenerationPollMs = DEFAULT_PREGENERATION_POLL_MS,
 }: AppProps = {}) {
   const crpc = useCRPC();
-  const queryClient = useQueryClient();
+  const crpcClient = useCRPCClient();
   const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
   const temporaryKeyMutation = useMutation(crpc.routers.tts.temporaryKey.mutationOptions());
   const trackUploadUrlMutation = useMutation(crpc.routers.tts.generateTrackUploadUrl.mutationOptions());
@@ -180,14 +179,12 @@ export function App({
   const lookupPregenerationStatus =
     pregenerationStatus ??
     ((input: { contentDigest: string; voice: string }) =>
-      // The QueryClient's default staleTime is 0, so every poll refetches.
-      queryClient.fetchQuery(
-        crpc.routers.tts.pregenerationStatus.queryOptions(input)
-      ) as Promise<PregenerationJobStatus>);
+      // Imperative calls do not invoke React hooks or reuse stale job status.
+      crpcClient.routers.tts.pregenerationStatus.query(input));
   const lookupExactTrack =
     loadExactTrack ??
     ((input: { url: string; voice: string }) =>
-      queryClient.fetchQuery(crpc.routers.tts.getExactTrack.queryOptions(input)));
+      crpcClient.routers.tts.getExactTrack.query(input));
   const persistCompletedExactTrack =
     persistExactTrack ??
     ((input: PersistExactTrackInput) =>
@@ -324,7 +321,7 @@ export function App({
     // Read play/pause state from the engine itself, not a React mirror --
     // this is what lets the keyboard effect below subscribe once instead of
     // needing playback state in its dependency array.
-    if (!engine.playbackReady) return;
+    if (!engine.playbackReady || (!engine.isPlaying && !engine.getSnapshot().canStartPlayback)) return;
     if (engine.isPlaying) {
       engine.pause();
     } else {
@@ -511,30 +508,48 @@ export function App({
           return;
         }
 
-        // Too long for a query string: POST the text and play the Blob. This
-        // waits for the whole file, but it plays -- the GET would 414.
-        setPlaybackStatus('synthesizing');
-        void fetch('/api/tts/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, voice, speed: 1.0, clientId }),
-        })
-          .then(async (response) => {
-            if (!response.ok) throw new Error(`audio fallback returned status ${response.status}`);
-            const blob = await response.blob();
-            if (!isCurrentLoad()) return;
-            revokeRestObjectUrl();
-            restObjectUrlRef.current = URL.createObjectURL(blob);
-            eng.loadAudioUrl(restObjectUrlRef.current, initialWordTimings, totalDuration, () =>
-              useBrowserFallback('the audio fallback could not be loaded')
-            );
-            setPlaybackStatus('degraded');
-            restoreAfterFallback(initialWordTimings, wasPlaying);
-          })
-          .catch((error) => {
-            console.warn('REST synthesis fallback failed; using on-device speech:', error);
-            useBrowserFallback(error instanceof Error ? error.message : 'the audio fallback failed');
-          });
+        // Read the POST body progressively too. Waiting for response.blob()
+        // made a long article's fallback another whole-file loading screen.
+        eng.startStreamingSession(initialWordTimings, totalDuration);
+        setPlaybackStatus('degraded');
+        const controller = new AbortController();
+        activeStreamRef.current = { cancel: () => controller.abort() };
+        void (async () => {
+          const response = await withTimeout(fetch('/api/tts/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, voice, speed: 1.0, clientId }),
+            signal: controller.signal,
+          }), 20000, 'audio fallback connection');
+          if (!response.ok) throw new Error(`audio fallback returned status ${response.status}`);
+          if (!response.body) throw new Error('audio fallback returned no audio');
+          const reader = response.body.getReader();
+          let receivedBytes = 0;
+          try {
+            while (isCurrentLoad() && !controller.signal.aborted) {
+              const result = await withTimeout(reader.read(), 20000, 'audio fallback');
+              if (!isCurrentLoad() || controller.signal.aborted) return;
+              if (result.done) break;
+              receivedBytes += result.value.byteLength;
+              eng.appendAudioChunk(result.value);
+            }
+            if (!isCurrentLoad() || controller.signal.aborted) return;
+            if (receivedBytes === 0) throw new Error('audio fallback returned empty audio');
+            eng.finishStreamingSession();
+            const fitted = fitEstimatedTail(initialWordTimings, 0, eng.receivedAudioSeconds);
+            eng.appendWordTimings(fitted, fitted.at(-1)?.end ?? totalDuration);
+            restoreAfterFallback(fitted, wasPlaying);
+            activeStreamRef.current = null;
+          } finally {
+            void reader.cancel().catch(() => {});
+          }
+        })().catch((error) => {
+          if (!isCurrentLoad() || controller.signal.aborted) return;
+          controller.abort();
+          activeStreamRef.current = null;
+          console.warn('REST synthesis fallback failed; using on-device speech:', error);
+          useBrowserFallback(error instanceof Error ? error.message : 'the audio fallback failed');
+        });
       } catch (error) {
         useBrowserFallback(error instanceof Error ? error.message : undefined);
       }
@@ -1245,9 +1260,15 @@ export function App({
             viewMode={viewMode}
             onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
             isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
-            isPlayable={playback.playbackReady}
+            isPlayable={playback.playbackReady && (playback.canStartPlayback || playback.isPlaying)}
+            bufferedProgress={playback.isStreaming && playback.duration > 0 ? playback.bufferedSeconds / playback.duration * 100 : undefined}
+            loadingProgress={playback.isStreaming ? {
+              readySeconds: playback.bufferedAheadSeconds / playback.rate,
+              targetSeconds: playback.bufferTargetSeconds / playback.rate,
+              waiting: playback.isBuffering || (!playback.isPlaying && !playback.canStartPlayback),
+            } : undefined}
             isBuffering={
-              playback.isBuffering ||
+              playback.isBuffering || (playback.isStreaming && !playback.isPlaying && !playback.canStartPlayback) ||
               (!playback.playbackReady && playbackStatus !== 'degraded' && playbackStatus !== 'error')
             }
             isDegraded={playbackStatus === 'degraded'}
@@ -1259,7 +1280,7 @@ export function App({
             onDismissNotice={() => setLoadError(null)}
             infoMessage={
               awaitingPregeneration
-                ? 'Preparing audio… this article is being synthesised once for everyone.'
+                ? 'Preparing audio… checking for a saved recording.'
                 : truncationNotice ?? undefined
             }
             infoBusy={awaitingPregeneration}

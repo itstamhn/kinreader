@@ -259,7 +259,7 @@ test('the estimated word timeline is rescaled to the real audio duration once kn
   const audio = fakeAudio({
     duration: 20,
     networkState: 1,
-    buffered: { length: 1, end: () => 20 },
+    buffered: { length: 1, start: () => 0, end: () => 20 },
   });
   attach(engine, audio, evenWords(10));
 
@@ -277,7 +277,7 @@ test('rescaling waits for a duration the buffer actually covers', () => {
   const engine = new SpeechEngine();
   const audio = fakeAudio({
     duration: 4,
-    buffered: { length: 1, end: () => 4 },
+    buffered: { length: 1, start: () => 0, end: () => 4 },
     networkState: 2, // NETWORK_LOADING -- still pulling bytes
   });
   attach(engine, audio, evenWords(10));
@@ -619,7 +619,7 @@ test('authoritative streaming timings are never calibrated to audio duration', (
   const audio = fakeAudio({
     duration: 4,
     networkState: 1,
-    buffered: { length: 1, end: () => 4 },
+    buffered: { length: 1, start: () => 0, end: () => 4 },
   });
   attach(engine, audio, evenWords(2));
 
@@ -766,7 +766,7 @@ test('play holds for a buffer cushion while the stream is live, then starts on i
   expect(engine.getSnapshot().isBuffering).toBe(true);
   expect(playCalls).toBe(0);
 
-  // 2 wall seconds of cushion at 1.5x = 3 media seconds. Not there yet...
+  // One minute at 1.5x needs 90 media seconds.
   audio.buffered = rangeTo(2.0);
   (engine as any).sourceBuffer.buffered = audio.buffered;
   (engine as any).maybeResumeFromBuffering();
@@ -774,7 +774,7 @@ test('play holds for a buffer cushion while the stream is live, then starts on i
   expect(playCalls).toBe(0);
 
   // ...and now it is.
-  audio.buffered = rangeTo(3.2);
+  audio.buffered = rangeTo(90);
   (engine as any).sourceBuffer.buffered = audio.buffered;
   (engine as any).maybeResumeFromBuffering();
   expect(engine.getSnapshot().isBuffering).toBe(false);
@@ -795,6 +795,7 @@ test('a stream that runs low pauses deliberately and refills to the cushion inst
   });
   attachStreaming(engine, audio, evenWords(120));
   engine.isPlaying = true;
+  (engine as any).hasStartedStreamingPlayback = true;
   engine.rate = 1.0;
 
   // Plenty ahead: plays normally.
@@ -816,8 +817,8 @@ test('a stream that runs low pauses deliberately and refills to the cushion inst
   expect(audio.paused).toBe(true);
   expect(playCalls).toBe(0);
 
-  // The full 2-second cushion is.
-  audio.buffered = rangeTo(12.0);
+  // Refill fifteen seconds before resuming.
+  audio.buffered = rangeTo(25);
   (engine as any).sourceBuffer.buffered = audio.buffered;
   (engine as any).syncFromAudioTick(0.1);
   expect(playCalls).toBe(1);
@@ -825,26 +826,17 @@ test('a stream that runs low pauses deliberately and refills to the cushion inst
   expect(engine.getSnapshot().isBuffering).toBe(false);
 });
 
-test('a stream slower than the playback rate front-loads the shortfall for the rest of the article', () => {
+test('startup cushion follows playback speed and never exceeds the remaining article', () => {
   const engine = new SpeechEngine();
   const audio = fakeAudio({ paused: true, buffered: rangeTo(6) });
-  attachStreaming(engine, audio, evenWords(100)); // 100s article
+  attachStreaming(engine, audio, evenWords(300));
   engine.rate = 2.0;
-
-  // Measured: 6 media seconds arrived over 4 wall seconds = 1.5x, below 2x.
-  (engine as any).productionFirst = { wall: 0, end: 0 };
-  (engine as any).productionLatest = { wall: 4000, end: 6 };
-
-  // Remaining 94s at a 25% shortfall = 23.5s deficit, plus the 4s cushion.
-  expect((engine as any).bufferTarget()).toBeCloseTo(27.5, 3);
-
-  // A stream keeping up needs only the cushion.
-  (engine as any).productionLatest = { wall: 4000, end: 10 };
-  expect((engine as any).bufferTarget()).toBeCloseTo(4, 3);
-
-  // Too little wall time to trust a rate estimate: cushion only.
-  (engine as any).productionLatest = { wall: 1000, end: 0.5 };
-  expect((engine as any).bufferTarget()).toBeCloseTo(4, 3);
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(120);
+  engine.rate = 3.5;
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(210);
+  engine.duration = 20;
+  engine.rate = 1.5;
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(20);
 });
 
 test('once the stream is complete nothing is held back, even with a thin buffer', () => {
@@ -962,10 +954,10 @@ test('parts play back to back on one continuous timeline, and hold at the end of
     const engine = new SpeechEngine();
     const audio = fakeAudio({ paused: true, src: '' });
     (engine as any).audio = audio;
-    engine.rate = 0.8; // a small cushion (2 wall seconds x 0.8) so two parts are enough to start
+    engine.rate = 0.8;
     engine.startStreamingSession(evenWords(600), 600);
-    engine.appendAudioChunk(mp3Frames(30)); // part 0 (~0.78 s)
-    engine.appendAudioChunk(mp3Frames(50)); // part 1 (~1.31 s)
+    engine.appendAudioChunk(mp3Frames(1000)); // part 0 (~26 s)
+    engine.appendAudioChunk(mp3Frames(1000)); // part 1 (~26 s)
     expect((engine as any).parts).toHaveLength(2);
     const part0 = (engine as any).parts[0].duration as number;
 
@@ -1028,5 +1020,39 @@ test('seeking across parts loads the right part at the right offset', () => {
     expect(audio.src).toBe('blob:part-1');
     expect(audio.currentTime).toBeCloseTo(0.2, 5);
     expect(p0!.start).toBe(0);
+  });
+});
+
+test('long articles wait for a minute of listening before starting, then resume automatically', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ paused: true, buffered: rangeTo(4) });
+  attachStreaming(engine, audio, evenWords(600));
+  engine.rate = 1.5;
+  engine.play();
+  expect(audio.paused).toBe(true);
+  expect(engine.isBuffering).toBe(true);
+  audio.buffered = rangeTo(90);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).maybeResumeFromBuffering();
+  expect(audio.paused).toBe(false);
+  expect(engine.isBuffering).toBe(false);
+  engine.stop();
+});
+
+test('resuming beyond downloaded parts waits for that position instead of playing from the beginning', () => {
+  withoutMediaSource(() => {
+    const engine = new SpeechEngine();
+    const audio = fakeAudio({ paused: true });
+    (engine as any).audio = audio;
+    engine.startStreamingSession(evenWords(600), 600);
+    engine.seekToWordIndex(90);
+    expect(engine.currentTime).toBe(90);
+    engine.appendAudioChunk(mp3Frames(1000));
+    expect(engine.getSnapshot().canStartPlayback).toBe(false);
+    engine.appendAudioChunk(mp3Frames(7000));
+    expect((engine as any).pendingSeekTime).toBeNull();
+    expect((engine as any).partOffset + audio.currentTime).toBeCloseTo(90, 5);
+    expect(engine.getSnapshot().canStartPlayback).toBe(true);
+    engine.stop();
   });
 });

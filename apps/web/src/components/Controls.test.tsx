@@ -89,3 +89,28 @@ test('the degraded copy can describe REST audio with estimated timing', () => {
   expect(rendered.container.textContent).toContain('Exact word sync unavailable');
   expect(rendered.container.textContent).not.toContain('Neural voice unavailable');
 });
+
+test('preparation shows listening time and keeps Full Text available', () => {
+  let toggled = 0;
+  const rendered = render(<Controls {...baseProps}
+    isPlayable={false} isBuffering={true}
+    loadingProgress={{ readySeconds: 20, targetSeconds: 60, waiting: true }}
+    onToggleViewMode={() => { toggled += 1; }}
+  />);
+  expect(rendered.getByRole('status').textContent).toContain('00:20 / 01:00 ready');
+  expect(rendered.getByRole('progressbar').getAttribute('value')).toBe('20');
+  fireEvent.click(rendered.getByRole('button', { name: /full text/i }));
+  expect(toggled).toBe(1);
+});
+
+test('buffering playback can be paused and promises automatic resume', () => {
+  let paused = 0;
+  const rendered = render(<Controls {...baseProps}
+    isPlaying={true} isPlayable={true} isBuffering={true}
+    onTogglePlay={() => { paused += 1; }}
+    loadingProgress={{ readySeconds: 3, targetSeconds: 15, waiting: true }}
+  />);
+  fireEvent.click(rendered.getByRole('button', { name: /pause buffering/i }));
+  expect(paused).toBe(1);
+  expect(rendered.container.textContent).toContain('Playback will resume automatically.');
+});

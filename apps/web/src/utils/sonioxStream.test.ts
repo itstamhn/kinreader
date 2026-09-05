@@ -288,3 +288,75 @@ test('cancel closes the socket and suppresses all later events', () => {
   expect(received.values.terminated).toBe(0);
   expect(received.values.errors).toEqual([]);
 });
+
+function withStreamClock(run: (advance: (ms: number) => void) => void) {
+  const originalSet = globalThis.setTimeout;
+  const originalClear = globalThis.clearTimeout;
+  let now = 0;
+  let id = 0;
+  const tasks = new Map<number, { due: number; callback: () => void }>();
+  globalThis.setTimeout = ((callback: () => void, ms: number) => {
+    tasks.set(++id, { due: now + ms, callback });
+    return id;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((key: number) => tasks.delete(key)) as unknown as typeof clearTimeout;
+  try {
+    run((ms) => {
+      now += ms;
+      for (const [key, task] of [...tasks]) {
+        if (task.due <= now) {
+          tasks.delete(key);
+          task.callback();
+        }
+      }
+    });
+  } finally {
+    globalThis.setTimeout = originalSet;
+    globalThis.clearTimeout = originalClear;
+  }
+}
+
+test('an unresponsive connection reports failure instead of loading indefinitely', () => {
+  withStreamClock((advance) => {
+    const received = handlers();
+    openSonioxStream({ apiKey: 'key', text: 'Hi', voice: 'Adrian', handlers: received.handlers });
+    advance(15000);
+    expect(received.values.errors).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]!.closeCount).toBe(1);
+    advance(60000);
+    expect(received.values.errors).toHaveLength(1);
+  });
+});
+
+test('audio progress refreshes the deadline but empty audio cannot keep a stalled stream alive', () => {
+  withStreamClock((advance) => {
+    const received = handlers();
+    openSonioxStream({ apiKey: 'key', text: 'Hi', voice: 'Adrian', handlers: received.handlers });
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    advance(19000);
+    socket.receive({ audio: 'AQID' });
+    advance(19000);
+    expect(received.values.errors).toHaveLength(0);
+    socket.receive({ audio: '' });
+    advance(1000);
+    expect(received.values.errors[0]?.message).toContain('stopped responding');
+  });
+});
+
+test('missing trailing timing completion has a deadline and cancel clears pending deadlines', () => {
+  withStreamClock((advance) => {
+    const received = handlers();
+    openSonioxStream({ apiKey: 'key', text: 'Hi', voice: 'Adrian', handlers: received.handlers });
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.receive({ audio_end: true });
+    advance(10000);
+    expect(received.values.errors[0]?.message).toContain('finalization timed out');
+    const cancelled = handlers();
+    const stream = openSonioxStream({ apiKey: 'key', text: 'Hi', voice: 'Adrian', handlers: cancelled.handlers });
+    stream.cancel();
+    advance(60000);
+    expect(cancelled.values.errors).toHaveLength(0);
+  });
+});

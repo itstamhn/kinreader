@@ -138,16 +138,26 @@ export function openSonioxStream({
   let failed = false;
   let audioEnded = false;
   let terminated = false;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const clearDeadline = () => clearTimeout(deadline);
+  const armDeadline = (ms: number, message: string) => {
+    clearDeadline();
+    deadline = setTimeout(() => fail(new SonioxProtocolError(message)), ms);
+    // Node background generation should not be kept alive by a cancelled test/session.
+    (deadline as unknown as { unref?: () => void }).unref?.();
+  };
 
   const finishTermination = () => {
     if (terminated) return;
     terminated = true;
+    clearDeadline();
     handlers.onTerminated?.();
   };
 
   const fail = (error: Error) => {
     if (cancelled || failed) return;
     failed = true;
+    clearDeadline();
     try {
       handlers.onError(error);
     } catch {
@@ -175,8 +185,11 @@ export function openSonioxStream({
     return { cancel() {} };
   }
 
+  armDeadline(15000, 'The audio connection timed out');
+
   socket.onopen = () => {
     if (cancelled || failed || audioEnded) return;
+    armDeadline(20000, 'Audio generation stopped responding');
 
     send({
       api_key: apiKey,
@@ -196,7 +209,7 @@ export function openSonioxStream({
   };
 
   socket.onmessage = (event) => {
-    if (cancelled || failed) return;
+    if (cancelled || failed || terminated) return;
 
     let payload: unknown;
     try {
@@ -225,7 +238,11 @@ export function openSonioxStream({
       if ('audio' in payload) {
         recognised = true;
         if (typeof payload.audio !== 'string') throw new SonioxProtocolError('Soniox sent malformed audio');
-        handlers.onAudio(decodeAudio(payload.audio));
+        const chunk = decodeAudio(payload.audio);
+        if (chunk.byteLength > 0 && !audioEnded) {
+          armDeadline(20000, 'Audio generation stopped responding');
+        }
+        handlers.onAudio(chunk);
       }
       if ('timestamps' in payload) {
         recognised = true;
@@ -236,6 +253,7 @@ export function openSonioxStream({
         if (typeof payload.audio_end !== 'boolean') throw new SonioxProtocolError('Soniox sent malformed audio_end');
         if (payload.audio_end && !audioEnded) {
           audioEnded = true;
+          armDeadline(10000, 'Audio timing finalization timed out');
           handlers.onDone();
         }
       }
@@ -270,6 +288,7 @@ export function openSonioxStream({
     cancel() {
       if (cancelled) return;
       cancelled = true;
+      clearDeadline();
       try {
         socket?.close();
       } catch {}

@@ -20,7 +20,7 @@ function createQueryClient() {
 // kitcn's generated `api` surface + React context/hooks. `useCRPC()` is the
 // entry point components use to build TanStack Query options for cRPC
 // procedures (see kitcn/docs "React Query Integration").
-export const { CRPCProvider, useCRPC } = createCRPCContext({
+export const { CRPCProvider, useCRPC, useCRPCClient } = createCRPCContext({
   api,
   convexSiteUrl: import.meta.env.VITE_CONVEX_SITE_URL!,
 });

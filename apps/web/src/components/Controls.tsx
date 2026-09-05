@@ -29,6 +29,8 @@ interface ControlsProps {
   isSynthesizing?: boolean;
   isPlayable?: boolean;
   isBuffering?: boolean;
+  bufferedProgress?: number;
+  loadingProgress?: { readySeconds: number; targetSeconds: number; waiting: boolean };
   isDegraded?: boolean;
   isError?: boolean;
   /** Overrides the default degraded-notice copy (e.g. REST audio with estimated word sync). */
@@ -65,6 +67,8 @@ export function Controls({
   isSynthesizing = false,
   isPlayable = true,
   isBuffering = isSynthesizing,
+  bufferedProgress,
+  loadingProgress,
   isDegraded = false,
   isError = false,
   degradedMessage = 'Neural voice unavailable (using on-device speech).',
@@ -174,7 +178,7 @@ export function Controls({
               isError
                 ? 'Audio unavailable'
                 : isBuffering
-                  ? 'Play (buffering)'
+                  ? isPlaying ? 'Pause buffering (Space)' : 'Play when audio is ready'
                   : isPlaying
                     ? 'Pause (Space)'
                     : 'Play (Space)'
@@ -243,6 +247,14 @@ export function Controls({
         >
           {/* Base Inactive Waveform */}
           <div className="absolute inset-0 waveform-mask-base pointer-events-none" />
+
+          {bufferedProgress !== undefined && (
+            <div
+              aria-hidden="true"
+              className="absolute top-0 bottom-0 left-0 bg-white/20 pointer-events-none"
+              style={{ width: `${Math.max(0, Math.min(100, bufferedProgress))}%` }}
+            />
+          )}
 
           {/* Active Played Waveform */}
           <div
@@ -339,6 +351,27 @@ export function Controls({
           )}
         </div>
       </div>
+
+      {loadingProgress && (
+        <div className="border-t border-white/10 px-4 py-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-[#ECEAE4]/70">
+          <span role="status">
+            {loadingProgress.waiting
+              ? `${isPlaying ? 'Refilling audio' : 'Preparing audio'} · ${formatTime(loadingProgress.readySeconds)} / ${formatTime(loadingProgress.targetSeconds)} ready`
+              : `${formatTime(loadingProgress.readySeconds)} ready · Loading the rest as you listen`}
+          </span>
+          {loadingProgress.waiting && (
+            <>
+              <progress
+                aria-label="Audio preparation"
+                max={Math.max(1, loadingProgress.targetSeconds)}
+                value={Math.min(loadingProgress.readySeconds, loadingProgress.targetSeconds)}
+                className="h-1.5 w-24 accent-[#F2A33C]"
+              />
+              <span>{isPlaying ? 'Playback will resume automatically.' : 'Play unlocks when the buffer is ready. Full Text is available now.'}</span>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Synthesis / Degraded / Error Notice Banner */}
       {noticeMessage ? (

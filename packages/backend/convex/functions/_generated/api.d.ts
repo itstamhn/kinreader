@@ -30,27 +30,6 @@ export declare const api: {
       >;
     };
     tts: {
-      pregenerationStatus: FunctionReference<
-        "query",
-        "public",
-        { contentDigest: string; voice: string },
-        {
-          startedAt: number | null;
-          status: "none" | "running" | "done" | "failed";
-        }
-      >;
-      pregenerate: FunctionReference<
-        "action",
-        "public",
-        {
-          author?: string;
-          clientId?: string;
-          text: string;
-          title?: string;
-          voice?: string;
-        },
-        any
-      >;
       generateTrackUploadUrl: FunctionReference<
         "mutation",
         "public",
@@ -84,6 +63,27 @@ export declare const api: {
         },
         | { articleId: string; ok: true; trackId: string }
         | { error: string; ok: false }
+      >;
+      pregenerate: FunctionReference<
+        "action",
+        "public",
+        {
+          author?: string;
+          clientId?: string;
+          text: string;
+          title?: string;
+          voice?: string;
+        },
+        any
+      >;
+      pregenerationStatus: FunctionReference<
+        "query",
+        "public",
+        { contentDigest: string; voice: string },
+        {
+          startedAt: number | null;
+          status: "none" | "running" | "done" | "failed";
+        }
       >;
       synthesize: FunctionReference<
         "action",
@@ -389,20 +389,17 @@ export declare const internal: {
       >;
     };
     ttsInternal: {
-      pregenerationJobStatus: FunctionReference<
-        "query",
-        "internal",
-        { contentDigest: string; voice: string },
-        {
-          startedAt?: number;
-          status: "none" | "running" | "done" | "failed";
-        }
-      >;
       claimPregenerationJob: FunctionReference<
         "mutation",
         "internal",
         { contentDigest: string; voice: string },
         "claimed" | "running" | "done"
+      >;
+      cleanupAbandonedTrackUploads: FunctionReference<
+        "mutation",
+        "internal",
+        { cursor: string | null; now?: number },
+        { continueCursor: string | null; deleted: number; scanned: number }
       >;
       completePregenerationJob: FunctionReference<
         "mutation",
@@ -414,33 +411,6 @@ export declare const internal: {
           voice: string;
         },
         null
-      >;
-      findGlobalExactTrack: FunctionReference<
-        "query",
-        "internal",
-        { contentDigest: string; voice: string },
-        any
-      >;
-      finalizeGlobalExactTrack: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          author?: string;
-          content: string;
-          contentDigest: string;
-          duration: number;
-          storageId: Id<"_storage">;
-          title?: string;
-          voice: string;
-          words: Array<{ end: number; start: number; text: string }>;
-        },
-        { articleId: Id<"articles">; trackId: Id<"audioTracks"> }
-      >;
-      cleanupAbandonedTrackUploads: FunctionReference<
-        "mutation",
-        "internal",
-        { cursor: string | null; now?: number },
-        { continueCursor: string | null; deleted: number; scanned: number }
       >;
       consumeTtsRateLimit: FunctionReference<
         "mutation",
@@ -461,6 +431,21 @@ export declare const internal: {
           duration: number;
           grant: string;
           ownerKey: string;
+          storageId: Id<"_storage">;
+          title?: string;
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        },
+        { articleId: Id<"articles">; trackId: Id<"audioTracks"> }
+      >;
+      finalizeGlobalExactTrack: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          author?: string;
+          content: string;
+          contentDigest: string;
+          duration: number;
           storageId: Id<"_storage">;
           title?: string;
           voice: string;
@@ -490,6 +475,24 @@ export declare const internal: {
         "query",
         "internal",
         { cacheKey: string; ownerKey: string; voice: string },
+        null | {
+          _creationTime: number;
+          _id: Id<"audioTracks">;
+          articleId: Id<"articles">;
+          audioBase64?: string;
+          createdAt: number;
+          duration: number;
+          speed: number;
+          storageId?: Id<"_storage">;
+          timingsSource?: "soniox" | "estimated";
+          voice: string;
+          words: Array<{ end: number; start: number; text: string }>;
+        }
+      >;
+      findGlobalExactTrack: FunctionReference<
+        "query",
+        "internal",
+        { contentDigest: string; voice: string },
         null | {
           _creationTime: number;
           _id: Id<"audioTracks">;
@@ -542,6 +545,12 @@ export declare const internal: {
           voice: string;
         },
         { ok: false } | { expiresAt: number; grant: string; ok: true }
+      >;
+      pregenerationJobStatus: FunctionReference<
+        "query",
+        "internal",
+        { contentDigest: string; voice: string },
+        { startedAt?: number; status: "none" | "running" | "done" | "failed" }
       >;
       rejectExactTrackUpload: FunctionReference<
         "mutation",
