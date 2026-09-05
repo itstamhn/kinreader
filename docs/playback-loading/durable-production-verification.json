@@ -1,0 +1,2538 @@
+{
+  "readyMs": 6000.799999952316,
+  "wordCount": 11561,
+  "sampleCount": 359,
+  "first": {
+    "t": 11.366226,
+    "index": 30,
+    "buffer": 386.385765,
+    "buffering": false,
+    "authoritative": true
+  },
+  "last": {
+    "t": 279.753103,
+    "index": 736,
+    "buffer": 1163.534897000037,
+    "buffering": false,
+    "authoritative": true
+  },
+  "bufferingSamples": 0,
+  "backwardJumps": 0,
+  "allTimingsAuthoritative": true,
+  "samples": [
+    {
+      "t": 11.366226,
+      "index": 30,
+      "buffer": 386.385765,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 12.11524,
+      "index": 31,
+      "buffer": 424.94875,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 12.863671,
+      "index": 32,
+      "buffer": 468.288318,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 13.609017,
+      "index": 32,
+      "buffer": 467.542972,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 14.358611,
+      "index": 36,
+      "buffer": 513.881377,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 15.112004,
+      "index": 38,
+      "buffer": 550.735983,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 15.859969,
+      "index": 40,
+      "buffer": 549.988018,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 16.619865,
+      "index": 43,
+      "buffer": 590.412121,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 17.261187,
+      "index": 45,
+      "buffer": 636.2588130000239,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 18.011167,
+      "index": 46,
+      "buffer": 682.7648330000247,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 18.758794,
+      "index": 48,
+      "buffer": 682.0172060000248,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 19.50937,
+      "index": 49,
+      "buffer": 723.0506300000254,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 20.271382,
+      "index": 50,
+      "buffer": 769.8806180000263,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 21.019287,
+      "index": 52,
+      "buffer": 812.3807130000271,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 21.768185,
+      "index": 56,
+      "buffer": 811.631815000027,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 22.516744,
+      "index": 58,
+      "buffer": 844.3152560000274,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 23.26391,
+      "index": 60,
+      "buffer": 843.5680900000274,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 24.01211,
+      "index": 62,
+      "buffer": 889.8118900000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 24.758591,
+      "index": 65,
+      "buffer": 889.0654090000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 25.51131,
+      "index": 67,
+      "buffer": 888.3126900000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 26.271071,
+      "index": 70,
+      "buffer": 887.5529290000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 27.017395,
+      "index": 72,
+      "buffer": 886.8066050000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 27.768984,
+      "index": 74,
+      "buffer": 886.0550160000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 28.512106,
+      "index": 77,
+      "buffer": 885.3118940000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 29.26339,
+      "index": 79,
+      "buffer": 884.5606100000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 30.011751,
+      "index": 81,
+      "buffer": 883.8122490000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 30.760894,
+      "index": 82,
+      "buffer": 883.0631060000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 31.511412,
+      "index": 82,
+      "buffer": 882.3125880000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 32.271286,
+      "index": 88,
+      "buffer": 881.5527140000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 33.018785,
+      "index": 90,
+      "buffer": 880.8052150000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 33.766876,
+      "index": 92,
+      "buffer": 880.0571240000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 34.514476,
+      "index": 95,
+      "buffer": 879.3095240000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 35.26394,
+      "index": 97,
+      "buffer": 878.5600600000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 36.012641,
+      "index": 99,
+      "buffer": 877.8113590000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 36.755055,
+      "index": 102,
+      "buffer": 877.0689450000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 37.505616,
+      "index": 103,
+      "buffer": 876.3183840000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 38.253947,
+      "index": 103,
+      "buffer": 875.5700530000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 39.011769,
+      "index": 105,
+      "buffer": 874.8122310000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 39.762439,
+      "index": 107,
+      "buffer": 874.0615610000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 40.510103,
+      "index": 111,
+      "buffer": 873.3138970000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 41.257983,
+      "index": 114,
+      "buffer": 872.5660170000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 42.006013,
+      "index": 116,
+      "buffer": 871.8179870000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 42.75264,
+      "index": 117,
+      "buffer": 871.0713600000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 43.504372,
+      "index": 120,
+      "buffer": 870.3196280000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 44.263536,
+      "index": 123,
+      "buffer": 869.5604640000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 45.014852,
+      "index": 125,
+      "buffer": 868.8091480000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 45.757599,
+      "index": 128,
+      "buffer": 868.0664010000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 46.510255,
+      "index": 130,
+      "buffer": 867.3137450000282,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 47.257764,
+      "index": 132,
+      "buffer": 866.5662360000283,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 48.004289,
+      "index": 135,
+      "buffer": 899.2517110000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 48.751225,
+      "index": 137,
+      "buffer": 898.5047750000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 49.503835,
+      "index": 139,
+      "buffer": 897.7521650000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 50.255168,
+      "index": 142,
+      "buffer": 897.0008320000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 51.012134,
+      "index": 146,
+      "buffer": 896.2438660000287,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 51.758836,
+      "index": 149,
+      "buffer": 895.4971640000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 52.507669,
+      "index": 150,
+      "buffer": 894.7483310000287,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 53.257516,
+      "index": 153,
+      "buffer": 893.9984840000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 54.005375,
+      "index": 158,
+      "buffer": 893.2506250000287,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 54.754854,
+      "index": 160,
+      "buffer": 892.5011460000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 55.501893,
+      "index": 162,
+      "buffer": 891.7541070000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 56.265354,
+      "index": 164,
+      "buffer": 890.9906460000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 57.014296,
+      "index": 165,
+      "buffer": 890.2417040000287,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 57.760622,
+      "index": 166,
+      "buffer": 889.4953780000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 58.510933,
+      "index": 167,
+      "buffer": 888.7450670000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 59.255921,
+      "index": 169,
+      "buffer": 888.0000790000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 60.00674,
+      "index": 173,
+      "buffer": 887.2492600000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 60.752077,
+      "index": 175,
+      "buffer": 886.5039230000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 61.504547,
+      "index": 177,
+      "buffer": 885.7514530000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 62.252618,
+      "index": 178,
+      "buffer": 885.0033820000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 63.011194,
+      "index": 181,
+      "buffer": 884.2448060000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 63.762161,
+      "index": 182,
+      "buffer": 883.4938390000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 64.509043,
+      "index": 186,
+      "buffer": 882.7469570000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 65.254754,
+      "index": 187,
+      "buffer": 882.0012460000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 66.005305,
+      "index": 190,
+      "buffer": 881.2506950000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 66.754169,
+      "index": 191,
+      "buffer": 880.5018310000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 67.501605,
+      "index": 194,
+      "buffer": 879.7543950000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 68.264071,
+      "index": 196,
+      "buffer": 878.9919290000287,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 69.01417,
+      "index": 199,
+      "buffer": 878.2418300000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 69.760981,
+      "index": 201,
+      "buffer": 877.4950190000286,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 70.507614,
+      "index": 204,
+      "buffer": 921.7723860000294,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 71.252159,
+      "index": 206,
+      "buffer": 921.0278410000294,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 72.004902,
+      "index": 210,
+      "buffer": 961.1230980000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 72.75493,
+      "index": 212,
+      "buffer": 960.3730700000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 73.504506,
+      "index": 213,
+      "buffer": 959.6234940000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 74.252249,
+      "index": 217,
+      "buffer": 958.8757510000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 75.013258,
+      "index": 221,
+      "buffer": 958.1147420000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 75.761246,
+      "index": 224,
+      "buffer": 957.3667540000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 76.509207,
+      "index": 225,
+      "buffer": 956.6187930000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 77.255964,
+      "index": 227,
+      "buffer": 955.8720360000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 78.005044,
+      "index": 227,
+      "buffer": 955.1229560000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 78.753543,
+      "index": 229,
+      "buffer": 954.3744570000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 79.502954,
+      "index": 230,
+      "buffer": 953.6250460000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 80.265031,
+      "index": 233,
+      "buffer": 952.8629690000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 81.014098,
+      "index": 233,
+      "buffer": 952.1139020000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 81.758029,
+      "index": 236,
+      "buffer": 951.3699710000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 82.506963,
+      "index": 239,
+      "buffer": 950.6210370000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 83.25594,
+      "index": 240,
+      "buffer": 949.8720600000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 84.003912,
+      "index": 242,
+      "buffer": 949.1240880000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 84.754548,
+      "index": 242,
+      "buffer": 948.3734520000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 85.504144,
+      "index": 244,
+      "buffer": 947.6238560000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 86.252656,
+      "index": 244,
+      "buffer": 946.8753440000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 87.010046,
+      "index": 245,
+      "buffer": 946.1179540000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 87.761438,
+      "index": 247,
+      "buffer": 945.3665620000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 88.50849,
+      "index": 247,
+      "buffer": 944.6195100000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 89.255863,
+      "index": 248,
+      "buffer": 943.8721370000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 90.003437,
+      "index": 249,
+      "buffer": 943.1245630000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 90.753983,
+      "index": 253,
+      "buffer": 942.3740170000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 91.502485,
+      "index": 254,
+      "buffer": 941.6255150000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 92.26357,
+      "index": 257,
+      "buffer": 940.8644300000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 93.013333,
+      "index": 257,
+      "buffer": 940.1146670000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 93.760419,
+      "index": 259,
+      "buffer": 939.3675810000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 94.506053,
+      "index": 260,
+      "buffer": 938.6219470000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 95.252755,
+      "index": 260,
+      "buffer": 937.8752450000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 96.005677,
+      "index": 260,
+      "buffer": 937.1223230000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 96.753424,
+      "index": 260,
+      "buffer": 936.3745760000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 97.504002,
+      "index": 261,
+      "buffer": 935.6239980000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 98.252223,
+      "index": 265,
+      "buffer": 934.8757770000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 99.009411,
+      "index": 268,
+      "buffer": 934.1185890000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 99.759644,
+      "index": 270,
+      "buffer": 933.3683560000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 100.507937,
+      "index": 272,
+      "buffer": 932.6200630000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 101.253086,
+      "index": 273,
+      "buffer": 931.8749140000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 102.001939,
+      "index": 277,
+      "buffer": 931.1260610000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 102.753236,
+      "index": 278,
+      "buffer": 930.3747640000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 103.501778,
+      "index": 280,
+      "buffer": 929.6262220000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 104.262886,
+      "index": 281,
+      "buffer": 928.8651140000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 105.013482,
+      "index": 283,
+      "buffer": 928.1145180000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 105.760559,
+      "index": 285,
+      "buffer": 927.3674410000301,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 106.507654,
+      "index": 287,
+      "buffer": 926.6203460000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 107.251691,
+      "index": 288,
+      "buffer": 925.8763090000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 108.005263,
+      "index": 290,
+      "buffer": 925.1227370000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 108.75425,
+      "index": 293,
+      "buffer": 924.3737500000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 109.502038,
+      "index": 296,
+      "buffer": 923.6259620000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 110.25348,
+      "index": 298,
+      "buffer": 922.8745200000302,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 111.010726,
+      "index": 301,
+      "buffer": 1005.9492740000317,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 111.758296,
+      "index": 302,
+      "buffer": 1044.6817040000324,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 112.506909,
+      "index": 305,
+      "buffer": 1043.9330910000324,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 113.256101,
+      "index": 309,
+      "buffer": 1043.1838990000324,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 114.004659,
+      "index": 311,
+      "buffer": 1079.0113410000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 114.749902,
+      "index": 312,
+      "buffer": 1078.2660980000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 115.501754,
+      "index": 315,
+      "buffer": 1077.514246000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 116.259064,
+      "index": 317,
+      "buffer": 1076.7569360000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 117.010368,
+      "index": 320,
+      "buffer": 1076.0056320000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 117.758011,
+      "index": 321,
+      "buffer": 1075.257989000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 118.506598,
+      "index": 325,
+      "buffer": 1074.5094020000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 119.251022,
+      "index": 329,
+      "buffer": 1073.764978000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 120.003424,
+      "index": 332,
+      "buffer": 1073.0125760000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 120.753176,
+      "index": 333,
+      "buffer": 1072.2628240000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 121.504089,
+      "index": 336,
+      "buffer": 1071.5119110000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 122.248762,
+      "index": 340,
+      "buffer": 1070.7672380000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 123.006676,
+      "index": 342,
+      "buffer": 1070.0093240000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 123.760141,
+      "index": 343,
+      "buffer": 1069.2558590000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 124.505443,
+      "index": 344,
+      "buffer": 1068.5105570000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 125.256302,
+      "index": 346,
+      "buffer": 1067.7596980000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 126.004135,
+      "index": 349,
+      "buffer": 1067.011865000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 126.749332,
+      "index": 352,
+      "buffer": 1066.2666680000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 127.499032,
+      "index": 353,
+      "buffer": 1065.5169680000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 128.262598,
+      "index": 355,
+      "buffer": 1064.7534020000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 129.011372,
+      "index": 358,
+      "buffer": 1064.0046280000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 129.758709,
+      "index": 359,
+      "buffer": 1063.2572910000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 130.508263,
+      "index": 361,
+      "buffer": 1062.5077370000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 131.250552,
+      "index": 364,
+      "buffer": 1061.7654480000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 131.998509,
+      "index": 367,
+      "buffer": 1061.0174910000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 132.749838,
+      "index": 372,
+      "buffer": 1060.2661620000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 133.499485,
+      "index": 373,
+      "buffer": 1059.5165150000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 134.252163,
+      "index": 375,
+      "buffer": 1058.7638370000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 135.010907,
+      "index": 376,
+      "buffer": 1058.0050930000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 135.760267,
+      "index": 379,
+      "buffer": 1057.2557330000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 136.504921,
+      "index": 383,
+      "buffer": 1056.5110790000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 137.251846,
+      "index": 387,
+      "buffer": 1055.7641540000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 138.004133,
+      "index": 388,
+      "buffer": 1055.011867000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 138.752047,
+      "index": 391,
+      "buffer": 1054.2639530000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 139.498964,
+      "index": 392,
+      "buffer": 1053.517036000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 140.263058,
+      "index": 395,
+      "buffer": 1052.7529420000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 141.012019,
+      "index": 397,
+      "buffer": 1052.0039810000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 141.757858,
+      "index": 398,
+      "buffer": 1051.2581420000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 142.507969,
+      "index": 399,
+      "buffer": 1050.5080310000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 143.254342,
+      "index": 399,
+      "buffer": 1049.7616580000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 144.001587,
+      "index": 403,
+      "buffer": 1049.0144130000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 144.750086,
+      "index": 406,
+      "buffer": 1048.2659140000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 145.499914,
+      "index": 407,
+      "buffer": 1047.5160860000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 146.250492,
+      "index": 408,
+      "buffer": 1046.7655080000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 147.010831,
+      "index": 408,
+      "buffer": 1046.0051690000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 147.756673,
+      "index": 410,
+      "buffer": 1045.2593270000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 148.506392,
+      "index": 410,
+      "buffer": 1044.5096080000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 149.252256,
+      "index": 412,
+      "buffer": 1043.7637440000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 150.004276,
+      "index": 412,
+      "buffer": 1043.0117240000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 150.750487,
+      "index": 414,
+      "buffer": 1042.2655130000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 151.499274,
+      "index": 414,
+      "buffer": 1041.5167260000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 152.262382,
+      "index": 416,
+      "buffer": 1040.753618000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 153.009374,
+      "index": 419,
+      "buffer": 1040.0066260000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 153.756237,
+      "index": 421,
+      "buffer": 1039.2597630000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 154.506322,
+      "index": 423,
+      "buffer": 1038.5096780000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 155.253988,
+      "index": 427,
+      "buffer": 1037.7620120000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 156.000818,
+      "index": 429,
+      "buffer": 1037.0151820000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 156.752479,
+      "index": 431,
+      "buffer": 1036.2635210000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 157.500872,
+      "index": 433,
+      "buffer": 1035.5151280000327,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 158.250521,
+      "index": 433,
+      "buffer": 1034.7654790000329,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 159.009983,
+      "index": 435,
+      "buffer": 1034.006017000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 159.755206,
+      "index": 437,
+      "buffer": 1033.2607940000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 160.503151,
+      "index": 441,
+      "buffer": 1032.512849000033,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 161.251109,
+      "index": 443,
+      "buffer": 1031.7648910000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 161.998638,
+      "index": 444,
+      "buffer": 1031.0173620000328,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 162.750108,
+      "index": 445,
+      "buffer": 1070.0818920000336,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 163.498862,
+      "index": 447,
+      "buffer": 1069.3331380000336,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 164.259157,
+      "index": 449,
+      "buffer": 1068.5728430000336,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 165.010006,
+      "index": 449,
+      "buffer": 1067.8219940000336,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 165.756939,
+      "index": 449,
+      "buffer": 1067.0750610000337,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 166.506541,
+      "index": 452,
+      "buffer": 1066.3254590000336,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 167.253271,
+      "index": 453,
+      "buffer": 1065.5787290000335,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 168.001632,
+      "index": 453,
+      "buffer": 1108.9183680000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 168.747174,
+      "index": 455,
+      "buffer": 1108.1728260000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 169.502016,
+      "index": 456,
+      "buffer": 1107.4179840000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 170.251356,
+      "index": 457,
+      "buffer": 1106.6686440000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 171.008362,
+      "index": 457,
+      "buffer": 1105.9116380000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 171.758797,
+      "index": 459,
+      "buffer": 1105.1612030000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 172.503186,
+      "index": 460,
+      "buffer": 1104.4168140000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 173.254553,
+      "index": 463,
+      "buffer": 1103.6654470000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 174.00323,
+      "index": 464,
+      "buffer": 1102.9167700000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 174.749615,
+      "index": 466,
+      "buffer": 1102.1703850000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 175.496204,
+      "index": 467,
+      "buffer": 1101.4237960000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 176.259087,
+      "index": 471,
+      "buffer": 1100.6609130000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 177.009748,
+      "index": 474,
+      "buffer": 1099.9102520000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 177.755959,
+      "index": 475,
+      "buffer": 1099.1640410000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 178.506418,
+      "index": 479,
+      "buffer": 1098.4135820000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 179.255392,
+      "index": 481,
+      "buffer": 1097.6646080000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 180.002155,
+      "index": 483,
+      "buffer": 1096.9178450000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 180.746738,
+      "index": 487,
+      "buffer": 1096.1732620000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 181.500296,
+      "index": 490,
+      "buffer": 1095.4197040000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 182.248721,
+      "index": 491,
+      "buffer": 1094.6712790000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 183.009002,
+      "index": 492,
+      "buffer": 1093.9109980000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 183.757543,
+      "index": 494,
+      "buffer": 1093.1624570000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 184.504937,
+      "index": 498,
+      "buffer": 1092.4150630000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 185.250233,
+      "index": 500,
+      "buffer": 1091.6697670000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 186.000037,
+      "index": 502,
+      "buffer": 1090.9199630000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 186.750122,
+      "index": 503,
+      "buffer": 1090.1698780000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 187.498409,
+      "index": 506,
+      "buffer": 1089.4215910000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 188.260788,
+      "index": 507,
+      "buffer": 1088.6592120000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 189.005272,
+      "index": 509,
+      "buffer": 1087.9147280000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 189.75392,
+      "index": 512,
+      "buffer": 1087.1660800000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 190.501945,
+      "index": 514,
+      "buffer": 1086.4180550000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 191.250161,
+      "index": 515,
+      "buffer": 1085.6698390000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 192.000794,
+      "index": 517,
+      "buffer": 1084.9192060000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 192.74961,
+      "index": 519,
+      "buffer": 1084.1703900000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 193.497428,
+      "index": 522,
+      "buffer": 1083.4225720000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 194.250213,
+      "index": 523,
+      "buffer": 1082.6697870000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 195.006514,
+      "index": 525,
+      "buffer": 1081.9134860000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 195.755502,
+      "index": 526,
+      "buffer": 1081.1644980000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 196.502905,
+      "index": 531,
+      "buffer": 1080.4170950000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 197.252565,
+      "index": 533,
+      "buffer": 1079.6674350000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 198.002422,
+      "index": 534,
+      "buffer": 1078.9175780000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 198.747821,
+      "index": 535,
+      "buffer": 1078.1721790000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 199.493577,
+      "index": 538,
+      "buffer": 1077.4264230000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 200.257015,
+      "index": 541,
+      "buffer": 1076.6629850000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 201.008515,
+      "index": 542,
+      "buffer": 1075.9114850000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 201.756451,
+      "index": 543,
+      "buffer": 1075.1635490000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 202.50416,
+      "index": 545,
+      "buffer": 1074.4158400000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 203.249054,
+      "index": 547,
+      "buffer": 1073.6709460000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 204.000217,
+      "index": 551,
+      "buffer": 1072.9197830000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 204.750352,
+      "index": 552,
+      "buffer": 1072.1696480000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 205.500699,
+      "index": 555,
+      "buffer": 1071.4193010000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 206.24932,
+      "index": 559,
+      "buffer": 1070.6706800000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 207.005165,
+      "index": 561,
+      "buffer": 1069.9148350000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 207.755831,
+      "index": 564,
+      "buffer": 1069.1641690000345,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 208.504876,
+      "index": 566,
+      "buffer": 1068.4151240000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 209.253251,
+      "index": 567,
+      "buffer": 1067.6667490000343,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 210.001111,
+      "index": 569,
+      "buffer": 1066.9188890000344,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 210.748438,
+      "index": 572,
+      "buffer": 1105.147562000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 211.494789,
+      "index": 574,
+      "buffer": 1104.401211000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 212.256355,
+      "index": 576,
+      "buffer": 1103.639645000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 213.008237,
+      "index": 578,
+      "buffer": 1102.887763000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 213.752693,
+      "index": 580,
+      "buffer": 1102.143307000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 214.504976,
+      "index": 582,
+      "buffer": 1101.391024000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 215.2501,
+      "index": 583,
+      "buffer": 1100.645900000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 215.997816,
+      "index": 586,
+      "buffer": 1099.898184000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 216.747866,
+      "index": 588,
+      "buffer": 1099.148134000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 217.49914,
+      "index": 588,
+      "buffer": 1098.3968600000348,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 218.24795,
+      "index": 590,
+      "buffer": 1097.648050000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 219.00277,
+      "index": 591,
+      "buffer": 1096.893230000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 219.755181,
+      "index": 594,
+      "buffer": 1096.140819000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 220.505056,
+      "index": 596,
+      "buffer": 1095.390944000035,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 221.251987,
+      "index": 599,
+      "buffer": 1136.5960130000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 222.000659,
+      "index": 600,
+      "buffer": 1135.8473410000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 222.743447,
+      "index": 603,
+      "buffer": 1135.1045530000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 223.496526,
+      "index": 605,
+      "buffer": 1134.3514740000358,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 224.258127,
+      "index": 608,
+      "buffer": 1133.5898730000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 225.004887,
+      "index": 612,
+      "buffer": 1132.8431130000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 225.754591,
+      "index": 612,
+      "buffer": 1132.0934090000355,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 226.502878,
+      "index": 614,
+      "buffer": 1131.3451220000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 227.252765,
+      "index": 614,
+      "buffer": 1130.5952350000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 227.998956,
+      "index": 618,
+      "buffer": 1129.8490440000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 228.748597,
+      "index": 619,
+      "buffer": 1129.0994030000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 229.495378,
+      "index": 620,
+      "buffer": 1128.3526220000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 230.248107,
+      "index": 622,
+      "buffer": 1127.5998930000355,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 231.00682,
+      "index": 626,
+      "buffer": 1126.8411800000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 231.752189,
+      "index": 630,
+      "buffer": 1126.0958110000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 232.504357,
+      "index": 631,
+      "buffer": 1125.3436430000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 233.25193,
+      "index": 631,
+      "buffer": 1124.5960700000358,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 234.000885,
+      "index": 634,
+      "buffer": 1123.8471150000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 234.744244,
+      "index": 636,
+      "buffer": 1123.1037560000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 235.497018,
+      "index": 638,
+      "buffer": 1122.3509820000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 236.258902,
+      "index": 641,
+      "buffer": 1121.5890980000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 237.00777,
+      "index": 642,
+      "buffer": 1120.8402300000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 237.750151,
+      "index": 646,
+      "buffer": 1120.0978490000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 238.502943,
+      "index": 647,
+      "buffer": 1119.3450570000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 239.24903,
+      "index": 649,
+      "buffer": 1118.5989700000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 239.999696,
+      "index": 651,
+      "buffer": 1117.8483040000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 240.748438,
+      "index": 654,
+      "buffer": 1117.0995620000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 241.498596,
+      "index": 658,
+      "buffer": 1116.3494040000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 242.246634,
+      "index": 659,
+      "buffer": 1115.6013660000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 243.005115,
+      "index": 660,
+      "buffer": 1114.8428850000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 243.752404,
+      "index": 662,
+      "buffer": 1114.0955960000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 244.504274,
+      "index": 665,
+      "buffer": 1113.3437260000355,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 245.251194,
+      "index": 666,
+      "buffer": 1112.5968060000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 245.996682,
+      "index": 668,
+      "buffer": 1111.8513180000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 246.745117,
+      "index": 669,
+      "buffer": 1111.1028830000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 247.495917,
+      "index": 673,
+      "buffer": 1110.3520830000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 248.25681,
+      "index": 675,
+      "buffer": 1109.5911900000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 249.006315,
+      "index": 676,
+      "buffer": 1108.8416850000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 249.749844,
+      "index": 679,
+      "buffer": 1108.0981560000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 250.5013,
+      "index": 680,
+      "buffer": 1107.3467000000358,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 251.251721,
+      "index": 682,
+      "buffer": 1106.5962790000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 251.998338,
+      "index": 684,
+      "buffer": 1105.8496620000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 252.745761,
+      "index": 685,
+      "buffer": 1105.1022390000358,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 253.498505,
+      "index": 685,
+      "buffer": 1104.3494950000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 254.246979,
+      "index": 687,
+      "buffer": 1103.6010210000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 255.006337,
+      "index": 689,
+      "buffer": 1102.8416630000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 255.752358,
+      "index": 691,
+      "buffer": 1102.0956420000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 256.500805,
+      "index": 693,
+      "buffer": 1101.3471950000358,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 257.24894,
+      "index": 694,
+      "buffer": 1100.5990600000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 257.997594,
+      "index": 696,
+      "buffer": 1099.8504060000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 258.743819,
+      "index": 697,
+      "buffer": 1099.1041810000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 259.491578,
+      "index": 697,
+      "buffer": 1098.3564220000358,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 260.258202,
+      "index": 700,
+      "buffer": 1097.5897980000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 261.005645,
+      "index": 702,
+      "buffer": 1096.8423550000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 261.756013,
+      "index": 702,
+      "buffer": 1096.0919870000357,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 262.499133,
+      "index": 703,
+      "buffer": 1095.3488670000356,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 263.250552,
+      "index": 704,
+      "buffer": 1134.6774480000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 263.998474,
+      "index": 705,
+      "buffer": 1133.9295260000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 264.74787,
+      "index": 708,
+      "buffer": 1133.1801300000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 265.498167,
+      "index": 709,
+      "buffer": 1132.4298330000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 266.246838,
+      "index": 710,
+      "buffer": 1131.6811620000362,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 267.006061,
+      "index": 712,
+      "buffer": 1130.9219390000362,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 267.754861,
+      "index": 713,
+      "buffer": 1130.1731390000364,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 268.503021,
+      "index": 714,
+      "buffer": 1129.4249790000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 269.248121,
+      "index": 716,
+      "buffer": 1128.6798790000362,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 269.999562,
+      "index": 718,
+      "buffer": 1127.9284380000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 270.74587,
+      "index": 718,
+      "buffer": 1127.1821300000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 271.494271,
+      "index": 720,
+      "buffer": 1126.4337290000362,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 272.255811,
+      "index": 723,
+      "buffer": 1125.6721890000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 273.005269,
+      "index": 724,
+      "buffer": 1124.9227310000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 273.751221,
+      "index": 725,
+      "buffer": 1124.1767790000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 274.496886,
+      "index": 727,
+      "buffer": 1123.4311140000364,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 275.251724,
+      "index": 727,
+      "buffer": 1122.6762760000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 275.997281,
+      "index": 730,
+      "buffer": 1121.9307190000363,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 276.746599,
+      "index": 732,
+      "buffer": 1121.1814010000362,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 277.497739,
+      "index": 732,
+      "buffer": 1120.4302610000364,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 278.243983,
+      "index": 734,
+      "buffer": 1119.6840170000362,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 279.02834,
+      "index": 736,
+      "buffer": 1164.259660000037,
+      "buffering": false,
+      "authoritative": true
+    },
+    {
+      "t": 279.753103,
+      "index": 736,
+      "buffer": 1163.534897000037,
+      "buffering": false,
+      "authoritative": true
+    }
+  ],
+  "browserSonioxConnections": 0
+}

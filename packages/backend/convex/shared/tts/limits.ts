@@ -32,19 +32,19 @@ export function sanitiseNarration(content: string): string {
     .replace(INVISIBLE_CHARACTERS, (character) => (KEPT_INVISIBLE.has(character) ? character : ''));
 }
 
-export function narrationText(content: string): NarrationText {
+export function narrationText(content: string, limits = { maxChars: MAX_NARRATION_CHARS, maxWords: MAX_NARRATION_WORDS }): NarrationText {
   const full = sanitiseNarration(content).trim();
   const words = full.split(/\s+/).filter(Boolean);
-  if (full.length <= MAX_NARRATION_CHARS && words.length <= MAX_NARRATION_WORDS) {
+  if (full.length <= limits.maxChars && words.length <= limits.maxWords) {
     return { text: full, truncated: false, totalWords: words.length, narratedWords: words.length };
   }
 
   // Character ceiling first, then the word ceiling, whichever bites sooner.
-  let cut = Math.min(full.length, MAX_NARRATION_CHARS);
-  if (words.length > MAX_NARRATION_WORDS) {
+  let cut = Math.min(full.length, limits.maxChars);
+  if (words.length > limits.maxWords) {
     let seen = 0;
     let index = 0;
-    while (index < full.length && seen < MAX_NARRATION_WORDS) {
+    while (index < full.length && seen < limits.maxWords) {
       while (index < full.length && /\s/.test(full[index]!)) index += 1;
       while (index < full.length && !/\s/.test(full[index]!)) index += 1;
       seen += 1;

@@ -40,3 +40,8 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # agent worktrees
 .claude/worktrees
 .worktrees
+
+# Local article and production-state fixtures used for narration verification
+/docs/playback-loading/roadmap-fixture.json
+/docs/playback-loading/section-status.json
+/docs/playback-loading/saved-section-baseline.json

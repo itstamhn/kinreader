@@ -4,6 +4,7 @@
 
 export const procedureNames = {
   "routers/articles.ts": [{ column: 3, line: 104, name: "routers/articles:extract" }],
-  "routers/tts.ts": [{ column: 3, line: 279, name: "routers/tts:generateTrackUploadUrl" }, { column: 3, line: 159, name: "routers/tts:getExactTrack" }, { column: 3, line: 322, name: "routers/tts:persistTrack" }, { column: 3, line: 226, name: "routers/tts:pregenerate" }, { column: 3, line: 204, name: "routers/tts:pregenerationStatus" }, { column: 3, line: 449, name: "routers/tts:synthesize" }, { column: 3, line: 365, name: "routers/tts:temporaryKey" }],
+  "routers/narration.ts": [{ column: 3, line: 18, name: "routers/narration:page" }, { column: 3, line: 8, name: "routers/narration:prepare" }],
+  "routers/tts.ts": [{ column: 3, line: 289, name: "routers/tts:generateTrackUploadUrl" }, { column: 3, line: 160, name: "routers/tts:getExactTrack" }, { column: 3, line: 332, name: "routers/tts:persistTrack" }, { column: 3, line: 234, name: "routers/tts:pregenerate" }, { column: 3, line: 212, name: "routers/tts:pregenerationStatus" }, { column: 3, line: 459, name: "routers/tts:synthesize" }, { column: 3, line: 375, name: "routers/tts:temporaryKey" }],
   "routers/users.ts": [{ column: 3, line: 191, name: "routers/users:addToPlaylist" }, { column: 3, line: 145, name: "routers/users:deleteUserArticle" }, { column: 3, line: 33, name: "routers/users:getCurrentUser" }, { column: 3, line: 48, name: "routers/users:getUserPlaylist" }, { column: 3, line: 88, name: "routers/users:saveUserProgress" }],
 };

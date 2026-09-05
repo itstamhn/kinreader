@@ -12,6 +12,8 @@ import { SpeechEngine } from './utils/speechEngine';
 import { SonioxTemporaryKeyExpiredError, type OpenSonioxStreamOptions } from './utils/sonioxStream';
 import { createWordTimingAccumulator } from './utils/wordTimings';
 import { openParallelSonioxStream } from './utils/parallelSoniox';
+import { playDurableNarration } from './utils/durableNarration';
+import { DURABLE_NARRATION_MAX_CHARS, DURABLE_NARRATION_MAX_WORDS, type NarrationPage } from '@kinreader/backend/tts/durableNarration';
 import { narrationText, MAX_PREGENERATION_CHARS } from '@kinreader/backend/tts/limits';
 import { articleCacheKey, articleContentDigest } from './utils/articleCacheKey';
 import { decodeShareId } from './utils/shareLink';
@@ -98,6 +100,8 @@ const DEGRADED_MESSAGES = {
 } as const;
 
 export interface AppProps {
+  durableNarration?: boolean;
+  narrationPage?: (input: { contentDigest: string; voice: string; from: number }) => Promise<NarrationPage>;
   streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
   loadExactTrack?: (input: { url: string; voice: string }) => Promise<ExactTrackCacheEntry | null>;
@@ -154,6 +158,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export function App({
+  durableNarration = true,
+  narrationPage,
   // Several concurrent Soniox sessions re-serialised into one stream, so audio
   // arrives faster than it is played back (see utils/parallelSoniox.ts).
   streamingTransport = openParallelSonioxStream,
@@ -172,6 +178,8 @@ export function App({
   const trackUploadUrlMutation = useMutation(crpc.routers.tts.generateTrackUploadUrl.mutationOptions());
   const persistTrackMutation = useMutation(crpc.routers.tts.persistTrack.mutationOptions());
   const pregenerateMutation = useMutation(crpc.routers.tts.pregenerate.mutationOptions());
+  const prepareNarrationMutation = useMutation(crpc.routers.narration.prepare.mutationOptions());
+  const getNarrationText = (content: string) => narrationText(content, durableNarration ? { maxChars: DURABLE_NARRATION_MAX_CHARS, maxWords: DURABLE_NARRATION_MAX_WORDS } : undefined);
   const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
   const addToPlaylistMutation = useMutation(crpc.routers.users.addToPlaylist.mutationOptions());
   const deleteUserArticleMutation = useMutation(crpc.routers.users.deleteUserArticle.mutationOptions());
@@ -210,8 +218,8 @@ export function App({
   // Fire-and-forget: synthesise into the global cache so the next open of this
   // article (by anyone) is an instant cached track instead of a live stream.
   const pregenerateArticle = (target: ArticleData) => {
-    const text = narrationText(target.content).text;
-    if (!text || text.length > MAX_PREGENERATION_CHARS || target.title === SAMPLE_ARTICLE.title) return;
+    const text = getNarrationText(target.content).text;
+    if (!text || (!durableNarration && text.length > MAX_PREGENERATION_CHARS) || target.title === SAMPLE_ARTICLE.title) return;
     const request: PregenerationRequest = {
       title: target.title,
       author: target.author,
@@ -220,9 +228,9 @@ export function App({
       clientId: getOrCreateClientId(),
     };
     void Promise.resolve()
-      .then(() => (requestPregeneration ? requestPregeneration(request) : pregenerateMutation.mutateAsync(request)))
+      .then(() => (requestPregeneration ? requestPregeneration(request) : durableNarration ? prepareNarrationMutation.mutateAsync(request) : pregenerateMutation.mutateAsync(request)))
       .catch((error) => {
-        console.warn('Pre-generation request failed; playback will stream instead:', error);
+        console.warn('Audio preparation request failed:', error);
       });
   };
 
@@ -271,6 +279,7 @@ export function App({
   const [pendingLoadUrl, setPendingLoadUrl] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [awaitingPregeneration, setAwaitingPregeneration] = useState(false);
+  const [preparationProgress, setPreparationProgress] = useState<string | null>(null);
   // Why the last fallback happened, so the degraded banner can say it instead
   // of leaving the listener to guess (a Soniox rejection, a 413, a dropped
   // socket...). Cleared on every new load.
@@ -407,7 +416,8 @@ export function App({
     // prefix the cache and a Soniox session can hold (shared/tts/limits.ts);
     // the displayed words, the stream, the cache key and pre-generation all
     // use this same text so they agree word for word.
-    const narration = narrationText(art.content);
+    setPreparationProgress(null);
+    const narration = getNarrationText(art.content);
     const narratedText = narration.text;
     if (narration.truncated) {
       setTruncationNotice(
@@ -715,8 +725,12 @@ export function App({
       eng.loadAudioUrl(cachedTrack.audioUrl, cachedTrack.words, cachedTrack.duration, () => {
         if (cacheFailed || !isCurrentLoad()) return;
         cacheFailed = true;
-        void runWebSocketAttempt(0);
+        if (durableNarration) {
+          setPlaybackStatus('error');
+          setPreparationProgress('Could not download saved audio. Please retry.');
+        } else void runWebSocketAttempt(0);
       });
+      eng.appendWordTimings(cachedTrack.words, cachedTrack.duration, { authoritative: true });
       setPlaybackStatus('ready');
       applyResume(cachedTrack.words);
     };
@@ -735,6 +749,33 @@ export function App({
         }
       } catch (error) {
         console.warn('Exact track cache lookup failed; continuing with synthesis:', error);
+      }
+
+      if (durableNarration) {
+        const controller = new AbortController();
+        activeStreamRef.current = { cancel: () => controller.abort() };
+        const contentDigest = await articleContentDigest(narratedText);
+        if (!isCurrentLoad()) return;
+        setPlaybackStatus('ready');
+        try {
+          await playDurableNarration({
+            engine: eng, initialWords: initialWordTimings, duration: totalDuration, signal: controller.signal,
+            prepare: () => {
+              const input = { text: narratedText, voice, clientId, title: art.title, author: art.author };
+              return requestPregeneration ? requestPregeneration(input) : prepareNarrationMutation.mutateAsync(input);
+            },
+            page: from => narrationPage ? narrationPage({ contentDigest, voice, from }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from }),
+            pollMs: pregenerationPollMs,
+            onWords: words => { if (words.length > pendingResumeIndex && eng.playbackReady) applyResume(words); },
+            onProgress: (completed, total) => setPreparationProgress(completed === total ? 'Audio saved. Ready to replay.' : `Audio saved: ${completed} of ${total} sections. Preparation continues if you leave.`),
+          });
+        } catch (error) {
+          if (!isCurrentLoad() || controller.signal.aborted) return;
+          eng.pause();
+          setPlaybackStatus('error');
+          setPreparationProgress(error instanceof Error ? error.message : 'Audio preparation failed. Please retry.');
+        }
+        return;
       }
 
       // Cache miss -- but if the server is already synthesising this article
@@ -786,6 +827,11 @@ export function App({
       }
     }
 
+    if (durableNarration) {
+      setPlaybackStatus('error');
+      setPreparationProgress('Saved audio is unavailable. Please retry.');
+      return;
+    }
     void runWebSocketAttempt(0);
   };
 
@@ -846,10 +892,7 @@ export function App({
         sourceType: newArticle.sourceType,
       });
     }
-    // Deliberately no pre-generation here: this load streams the article
-    // itself, and running a server synthesis alongside it would pay Soniox
-    // twice for one article. Pre-generation is for articles added to the
-    // queue (handleAddToQueue), which are opened later from the cache.
+    // Opening starts or joins the same durable job used by the queue.
     loadArticleContent(newArticle, engine, settings, { resumeWordIndex });
   };
 
@@ -1262,15 +1305,15 @@ export function App({
             isSynthesizing={playbackStatus === 'timing' || playbackStatus === 'synthesizing'}
             isPlayable={playback.playbackReady && (playback.canStartPlayback || playback.isPlaying)}
             bufferedProgress={playback.isStreaming && playback.duration > 0 ? playback.bufferedSeconds / playback.duration * 100 : undefined}
-            loadingProgress={playback.isStreaming ? {
+            loadingProgress={playback.isStreaming && playbackStatus !== 'error' ? {
               readySeconds: playback.bufferedAheadSeconds / playback.rate,
               targetSeconds: playback.bufferTargetSeconds / playback.rate,
               waiting: playback.isBuffering || (!playback.isPlaying && !playback.canStartPlayback),
             } : undefined}
-            isBuffering={
+            isBuffering={playbackStatus !== 'error' && (
               playback.isBuffering || (playback.isStreaming && !playback.isPlaying && !playback.canStartPlayback) ||
-              (!playback.playbackReady && playbackStatus !== 'degraded' && playbackStatus !== 'error')
-            }
+              (!playback.playbackReady && playbackStatus !== 'degraded')
+            )}
             isDegraded={playbackStatus === 'degraded'}
             degradedMessage={
               fallbackReason ? `${DEGRADED_MESSAGES[playback.mode]} Reason: ${fallbackReason}.` : DEGRADED_MESSAGES[playback.mode]
@@ -1281,11 +1324,13 @@ export function App({
             infoMessage={
               awaitingPregeneration
                 ? 'Preparing audio… checking for a saved recording.'
-                : truncationNotice ?? undefined
+                : preparationProgress ?? truncationNotice ?? undefined
             }
             infoBusy={awaitingPregeneration}
             infoAction={
-              awaitingPregeneration
+              playbackStatus === 'error' && durableNarration
+                ? { label: 'Retry audio', onClick: () => loadArticleContent(article, engine, settings, { resumeWordIndex: engine.currentWordIndex }) }
+                : awaitingPregeneration
                 ? {
                     label: 'Play now',
                     onClick: () => {

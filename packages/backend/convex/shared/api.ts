@@ -11,6 +11,10 @@ export const api = {
     articles: {
       extract: createApiLeaf<"action", typeof import("../functions/routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/articles").extract>("routers/articles:extract"), { type: "action" }),
     },
+    narration: {
+      page: createApiLeaf<"query", typeof import("../functions/routers/narration").page>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/narration").page>("routers/narration:page"), { type: "query" }),
+      prepare: createApiLeaf<"action", typeof import("../functions/routers/narration").prepare>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/narration").prepare>("routers/narration:prepare"), { type: "action" }),
+    },
     tts: {
       generateTrackUploadUrl: createApiLeaf<"mutation", typeof import("../functions/routers/tts").generateTrackUploadUrl>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/tts").generateTrackUploadUrl>("routers/tts:generateTrackUploadUrl"), { type: "mutation" }),
       getExactTrack: createApiLeaf<"query", typeof import("../functions/routers/tts").getExactTrack>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/tts").getExactTrack>("routers/tts:getExactTrack"), { type: "query" }),

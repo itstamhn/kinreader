@@ -10,6 +10,8 @@ import {
 } from './utils/sonioxStream';
 
 type TestAppProps = {
+  durableNarration?: boolean;
+  narrationPage?: import('./App').AppProps['narrationPage'];
   streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
   loadExactTrack?: (input: { url: string; voice: string }) => Promise<{
@@ -47,6 +49,8 @@ function renderApp(props: TestAppProps = {}) {
   return render(
     <ConvexAppProvider>
       <App
+        durableNarration={props.durableNarration ?? false}
+        narrationPage={props.narrationPage}
         streamingTransport={props.streamingTransport}
         requestTemporaryKey={
           props.requestTemporaryKey ??
@@ -1374,7 +1378,7 @@ test('the real cache lookup runs outside render and opens saved audio without ge
     };
   }) as typeof ConvexReactClient.prototype.query;
   try {
-    const { container } = render(<ConvexAppProvider><App
+    const { container } = render(<ConvexAppProvider><App durableNarration={false}
       requestTemporaryKey={async () => { keyRequests += 1; return { apiKey: 'k', expiresAt: 'soon' }; }}
       pregenerationStatus={async () => ({ status: 'none', startedAt: null })}
     /></ConvexAppProvider>);
@@ -1408,7 +1412,7 @@ test('the real job-status lookup polls fresh results and opens the completed cac
     };
   }) as typeof ConvexReactClient.prototype.query;
   try {
-    const { container } = render(<ConvexAppProvider><App
+    const { container } = render(<ConvexAppProvider><App durableNarration={false}
       requestTemporaryKey={async () => { keyRequests += 1; return { apiKey: 'k', expiresAt: 'soon' }; }}
       pregenerationPollMs={5}
     /></ConvexAppProvider>);
@@ -1421,4 +1425,18 @@ test('the real job-status lookup polls fresh results and opens the completed cac
     cleanup();
     ConvexReactClient.prototype.query = originalQuery;
   }
+});
+
+test('opening a long article prepares durable audio without a browser Soniox session', async () => {
+  const requests: unknown[] = [];
+  let keys = 0;
+  const { container } = renderApp({
+    durableNarration: true,
+    narrationPage: async () => ({ status: 'running', total: 30, completed: 0, error: null, sections: [] }),
+    requestPregeneration: async (input) => { requests.push(input); },
+    requestTemporaryKey: async () => { keys++; return { apiKey: 'key', expiresAt: 'soon' }; },
+  });
+  await narrateRawText(container, 'An article should keep its completed audio. '.repeat(800));
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(keys).toBe(0);
 });

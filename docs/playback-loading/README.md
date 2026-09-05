@@ -1,50 +1,51 @@
-# Playback loading fix
+# Durable narration
 
-The reader now prepares a minute of listening at the selected speed before enabling Play. Short completed recordings unlock immediately. Background generation continues during playback, with a visible downloaded section on the timeline and a counter showing how much audio is ready. Full Text remains available while audio is prepared.
+The reader starts or joins one server preparation job for each article content digest and voice. It plays downloaded audio with the Soniox timings saved alongside that audio. Reopening an article downloads its saved sections rather than opening new Soniox streams in the browser.
 
-## Causes and changes
+Audio currently lives in **Convex file storage**, not Cloudflare R2. The job and section records live in Convex too. Moving object storage to R2 is independent of preventing repeated synthesis.
 
-- The saved-track and job-status lookups called kitcn's hook-based `queryOptions()` from async article-loading callbacks. This throws an invalid-hook-call error and skips the saved audio cache. Both calls now use the imperative `useCRPCClient()` client. Regression tests exercise the real lookup paths, with only the backend response mocked.
-- The initial audio cushion was two seconds. Startup now waits for 60 seconds of listening at the selected speed. An underrun refills 15 seconds before resuming automatically. The target is capped at the remaining article duration and removed once generation finishes.
-- Long generation segments blocked the delivery of already-generated later segments. The transport now targets roughly 400 characters per segment, split at sentence boundaries, with at most four concurrent sessions.
-- WebSocket connections, stalled audio delivery, and trailing timing completion had no deadlines. They now have 15-second, 20-second, and 10-second deadlines respectively. Media-source opening and URL-based audio loading also have recovery deadlines.
-- The long-text REST fallback waited for the entire response body. It now reads and plays the response progressively, with cancellation and a timeout for each read.
-- Waiting for a background generation job is capped at five seconds instead of two minutes.
-- A saved position beyond the downloaded audio is now retained until that audio arrives, including browsers that play separate MP3 parts.
+## Why the earlier fix was insufficient
 
-The imperative query API is documented in [kitcn's React reference](https://github.com/udecode/kitcn/blob/main/packages/kitcn/skills/kitcn/references/features/react.md).
+The previous buffer change helped a short synthetic article but did not address the long-article path. Articles over 24,000 characters skipped server pre-generation. Browser sessions only saved a recording after the entire generation completed, and temporary-key expiry or stream fallback could restart that work. The live reproduction also returned `Soniox returned limit_exceeded` when requests competed for provider capacity.
 
-## Verification
+The new reader uses durable preparation by default. The older browser/REST implementation remains as an explicit test/compatibility option; normal production loading no longer falls back into it.
 
-On September 5, 2026, the updated local app was tested in Dia against the existing production backend, with a 3,720-character synthetic article at 1.5× speed.
+## Current behavior
 
-- Play became available after 37.333 seconds while generation continued.
-- The startup target was 90 media seconds, equivalent to one minute of listening at 1.5×.
-- The complete audio was 243.192 seconds long.
-- Playback reached the end with zero observed buffering transitions. Play was clicked after readiness, so this run does not measure starting at the earliest possible instant.
-- Audio generation completed after 168.353 seconds. These changes improve startup and buffering; they do not guarantee faster whole-file generation.
-- An earlier live run with roughly 1,200-character segments was still blocked at 49.887 seconds and had completed by 76.808 seconds. These are observations from two runs, not a controlled throughput benchmark.
-- The development backend lacked `routers/tts:temporaryKey`. The live audio check used the production backend through a local app running in production mode instead.
+- Each roughly 650-character section runs as a bounded server action and saves both its MP3 and validated word timings. Short sections fit within Soniox's two-minute request limit and Convex's action limit.
+- Two shared worker slots cap concurrency across articles. Soniox limits apply to the account and project, so limiting each article independently is insufficient. Capacity errors retry after a delay.
+- Job creation, scheduling, completion and claiming the next section happen transactionally. Attempt tokens keep delayed watchdogs from interrupting a later retry. Failed sections can retry; completed sections retain their files.
+- The browser downloads only contiguous completed sections. Timing offsets include each MP3's frame duration, including silence, rather than scaling timestamps to an estimated article duration.
+- Play unlocks after one minute of audio at the selected speed is buffered. Short finished recordings unlock immediately. The existing 15-second refill behavior remains.
+- The reader exposes saved-section progress and a Retry audio button for failures. A failed download or preparation does not silently start another whole-article synthesis.
+- The durable path accepts up to 150,000 characters and 30,000 words. Section storage avoids the single-array timing limit. The reported article's full 11,561 words fit.
 
-All 289 tests passed, along with workspace type checks and the production build. Tests cover startup readiness, automatic refill, stalled connections, cancelled deadlines, progressive REST fallback, deferred resume positions, and real cache/job lookup calls.
+[Soniox documents shared concurrency limits](https://soniox.com/docs/guides/concurrency-limits) and [429 retry behavior](https://soniox.com/docs/api-reference/tts/websocket-api).
 
-Commands run from the project root:
+## Verification on September 5, 2026
+
+The exact Nicolascole77 article from the user's library was used, with 66,129 characters and 11,561 words, divided into 102 sections.
+
+- A regression test first failed because opening a long article requested no durable preparation job. It passes with the new default path.
+- Server tests cover duplicate opens, shared capacity across articles, ordered delivery, saved-section reuse, stale callbacks and manual retry tokens.
+- Player tests cover MP3-duration offsets and retaining completed audio after a later section fails.
+- On the production-backed local reader at 1.5x, the article played past two minutes of audio with zero observed buffering or backward jumps, and authoritative timings throughout. The buffer grew during playback.
+- A production replay unlocked after approximately 6.0 seconds with previously saved sections. No browser Soniox WebSocket opened. All 11,561 words were present. The subsequent three-minute playback sample covered 268 media seconds, with zero buffering samples or backward jumps and authoritative timings throughout.
+- The long recording filled the browser MediaSource buffer. The existing MP3-parts fallback retained the audio and position; the production sample continued without an observed reset or refill. This still warrants physical mobile testing.
+- A production storage read confirmed the first two sections still had their original storage IDs and attempt count of one after reloads. Preparation continued in the background. At that check, 22 sections were saved, two were running, 78 were queued and none had failed.
+
+All 296 tests passed, workspace type checks passed, and the web production build passed. Existing marketing deprecation hints and the bundle-size advisory remain.
 
 ```sh
 bun run test
 bun run typecheck
-bun run build
+bun run --cwd apps/web build
 ```
 
-The original failing checks can also be run from `apps/web`:
+The backend is `notable-camel-807`. The reader deployment is Cloudflare Worker version `b58ae949-c8ce-48f0-9bb4-221f9ae42c66`, serving `assets/index-Dl2k9JRq.js`.
 
-```sh
-bun test src/utils/speechEngine.test.ts src/utils/sonioxStream.test.ts --test-name-pattern 'minute of listening|unresponsive connection'
-bun test src/App.test.tsx --test-name-pattern 'real cache lookup|real job-status'
-```
+The original article fixture and bounded production-state snapshots are kept locally in this folder and excluded from Git. Live checks cover Dia. Physical iPhone playback and continuous playback of the entire hour-long article have not been verified.
 
-## Status
+Production verification data is in `durable-production-verification.json`.
 
-Deployed to production on September 5, 2026. The Convex deployment is `notable-camel-807`; the Cloudflare Worker version is `ecc102f3-eaf0-4b0e-9dae-caa38a73b373`. The live reader serves `assets/index-1TuRHH6o.js`. The browser run covered Dia. The MP3-parts fallback has automated coverage but was not tested on a physical iPhone. Longer articles and other network conditions may still need refills if synthesis cannot keep up with playback.
-
-![Playback while more audio loads](playing.png)
+![Production playback](durable-production.png)

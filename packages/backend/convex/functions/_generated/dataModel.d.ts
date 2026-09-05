@@ -165,6 +165,71 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  narrationJobs: {
+    document: {
+      completed: number;
+      contentDigest: string;
+      createdAt: number;
+      status: "running" | "done" | "failed";
+      total: number;
+      voice: string;
+      _id: Id<"narrationJobs">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "completed"
+      | "contentDigest"
+      | "createdAt"
+      | "status"
+      | "total"
+      | "voice";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_contentDigest_and_voice: ["contentDigest", "voice", "_creationTime"];
+      by_status: ["status", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  narrationSections: {
+    document: {
+      attempt: number;
+      duration?: number;
+      error?: string;
+      index: number;
+      jobId: Id<"narrationJobs">;
+      status: "queued" | "running" | "done" | "failed";
+      storageId?: Id<"_storage">;
+      text: string;
+      words?: Array<{ end: number; start: number; text: string }>;
+      _id: Id<"narrationSections">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "attempt"
+      | "duration"
+      | "error"
+      | "index"
+      | "jobId"
+      | "status"
+      | "storageId"
+      | "text"
+      | "words";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_jobId_and_index: ["jobId", "index", "_creationTime"];
+      by_jobId_and_status: ["jobId", "status", "_creationTime"];
+      by_status: ["status", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   ratelimitState: {
     document: {
       auxTs?: number;

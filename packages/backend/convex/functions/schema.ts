@@ -160,6 +160,31 @@ export default defineSchema({
     error: v.optional(v.string()),
   }).index('by_digest_voice', ['contentDigest', 'voice']),
 
+  narrationJobs: defineTable({
+    contentDigest: v.string(),
+    voice: v.string(),
+    status: v.union(v.literal('running'), v.literal('done'), v.literal('failed')),
+    total: v.number(),
+    completed: v.number(),
+    createdAt: v.number(),
+  }).index('by_contentDigest_and_voice', ['contentDigest', 'voice'])
+    .index('by_status', ['status']),
+
+  narrationSections: defineTable({
+    jobId: v.id('narrationJobs'),
+    index: v.number(),
+    text: v.string(),
+    status: v.union(v.literal('queued'), v.literal('running'), v.literal('done'), v.literal('failed')),
+    attempt: v.number(),
+    storageId: v.optional(v.id('_storage')),
+    words: v.optional(v.array(v.object({ text: v.string(), start: v.number(), end: v.number() }))),
+    duration: v.optional(v.number()),
+    error: v.optional(v.string()),
+  })
+    .index('by_jobId_and_index', ['jobId', 'index'])
+    .index('by_jobId_and_status', ['jobId', 'status'])
+    .index('by_status', ['status']),
+
   // 8. User Reading Playlists & Cross-Device Progress
   userArticles: defineTable({
     userId: v.id('user'),

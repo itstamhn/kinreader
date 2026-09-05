@@ -29,6 +29,26 @@ export declare const api: {
         any
       >;
     };
+    narration: {
+      page: FunctionReference<
+        "query",
+        "public",
+        { contentDigest: string; from: number; voice: string },
+        any
+      >;
+      prepare: FunctionReference<
+        "action",
+        "public",
+        {
+          author?: string;
+          clientId: string;
+          text: string;
+          title?: string;
+          voice: string;
+        },
+        any
+      >;
+    };
     tts: {
       generateTrackUploadUrl: FunctionReference<
         "mutation",
@@ -372,6 +392,66 @@ export declare const internal: {
         "internal",
         { email: string },
         any
+      >;
+    };
+    narrationInternal: {
+      complete: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          attempt: number;
+          duration: number;
+          sectionId: Id<"narrationSections">;
+          storageId: Id<"_storage">;
+          words: Array<{ end: number; start: number; text: string }>;
+        },
+        boolean
+      >;
+      fail: FunctionReference<
+        "mutation",
+        "internal",
+        { attempt: number; error: string; sectionId: Id<"narrationSections"> },
+        null
+      >;
+      prepare: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          clientKey: string;
+          contentDigest: string;
+          text: string;
+          voice: string;
+        },
+        Id<"narrationJobs">
+      >;
+      work: FunctionReference<
+        "query",
+        "internal",
+        { attempt: number; sectionId: Id<"narrationSections"> },
+        null | {
+          section: {
+            _creationTime: number;
+            _id: Id<"narrationSections">;
+            attempt: number;
+            duration?: number;
+            error?: string;
+            index: number;
+            jobId: Id<"narrationJobs">;
+            status: "queued" | "running" | "done" | "failed";
+            storageId?: Id<"_storage">;
+            text: string;
+            words?: Array<{ end: number; start: number; text: string }>;
+          };
+          voice: string;
+        }
+      >;
+    };
+    narrationWorker: {
+      generate: FunctionReference<
+        "action",
+        "internal",
+        { attempt: number; sectionId: Id<"narrationSections"> },
+        null
       >;
     };
     pregenerate: {
