@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   elevenApiKey: '',
   elevenVoiceId: '21m00Tcm4TlvDq8ikWAM',
   defaultRate: 1.5,
+  readerTheme: 'dark',
 };
 
 // Playback always uses Soniox audio. A failure remains an explicit error;
@@ -987,7 +988,7 @@ export function App({
 
   const handleSaveSettings = (newSettings: ReaderSettings) => {
     setSettings(newSettings);
-    if (newSettings.defaultRate && Math.abs(newSettings.defaultRate - playback.rate) > 0.05) {
+    if (newSettings.defaultRate && Math.abs(newSettings.defaultRate - settings.defaultRate) > 0.05) {
       handleSpeedChange(newSettings.defaultRate);
     }
     if (saveSettingsTimerRef.current) {
@@ -1280,6 +1281,7 @@ export function App({
             onSelectWord={handleSelectWord}
             viewMode={viewMode}
             fontSize={settings.fontSize || 'md'}
+            theme={settings.readerTheme === 'light' ? 'light' : 'dark'}
             clauseLength={clauseLength}
             emptyMessage={pendingLoadUrl ? 'Fetching article…' : undefined}
           />

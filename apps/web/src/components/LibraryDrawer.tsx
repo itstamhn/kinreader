@@ -65,6 +65,7 @@ const DEFAULT_READER_SETTINGS: ReaderSettings = {
   elevenApiKey: '',
   elevenVoiceId: '21m00Tcm4TlvDq8ikWAM',
   defaultRate: 1.5,
+  readerTheme: 'dark',
 };
 
 export interface LibraryDrawerProps {
@@ -528,6 +529,24 @@ export function LibraryDrawer({
                 </button>
               </div>
             </div>
+
+            <fieldset className="flex flex-col gap-3">
+              <legend className="font-sans text-sm font-semibold text-[#ECEAE4]/80 mb-3">Reading appearance</legend>
+              <div className="grid grid-cols-2 gap-3" role="group" aria-label="Reading appearance">
+                {(['dark', 'light'] as const).map(theme => (
+                  <button
+                    type="button"
+                    key={theme}
+                    aria-pressed={(settings.readerTheme || 'dark') === theme}
+                    onClick={() => handleUpdateSettings({ readerTheme: theme })}
+                    className={`p-4 rounded-2xl border text-left transition-colors ${(settings.readerTheme || 'dark') === theme ? 'border-[#F2A33C] bg-[#F2A33C]/10' : 'border-white/10 bg-white/5 hover:border-white/20'}`}
+                  >
+                    <span aria-hidden="true" className={`block rounded-lg p-3 mb-3 font-serif text-xl ${theme === 'dark' ? 'bg-[#111311] text-[#ECEAE4]' : 'bg-[#f4efe3] text-[#242720]'}`}>Aa</span>
+                    <span className="font-sans text-sm text-[#F4F0E6]">{theme === 'dark' ? 'Dark' : 'Light'}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
 
             {/* 1. Focal Text Scale */}
             <div className="flex flex-col gap-3">

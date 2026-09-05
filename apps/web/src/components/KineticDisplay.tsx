@@ -9,6 +9,7 @@ interface KineticDisplayProps {
   onSelectWord: (index: number) => void;
   viewMode: 'kinetic' | 'full';
   fontSize?: 'sm' | 'md' | 'lg';
+  theme?: 'dark' | 'light';
   clauseLength?: 4 | 6 | 9;
   /** Shown instead of the default hint while the word list is empty. */
   emptyMessage?: string;
@@ -123,6 +124,7 @@ export function KineticDisplay({
   onSelectWord,
   viewMode,
   fontSize = 'md',
+  theme = 'dark',
   clauseLength = 6,
   emptyMessage,
 }: KineticDisplayProps) {
@@ -151,7 +153,7 @@ export function KineticDisplay({
   if (viewMode === 'kinetic' && page) {
     const longestLine = Math.max(...page.lines.map(line => line.reduce((length, index) => length + words[index]!.text.length + 1, -1)));
     return (
-      <section className="editorial-reader" aria-label="Kinetic reading page">
+      <section className="editorial-reader" data-reader-theme={theme} aria-label="Kinetic reading page">
         <div className="editorial-page-count">{activePageIndex + 1} / {pages.length}</div>
         <div className="editorial-stage" style={{ '--editorial-size': `${{ sm: 40, md: 48, lg: 56 }[fontSize]}px`, '--editorial-fit': `${180 / Math.max(1, longestLine)}cqw` } as React.CSSProperties}>
           <div className="editorial-page" key={page.startIndex} data-page-start={page.startIndex}>
