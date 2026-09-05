@@ -100,6 +100,7 @@ test('a forged auth_token in the URL is ignored and leaves user signed out', asy
   expect(localStorage.getItem('kinreader_user')).toBeNull();
   expect(container.textContent).not.toContain('victim@example.com');
   expect(container.textContent).not.toContain('Attacker');
+  fireEvent.click(container.querySelector('button[title="More options"]')!);
   expect(container.textContent).toContain('Sign In');
 });
 
@@ -178,11 +179,13 @@ test('toggling ramp mode does not reconstruct the speech engine (plan 018 Bug 1)
     await waitFor(() => expect(loadAudioUrlCalls.length).toBeGreaterThanOrEqual(1));
     const callsAfterMount = loadAudioUrlCalls.length;
 
-    const rampButton = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('Ramp')
-    ) as HTMLButtonElement;
-    expect(rampButton).toBeTruthy();
-
+    fireEvent.click(container.querySelector('button[title="More options"]')!);
+    fireEvent.click(container.querySelector('button[title="Preferences"]')!);
+    const rampButton = await waitFor(() => {
+      const toggle = container.querySelector('input[aria-label="Gradually increase tempo"]');
+      expect(toggle).toBeTruthy();
+      return toggle!;
+    });
     fireEvent.click(rampButton);
     // Let any effect teardown/setup from the state change settle.
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1085,16 +1088,22 @@ test('ArrowRight and ArrowLeft move between reading pages', async () => {
   expect(engine.currentWordIndex).toBe(afterRight);
 });
 
-test('the header voice toggle mutes the engine', async () => {
+test('the saved voice preference mutes the engine', async () => {
   const { container } = renderApp();
   const engine = (window as any).__engine as SpeechEngine;
   expect(engine.muted).toBe(false);
 
-  const voiceButton = container.querySelector('button[title="Toggle Neural Voice"]') as HTMLButtonElement;
+  fireEvent.click(container.querySelector('button[title="More options"]')!);
+  fireEvent.click(container.querySelector('button[title="Preferences"]')!);
+  const voiceButton = await waitFor(() => {
+    const toggle = container.querySelector('input[aria-label="Soniox voice"]') as HTMLInputElement;
+    expect(toggle).toBeTruthy();
+    return toggle;
+  });
   fireEvent.click(voiceButton);
   await waitFor(() => expect(engine.muted).toBe(true));
-  expect(container.textContent).toContain('Voice off');
-
+  expect(voiceButton.checked).toBe(false);
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('kinetic_reader_settings')!).voiceEnabled).toBe(false));
   fireEvent.click(voiceButton);
   await waitFor(() => expect(engine.muted).toBe(false));
 });
@@ -1110,6 +1119,7 @@ test('the header share button copies a kinreader.com/r/ link that decodes back t
   try {
     const { container } = renderApp();
     await waitFor(() => expect(container.textContent).toContain('digital renaissance'));
+    fireEvent.click(container.querySelector('button[title="More options"]')!);
     const shareButton = container.querySelector('button[title="Share article link"]') as HTMLButtonElement;
     fireEvent.click(shareButton);
     await waitFor(() => expect(written).toHaveLength(1));

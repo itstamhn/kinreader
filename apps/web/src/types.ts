@@ -26,6 +26,8 @@ export interface ReaderSettings {
   browserVoiceURI?: string;
   fontSize?: 'sm' | 'md' | 'lg';
   readerTheme?: 'dark' | 'light';
+  voiceEnabled?: boolean;
+  rampEnabled?: boolean;
 }
 
 export interface TTSResponse {

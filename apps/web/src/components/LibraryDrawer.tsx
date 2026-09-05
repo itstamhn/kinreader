@@ -580,6 +580,17 @@ export function LibraryDrawer({
               </div>
             </div>
 
+            <div className="space-y-4">
+              {[{ key: 'voiceEnabled' as const, label: 'Soniox voice', description: 'Listen to narration while reading.', checked: settings.voiceEnabled !== false },
+                { key: 'rampEnabled' as const, label: 'Gradually increase tempo', description: 'Increase speed as you continue reading.', checked: settings.rampEnabled === true }].map(option => (
+                <label key={option.key} className="flex items-center justify-between gap-4 text-sm text-[#ECEAE4]/80">
+                  <span>{option.label}<span className="block text-xs text-[#ECEAE4]/40 mt-1">{option.description}</span></span>
+                  <input type="checkbox" role="switch" checked={option.checked} aria-label={option.label}
+                    onChange={e => handleUpdateSettings({ [option.key]: e.target.checked })} className="w-5 h-5 accent-[#F2A33C]" />
+                </label>
+              ))}
+            </div>
+
             {/* 2. Default Playback Tempo */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">

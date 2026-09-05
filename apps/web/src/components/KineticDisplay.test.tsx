@@ -8,19 +8,18 @@ const words = Array.from({ length: 40 }, (_, index) => ({
   text: 'word', start: index, end: index + 0.6,
 }));
 
-test('arrows and buttons navigate from the displayed page during a pause', () => {
+test('arrows navigate from the displayed page during a pause', () => {
   const selected: number[] = [];
   // Page two appears at 17.8, before its first word is spoken at 18.
-  const { getByRole, getByText } = render(
+  let pageNumber = 0;
+  render(
     <KineticDisplay words={words} currentWordIndex={17} currentTime={17.9}
-      onSelectWord={index => selected.push(index)} viewMode="kinetic" />
+      onSelectWord={index => selected.push(index)} onPageChange={page => { pageNumber = page.number; }} viewMode="kinetic" />
   );
-  expect(getByText('2 / 3')).toBeTruthy();
+  expect(pageNumber).toBe(2);
   fireEvent.keyDown(window, { code: 'ArrowLeft' });
-  fireEvent.click(getByRole('button', { name: 'Previous reading page' }));
   fireEvent.keyDown(window, { code: 'ArrowRight' });
-  fireEvent.click(getByRole('button', { name: 'Next reading page' }));
-  expect(selected).toEqual([0, 0, 36, 36]);
+  expect(selected).toEqual([0, 36]);
 });
 
 test('timing corrections preserve the existing page and word elements', () => {
@@ -47,4 +46,24 @@ test('page arrows respect article boundaries and text input', () => {
   unmount();
   fireEvent.keyDown(window, { code: 'ArrowRight' });
   expect(selected).toEqual([]);
+});
+
+test('swipes turn pages without also seeking a word or toggling playback', () => {
+  const selected: number[] = [];
+  let plays = 0;
+  const { container, getByRole } = render(<KineticDisplay words={words} currentWordIndex={0} currentTime={0}
+    viewMode="kinetic" onSelectWord={index => selected.push(index)} onTogglePlay={() => plays++} />);
+  const stage = getByRole('region');
+  const word = container.querySelector('.editorial-word')!;
+  fireEvent.pointerDown(word, { clientX: 250, clientY: 300 });
+  fireEvent.pointerUp(word, { clientX: 100, clientY: 305 });
+  fireEvent.click(word);
+  expect(selected).toEqual([18]);
+  expect(plays).toBe(0);
+  fireEvent.pointerDown(stage, { clientX: 100, clientY: 300 });
+  fireEvent.pointerUp(stage, { clientX: 100, clientY: 300 });
+  fireEvent.click(stage);
+  expect(plays).toBe(1);
+  fireEvent.click(word);
+  expect(selected).toEqual([18, 0]);
 });

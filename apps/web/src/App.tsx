@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
+import { ReaderFrame } from './components/ReaderFrame';
 import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
 import { Controls } from './components/Controls';
@@ -258,8 +259,9 @@ export function App({
     return DEFAULT_SETTINGS;
   });
 
-  const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
-  const [isRampEnabled, setIsRampEnabled] = useState(false);
+  const isVoiceEnabled = settings.voiceEnabled !== false;
+  const isRampEnabled = settings.rampEnabled === true;
+  const [readerPage, setReaderPage] = useState({ number: 0, count: 0 });
 
   const [viewMode, setViewMode] = useState<'kinetic' | 'full'>('kinetic');
 
@@ -1240,7 +1242,7 @@ export function App({
           initialTab={activeView === 'settings' ? 'settings' : 'queue'}
         />
       ) : (
-        <div className="w-full h-full flex flex-col justify-between bg-kinreader-radial">
+        <ReaderFrame isPlaying={playback.isPlaying} theme={settings.readerTheme === 'light' ? 'light' : 'dark'}>
           {/* 1. Header Bar */}
           <Header
             article={article}
@@ -1249,16 +1251,15 @@ export function App({
             onOpenLibrary={() => handleViewChange('queue')}
             user={user}
             onOpenAuth={() => handleViewChange('auth')}
-            speed={playback.rate}
-            progress={playback.progress}
-            isVoiceEnabled={isVoiceEnabled}
-            onToggleVoice={() => setIsVoiceEnabled(!isVoiceEnabled)}
-            isRampEnabled={isRampEnabled}
-            onToggleRamp={() => setIsRampEnabled(!isRampEnabled)}
+            remainingSeconds={Math.max(0, (playback.duration - playback.currentTime) / playback.rate)}
+            viewMode={viewMode}
+            onToggleViewMode={() => setViewMode(viewMode === 'kinetic' ? 'full' : 'kinetic')}
           />
 
           {/* 2. Kinetic Display */}
           <KineticDisplay
+            onTogglePlay={handleTogglePlay}
+            onPageChange={setReaderPage}
             words={playback.words}
             currentWordIndex={playback.currentWordIndex}
             currentTime={playback.currentTime}
@@ -1271,6 +1272,8 @@ export function App({
 
           {/* 3. Bottom Controls */}
           <Controls
+            pageNumber={readerPage.number}
+            pageCount={readerPage.count}
             isPlaying={playback.isPlaying}
             onTogglePlay={handleTogglePlay}
             speed={playback.rate}
@@ -1322,7 +1325,7 @@ export function App({
                 : undefined
             }
           />
-        </div>
+        </ReaderFrame>
       )}
 
       {/* Modals & Bottom Sheets */}

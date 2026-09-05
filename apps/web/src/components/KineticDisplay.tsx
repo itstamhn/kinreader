@@ -4,6 +4,8 @@ import { editorialPages, editorialPageAtTime, type EditorialLayout } from '../ut
 
 interface KineticDisplayProps {
   words: WordTiming[];
+  onTogglePlay?: () => void;
+  onPageChange?: (page: { number: number; count: number }) => void;
   currentWordIndex: number;
   currentTime: number;
   onSelectWord: (index: number) => void;
@@ -16,6 +18,8 @@ interface KineticDisplayProps {
 
 export function KineticDisplay({
   words,
+  onTogglePlay,
+  onPageChange,
   currentWordIndex,
   currentTime,
   onSelectWord,
@@ -47,7 +51,7 @@ export function KineticDisplay({
       const spacing = parseFloat(style.letterSpacing) || 0;
       const cache = new Map<string, number>();
       setLayout({
-        maxWidth: Math.max(1, stage.clientWidth - 4),
+        maxWidth: Math.max(1, stage.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0) - 4),
         measureText: text => {
           let width = cache.get(text);
           if (width === undefined) {
@@ -74,11 +78,15 @@ export function KineticDisplay({
   const activePageIndex = editorialPageAtTime(pages, words, currentTime);
   const page = pages[activePageIndex];
 
+  useEffect(() => { onPageChange?.({ number: page ? activePageIndex + 1 : 0, count: pages.length }); }, [activePageIndex, pages.length, !!page, onPageChange]);
+  const gesture = useRef<{ x: number; y: number } | null>(null);
+  const swiped = useRef(false);
+
   useEffect(() => {
     const handlePageKey = (event: KeyboardEvent) => {
       if (event.code !== 'ArrowLeft' && event.code !== 'ArrowRight') return;
       const target = event.target;
-      if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]')) return;
+      if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable], [role=slider], [role=menu]')) return;
       event.preventDefault();
       const next = pages[activePageIndex + (event.code === 'ArrowLeft' ? -1 : 1)];
       if (next) onSelectWord(next.startIndex);
@@ -97,9 +105,23 @@ export function KineticDisplay({
 
   if (viewMode === 'kinetic' && page) {
     return (
-      <section className="editorial-reader" data-reader-theme={theme} aria-label="Kinetic reading page">
-        <div className="editorial-page-count">{activePageIndex + 1} / {pages.length}</div>
-        <div ref={stageRef} className="editorial-stage" style={{ '--editorial-size': `${(compact ? { sm: 26, md: 30, lg: 34 } : { sm: 40, md: 48, lg: 56 })[fontSize]}px` } as React.CSSProperties}>
+      <section className="editorial-reader" data-reader-theme={theme} aria-label="Kinetic reading page"
+        onPointerDown={e => { gesture.current = { x: e.clientX, y: e.clientY }; swiped.current = false; }}
+        onPointerCancel={() => { gesture.current = null; }}
+        onPointerUp={e => {
+          if (!gesture.current) return;
+          const dx = e.clientX - gesture.current.x;
+          const dy = e.clientY - gesture.current.y;
+          gesture.current = null;
+          if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+            swiped.current = true;
+            const next = pages[activePageIndex + (dx < 0 ? 1 : -1)];
+            if (next) onSelectWord(next.startIndex);
+          }
+        }}
+        onClickCapture={e => { if (swiped.current) { e.stopPropagation(); e.preventDefault(); swiped.current = false; } }}
+        onClick={e => { if (!(e.target as HTMLElement).closest('button')) onTogglePlay?.(); }}>
+        <div ref={stageRef} className="editorial-stage" style={{ '--editorial-size': `${(compact ? { sm: 30, md: 34, lg: 38 } : { sm: 46, md: 54, lg: 62 })[fontSize]}px` } as React.CSSProperties}>
           <div className="editorial-page" key={page.startIndex} data-page-start={page.startIndex}>
             {page.lines.map((line, row) => (
               <div className="editorial-line" key={row}>
@@ -119,18 +141,13 @@ export function KineticDisplay({
             ))}
           </div>
         </div>
-        <div className="editorial-navigation">
-          <button type="button" disabled={activePageIndex === 0} onClick={() => onSelectWord(pages[activePageIndex - 1]!.startIndex)} aria-label="Previous reading page">←</button>
-          <span>Space play · ←→ pages · tap a word to re-read</span>
-          <button type="button" disabled={activePageIndex === pages.length - 1} onClick={() => onSelectWord(pages[activePageIndex + 1]!.startIndex)} aria-label="Next reading page">→</button>
-        </div>
       </section>
     );
   }
 
   // 2. Full Article Mode
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-8 max-w-3xl mx-auto leading-relaxed text-lg sm:text-xl font-serif text-[#ECEAE4]/55 select-text">
+    <div className="reader-full-text">
       <div className="space-y-4 text-left">
         {words.map((word, idx) => {
           const isActive = idx === currentWordIndex;
@@ -142,10 +159,10 @@ export function KineticDisplay({
               onClick={() => onSelectWord(idx)}
               className={`cursor-pointer transition-colors duration-100 mr-2 inline-block ${
                 isActive
-                  ? 'bg-[#F2A33C]/20 text-[#FFF7EA] rounded'
+                  ? 'reader-full-active'
                   : isPast
-                  ? 'text-[#ECEAE4]/85'
-                  : 'text-[#ECEAE4]/30 hover:text-[#ECEAE4]/60'
+                  ? 'reader-full-past'
+                  : 'reader-full-pending'
               }`}
             >
               {word.text}

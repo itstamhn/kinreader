@@ -1,19 +1,11 @@
 import React, { useState } from 'react';
-import {
-  Play,
-  Pause,
-  RotateCcw,
-  RotateCw,
-  ExternalLink,
-  BookOpen,
-  Volume2,
-  Sparkles,
-  Loader2,
-  AlertCircle,
-} from 'lucide-react';
+import { Loader2, AlertCircle } from 'lucide-react';
+import { useReaderChrome } from './ReaderFrame';
 
 interface ControlsProps {
   isPlaying: boolean;
+  pageNumber?: number;
+  pageCount?: number;
   onTogglePlay: () => void;
   speed: number;
   onSpeedChange: (speed: number) => void;
@@ -52,6 +44,8 @@ const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
 
 export function Controls({
   isPlaying,
+  pageNumber = 0,
+  pageCount = 0,
   onTogglePlay,
   speed,
   onSpeedChange,
@@ -59,15 +53,12 @@ export function Controls({
   onSeekProgress,
   currentTime,
   duration,
-  remainingSeconds,
   sourceUrl,
-  sourceType,
   viewMode = 'kinetic',
   onToggleViewMode,
   isSynthesizing = false,
   isPlayable = true,
   isBuffering = isSynthesizing,
-  bufferedProgress,
   loadingProgress,
   isDegraded = false,
   isError = false,
@@ -80,6 +71,8 @@ export function Controls({
   infoAction,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [hoverSeek, setHoverSeek] = useState<number | null>(null);
+  const visible = useReaderChrome();
 
   const formatTime = (secs: number) => {
     if (isNaN(secs) || secs < 0) return '00:00';
@@ -90,11 +83,6 @@ export function Controls({
   };
 
   const safeSpeed = speed > 0 ? speed : 1.0;
-  const realCurrent = currentTime / safeSpeed;
-  const realRemaining = Math.max(0, (duration - currentTime) / safeSpeed);
-  const formattedCurrent = formatTime(realCurrent);
-  const formattedRemaining = `−${formatTime(realRemaining)}`;
-
   const handleSkip = (deltaSeconds: number) => {
     if (duration > 0) {
       const newTime = Math.max(0, Math.min(duration, currentTime + deltaSeconds * safeSpeed));
@@ -137,288 +125,92 @@ export function Controls({
     onSpeedChange(SPEED_OPTIONS[nextIndex]!);
   };
 
+  const playTitle = isError ? 'Audio unavailable' : isBuffering
+    ? isPlaying ? 'Pause buffering (Space)' : 'Play when audio is ready'
+    : isPlaying ? 'Pause (Space)' : 'Play (Space)';
+  const play = (ghost = false) => (
+    <button onClick={onTogglePlay} disabled={!isPlayable || isError}
+      className={ghost ? 'reader-ghost-pause' : 'reader-play'} title={playTitle}>
+      {isBuffering ? <Loader2 size={20} className="animate-spin" /> : isPlaying ? (
+        <svg width={ghost ? 14 : 22} height={ghost ? 16 : 26} viewBox="0 0 22 26" aria-hidden="true">
+          <rect x="3" y="2" width="5.5" height="22" rx="2.2" fill="currentColor" />
+          <rect x="13.5" y="2" width="5.5" height="22" rx="2.2" fill="currentColor" />
+        </svg>
+      ) : <svg width="22" height="24" viewBox="0 0 12 14" style={{ transform: 'translateX(1px)' }} aria-hidden="true">
+        <path d="M2 2v10c0 .8.9 1.3 1.6.9l8-5c.6-.4.6-1.4 0-1.8l-8-5C2.9.7 2 1.2 2 2z" fill="currentColor" />
+      </svg>}
+    </button>
+  );
+  const skip = (direction: number) => (
+    <button className="reader-skip" onClick={() => handleSkip(direction * 15)}
+      aria-label={direction < 0 ? 'Rewind 15 seconds' : 'Fast forward 15 seconds'}
+      title={direction < 0 ? 'Rewind 15 seconds' : 'Fast forward 15 seconds'}>
+      <svg width="26" height="26" viewBox="0 0 30 30" fill="none" style={{ transform: direction > 0 ? 'scaleX(-1)' : undefined }} aria-hidden="true">
+        <path d="M15 4a11 11 0 1 1-8.6 4.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M6.5 2.5v6h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg><span>15</span>
+    </button>
+  );
+  const tempo = () => <button className="reader-tempo" onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+    aria-expanded={showSpeedMenu} aria-haspopup="menu"
+    onContextMenu={e => { e.preventDefault(); cycleSpeed(); }}
+    title="Change Tempo (Click to select, right-click or ↑/↓ to cycle)">{speed.toFixed(1)}×</button>;
+  const preparation = loadingProgress && (loadingProgress.waiting
+    ? `${isPlaying ? 'Refilling audio' : 'Preparing audio'} · ${formatTime(loadingProgress.readySeconds)} / ${formatTime(loadingProgress.targetSeconds)} ready. ${isPlaying ? 'Playback will resume automatically.' : 'Play unlocks when the buffer is ready. Full Text is available now.'}`
+    : `${formatTime(loadingProgress.readySeconds)} ready · Loading the rest as you listen`);
+  const message = noticeMessage || (isError ? infoMessage || errorMessage :
+    [preparation, infoMessage, isDegraded ? degradedMessage : null].filter(Boolean).join(' · '));
+  const tone = noticeMessage || isError ? 'error' : isDegraded ? 'degraded' : 'info';
+
   return (
-    <footer className="w-full flex flex-col z-20 select-none border-t border-white/5 bg-[#0B0C10]/80 backdrop-blur-lg pb-safe">
-      {/* Primary Playback Bar (Matching Design 1a & 1b) */}
-      <div className="w-full flex items-center gap-3 sm:gap-5 py-3.5 px-4 sm:px-6">
-        {/* Left: Playback Controls (15s Rewind, Play/Pause, 15s Skip) */}
-        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
-          {/* 15s Back */}
-          <button
-            onClick={() => handleSkip(-15)}
-            className="relative w-7 h-7 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
-            title="Rewind 15 seconds"
-          >
-            <svg width="24" height="24" viewBox="0 0 30 30" fill="none">
-              <path
-                d="M15 4a11 11 0 1 1-8.6 4.1"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
-              <path
-                d="M6.5 2.5v6h6"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span className="absolute font-sans font-semibold text-[8px] pt-0.5 text-white/80">
-              15
-            </span>
-          </button>
-
-          {/* Big Play / Pause Button (52px Orange Amber Gradient) */}
-          <button
-            onClick={onTogglePlay}
-            disabled={!isPlayable || isError}
-            className="w-[46px] h-[46px] sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shrink-0 transition-all duration-150 active:scale-95 glow-amber-btn shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
-            title={
-              isError
-                ? 'Audio unavailable'
-                : isBuffering
-                  ? isPlaying ? 'Pause buffering (Space)' : 'Play when audio is ready'
-                  : isPlaying
-                    ? 'Pause (Space)'
-                    : 'Play (Space)'
-            }
-          >
-            {isBuffering ? (
-              <Loader2 className="w-5 h-5 text-[#16130B] animate-spin" />
-            ) : isPlaying ? (
-              <svg width="16" height="20" viewBox="0 0 22 26">
-                <rect x="3" y="2" width="5.5" height="22" rx="2.2" fill="#16130B" />
-                <rect x="13.5" y="2" width="5.5" height="22" rx="2.2" fill="#16130B" />
-              </svg>
-            ) : (
-              <svg width="18" height="20" viewBox="0 0 12 14" className="translate-x-0.5">
-                <path
-                  d="M2 2v10c0 .8.9 1.3 1.6.9l8-5c.6-.4.6-1.4 0-1.8l-8-5C2.9.7 2 1.2 2 2z"
-                  fill="#16130B"
-                />
-              </svg>
-            )}
-          </button>
-
-          {/* 15s Forward */}
-          <button
-            onClick={() => handleSkip(15)}
-            className="relative w-7 h-7 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
-            title="Fast forward 15 seconds"
-          >
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 30 30"
-              fill="none"
-              style={{ transform: 'scaleX(-1)' }}
-            >
-              <path
-                d="M15 4a11 11 0 1 1-8.6 4.1"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
-              <path
-                d="M6.5 2.5v6h6"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span className="absolute font-sans font-semibold text-[8px] pt-0.5 text-white/80">
-              15
-            </span>
-          </button>
-        </div>
-
-        {/* Elapsed Timestamp */}
-        <span className="font-mono font-medium text-[11px] text-[#ECEAE4]/40 shrink-0 select-none">
-          {formattedCurrent}
-        </span>
-
-        {/* Center: Striated Waveform Scrubber (Design 1a) */}
-        <div
-          onPointerDown={handleTimelinePointerDown}
-          className="flex-1 relative h-[26px] rounded overflow-hidden cursor-pointer touch-none select-none bg-white/[0.03]"
-          title="Drag to seek anywhere in the audio article"
-        >
-          {/* Base Inactive Waveform */}
-          <div className="absolute inset-0 waveform-mask-base pointer-events-none" />
-
-          {bufferedProgress !== undefined && (
-            <div
-              aria-hidden="true"
-              className="absolute top-0 bottom-0 left-0 bg-white/20 pointer-events-none"
-              style={{ width: `${Math.max(0, Math.min(100, bufferedProgress))}%` }}
-            />
-          )}
-
-          {/* Active Played Waveform */}
-          <div
-            className="absolute top-0 bottom-0 left-0 waveform-mask-active pointer-events-none"
-            style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
-          />
-
-          {/* Glowing Amber Playhead Needle */}
-          <div
-            className="absolute top-0 bottom-0 pointer-events-none transition-transform duration-75"
-            style={{
-              left: `${Math.max(0, Math.min(100, progress))}%`,
-              width: '2px',
-              backgroundColor: '#FFF7EA',
-              boxShadow: '0 0 10px rgba(242,163,60,0.9)',
-            }}
-          />
-        </div>
-
-        {/* Remaining Timestamp */}
-        <span className="font-mono font-medium text-[11px] text-[#ECEAE4]/40 shrink-0 select-none">
-          {formattedRemaining}
-        </span>
-
-        {/* Right: Tempo Pill & View Toggles */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0 relative">
-          {/* Tempo Pill Button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowSpeedMenu(!showSpeedMenu)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                cycleSpeed();
-              }}
-              className="min-w-[48px] sm:min-w-[52px] h-8 px-2 rounded-full font-mono font-semibold text-[12px] sm:text-[13px] text-[#F2A33C] bg-[#F2A33C]/15 border border-[#F2A33C]/35 flex items-center justify-center transition active:scale-95"
-              title="Change Tempo (Click to select, right-click or ↑/↓ to cycle)"
-            >
-              {speed.toFixed(1)}×
-            </button>
-
-            {/* Speed Selector Popover */}
-            {showSpeedMenu && (
-              <div className="absolute bottom-11 right-0 bg-[#16171E] border border-white/10 rounded-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 w-24 animate-fade-in">
-                {SPEED_OPTIONS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => {
-                      onSpeedChange(s);
-                      setShowSpeedMenu(false);
-                    }}
-                    className={`h-7 rounded-lg text-xs font-mono font-medium transition flex items-center justify-between px-2.5 ${
-                      Math.abs(s - speed) < 0.05
-                        ? 'bg-[#F2A33C] text-[#16130B] font-bold'
-                        : 'text-[#ECEAE4]/70 hover:bg-white/5 hover:text-white'
-                    }`}
-                  >
-                    <span>{s.toFixed(1)}×</span>
-                    {Math.abs(s - speed) < 0.05 && <span>✓</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Full Article Text Toggle */}
-          {onToggleViewMode && (
-            <button
-              onClick={onToggleViewMode}
-              className={`h-8 px-3 rounded-full flex items-center gap-1.5 font-sans font-medium text-xs border transition ${
-                viewMode === 'full'
-                  ? 'bg-white/15 text-white border-white/20'
-                  : 'bg-white/5 text-[#ECEAE4]/60 border-white/10 hover:text-white'
-              }`}
-              title={viewMode === 'kinetic' ? 'Show Full Article Text' : 'Return to Kinetic Reader'}
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">
-                {viewMode === 'kinetic' ? 'Full Text' : 'Kinetic'}
-              </span>
-            </button>
-          )}
-
-          {/* Source Link */}
-          {sourceUrl && (
-            <a
-              href={sourceUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white/50 hover:text-white transition"
-              title="Open Original Source Article"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          )}
-        </div>
+    <>
+      <div className="reader-seek" role="slider" aria-label="Audio position" tabIndex={0}
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}
+        aria-valuetext={`${formatTime(currentTime / safeSpeed)} of ${formatTime(duration / safeSpeed)}`}
+        onKeyDown={e => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+            e.preventDefault(); e.stopPropagation();
+            if (e.key === 'Home' || e.key === 'End') onSeekProgress(e.key === 'Home' ? 0 : 100);
+            else handleSkip(e.key === 'ArrowLeft' ? -15 : 15);
+          }
+        }}
+        onPointerDown={handleTimelinePointerDown}
+        onPointerMove={e => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          setHoverSeek(Math.max(0, Math.min(100, (e.clientX - rect.left) / rect.width * 100)));
+        }} onPointerLeave={() => setHoverSeek(null)} title="Drag to seek anywhere in the audio article">
+        <div className="reader-seek-track"><div style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>
+        {hoverSeek !== null && <span className="reader-seek-tooltip" style={{ left: `${Math.max(3, Math.min(97, hoverSeek))}%` }}>{formatTime(duration * hoverSeek / 100 / safeSpeed)}</span>}
       </div>
-
-      {loadingProgress && (
-        <div className="border-t border-white/10 px-4 py-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-[#ECEAE4]/70">
-          <span role="status">
-            {loadingProgress.waiting
-              ? `${isPlaying ? 'Refilling audio' : 'Preparing audio'} · ${formatTime(loadingProgress.readySeconds)} / ${formatTime(loadingProgress.targetSeconds)} ready`
-              : `${formatTime(loadingProgress.readySeconds)} ready · Loading the rest as you listen`}
-          </span>
-          {loadingProgress.waiting && (
-            <>
-              <progress
-                aria-label="Audio preparation"
-                max={Math.max(1, loadingProgress.targetSeconds)}
-                value={Math.min(loadingProgress.readySeconds, loadingProgress.targetSeconds)}
-                className="h-1.5 w-24 accent-[#F2A33C]"
-              />
-              <span>{isPlaying ? 'Playback will resume automatically.' : 'Play unlocks when the buffer is ready. Full Text is available now.'}</span>
-            </>
-          )}
+      <footer className="reader-controls">
+        {message && <div className="reader-status" data-tone={tone} role={tone === 'error' ? 'alert' : 'status'}>
+          {infoMessage && infoBusy && !isError && !noticeMessage ? <Loader2 size={13} className="animate-spin" /> : <AlertCircle size={13} />}
+          <span title={message || undefined}>{message}</span>
+          {noticeMessage && onDismissNotice ? <button onClick={onDismissNotice} title="Dismiss">Dismiss</button>
+            : infoAction && <button onClick={infoAction.onClick}>{infoAction.label}</button>}
+        </div>}
+        {loadingProgress?.waiting && <progress className="sr-only" aria-label="Audio preparation"
+          max={Math.max(1, loadingProgress.targetSeconds)} value={Math.min(loadingProgress.readySeconds, loadingProgress.targetSeconds)} />}
+        <div className="reader-bottom reader-fading" inert={!visible}>
+          <div className="reader-transport">{skip(-1)}{play()}{skip(1)}</div>
+          <div className="reader-secondary">
+            {tempo()}
+            {onToggleViewMode && <><span aria-hidden="true">·</span><button onClick={onToggleViewMode}
+              title={viewMode === 'kinetic' ? 'Show Full Article Text' : 'Return to Kinetic Reader'}>{viewMode === 'kinetic' ? 'Full text' : 'Kinetic'}</button></>}
+            {sourceUrl && <><span aria-hidden="true">·</span><a href={sourceUrl} target="_blank" rel="noopener noreferrer" title="Open Original Source Article">Source</a></>}
+            <span aria-hidden="true">·</span><span className="reader-page-count">{pageNumber} / {pageCount}</span>
+          </div>
         </div>
-      )}
-
-      {/* Synthesis / Degraded / Error Notice Banner */}
-      {noticeMessage ? (
-        <div
-          role="alert"
-          className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-300"
-        >
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{noticeMessage}</span>
-          {onDismissNotice && (
-            <button
-              onClick={onDismissNotice}
-              className="ml-2 shrink-0 underline underline-offset-2 hover:text-white"
-              title="Dismiss"
-            >
-              Dismiss
-            </button>
-          )}
-        </div>
-      ) : infoMessage ? (
-        <div className="w-full bg-white/[0.04] border-t border-white/10 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#ECEAE4]/70">
-          {infoBusy ? (
-            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
-          ) : (
-            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          )}
-          <span>{infoMessage}</span>
-          {infoAction && (
-            <button
-              onClick={infoAction.onClick}
-              className="ml-2 shrink-0 font-semibold text-[#F2A33C] underline underline-offset-2 hover:text-white"
-            >
-              {infoAction.label}
-            </button>
-          )}
-        </div>
-      ) : isError ? (
-        <div className="w-full bg-rose-500/10 border-t border-rose-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-rose-400">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>{errorMessage}</span>
-        </div>
-      ) : isDegraded ? (
-        <div className="w-full bg-[#F2A33C]/10 border-t border-[#F2A33C]/20 px-4 py-1.5 flex items-center justify-center gap-2 text-[11px] font-sans text-[#F2A33C]">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>{degradedMessage}</span>
-        </div>
-      ) : null}
-    </footer>
+        {!visible && <div className="reader-ghost">{play(true)}{tempo()}</div>}
+        {showSpeedMenu && <>
+          <button className="reader-menu-dismiss" aria-label="Close tempo menu" onClick={() => setShowSpeedMenu(false)} />
+          <div className="reader-menu reader-speed-menu" role="menu" data-reader-menu
+            onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setShowSpeedMenu(false); } }}>
+            {SPEED_OPTIONS.map(s => <button key={s} role="menuitemradio" aria-checked={Math.abs(s - speed) < 0.05}
+              onClick={() => { onSpeedChange(s); setShowSpeedMenu(false); }}>{s.toFixed(1)}×</button>)}
+          </div>
+        </>}
+      </footer>
+    </>
   );
 }
