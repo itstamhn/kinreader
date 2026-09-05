@@ -4,9 +4,10 @@ const ChromeContext = createContext(true);
 export const useReaderChrome = () => useContext(ChromeContext);
 
 /** Playback owns the idle timeout; pointer activity temporarily reveals the controls. */
-export function ReaderFrame({ isPlaying, theme, children }: {
+export function ReaderFrame({ isPlaying, theme, children, hintAvailable = true }: {
   isPlaying: boolean;
   theme: 'dark' | 'light';
+  hintAvailable?: boolean;
   children: React.ReactNode;
 }) {
   const [chromeVisible, setChromeVisible] = useState(true);
@@ -29,7 +30,7 @@ export function ReaderFrame({ isPlaying, theme, children }: {
   };
   useEffect(() => {
     setChromeVisible(true);
-    if (isPlaying) scheduleHide(1500);
+    if (isPlaying) { dismissHint(); scheduleHide(1500); }
     else clearTimer();
     return clearTimer;
   }, [isPlaying]);
@@ -48,9 +49,10 @@ export function ReaderFrame({ isPlaying, theme, children }: {
         onPointerMove={e => { if (e.pointerType !== 'touch' && e.buttons === 0) reveal(); }} onClick={reveal}
         onFocusCapture={e => { if (e.target.matches(':focus-visible')) reveal(); }}>
         {children}
-        {!hintDismissed && visible && (
+        {!hintDismissed && !isPlaying && hintAvailable && visible && (
           <div className="reader-hint" role="status">
-            <span>Space to play · ← → or swipe for pages · tap a word to re-read</span>
+            <span className="reader-hint-desktop">Space plays or pauses. Click any word to hear it again. ← → turn the page.</span>
+            <span className="reader-hint-mobile">Tap the text to play or pause. Tap any word to hear it again. Swipe to turn the page.</span>
             <button onClick={dismissHint} aria-label="Dismiss reading hint">Got it</button>
           </div>
         )}

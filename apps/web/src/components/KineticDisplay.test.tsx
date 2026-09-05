@@ -67,3 +67,17 @@ test('swipes turn pages without also seeking a word or toggling playback', () =>
   fireEvent.click(word);
   expect(selected).toEqual([18, 0]);
 });
+
+test('pending audio keeps words dim and full text preserves paragraphs and word seeking', () => {
+  const articleText = 'One two.\n\nThree four.';
+  const articleWords = articleText.split(/\s+/).map((text, index) => ({ text, start: index, end: index + .6 }));
+  const selected: number[] = [];
+  const props = { words: articleWords, articleText, currentWordIndex: 1, currentTime: 1, onSelectWord: (index: number) => selected.push(index) };
+  const ui = render(<KineticDisplay {...props} viewMode="kinetic" isPending />);
+  expect(ui.container.querySelector('.is-spoken')).toBeNull();
+  ui.rerender(<KineticDisplay {...props} viewMode="full" />);
+  expect(ui.container.querySelectorAll('.reader-full-text p')).toHaveLength(2);
+  fireEvent.click(ui.getByRole('button', { name: 'Three' }));
+  expect(selected).toEqual([2]);
+  expect(ui.getByRole('button', { name: 'two.' }).getAttribute('aria-current')).toBe('true');
+});

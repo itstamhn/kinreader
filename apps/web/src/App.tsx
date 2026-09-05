@@ -428,7 +428,7 @@ export function App({
     const narratedText = narration.text;
     if (narration.truncated) {
       setTruncationNotice(
-        `Long article: narrating the first ${narration.narratedWords.toLocaleString()} of ${narration.totalWords.toLocaleString()} words.`
+        `Narrating the first ${narration.narratedWords.toLocaleString()} of ${narration.totalWords.toLocaleString()} words`
       );
     }
 
@@ -493,7 +493,7 @@ export function App({
     };
 
     const noteFallback = (reason: string | undefined) => {
-      if (reason && isCurrentLoad()) setFallbackReason(reason.replace(/\s+/g, ' ').slice(0, 160));
+      if (reason && isCurrentLoad()) setFallbackReason(reason.replace(/\s+/g, ' '));
     };
     const useRestFallback = (reason?: string) => {
       if (!isCurrentLoad()) return;
@@ -766,7 +766,9 @@ export function App({
             },
             page: from => narrationPage ? narrationPage({ contentDigest, voice, from }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from }),
             pollMs: pregenerationPollMs,
-            onProgress: (completed, total) => setPreparationProgress(completed === total ? 'Audio saved. Ready to replay.' : `Audio saved: ${completed} of ${total} sections. Preparation continues if you leave.`),
+            onProgress: (completed, total) => {
+              if (isCurrentLoad()) setPreparationProgress(completed === total ? null : `Audio saved: ${completed} of ${total} sections. Preparation continues if you leave.`);
+            },
           });
         } catch (error) {
           if (!isCurrentLoad() || controller.signal.aborted) return;
@@ -935,7 +937,7 @@ export function App({
         setArticle(SAMPLE_ARTICLE);
         setQueryUrl(null, { history: 'replace' });
         loadArticleContent(SAMPLE_ARTICLE, engine, settings);
-        setLoadError(`Could not load ${host}: ${reason}`);
+        setLoadError(`Couldn’t read ${host}: ${reason}`);
         return null;
       });
   };
@@ -1242,9 +1244,11 @@ export function App({
           initialTab={activeView === 'settings' ? 'settings' : 'queue'}
         />
       ) : (
-        <ReaderFrame isPlaying={playback.isPlaying} theme={settings.readerTheme === 'light' ? 'light' : 'dark'}>
+        <ReaderFrame isPlaying={playback.isPlaying} theme={settings.readerTheme === 'light' ? 'light' : 'dark'}
+          hintAvailable={!pendingLoadUrl && playback.playbackReady && playback.canStartPlayback && !loadError && playbackStatus !== 'error'}>
           {/* 1. Header Bar */}
           <Header
+            pendingUrl={pendingLoadUrl}
             article={article}
             onOpenSettings={() => handleViewChange('settings')}
             onOpenInput={() => setIsInputOpen(true)}
@@ -1258,6 +1262,9 @@ export function App({
 
           {/* 2. Kinetic Display */}
           <KineticDisplay
+            isFetching={!!pendingLoadUrl}
+            isPending={awaitingPregeneration || (!playback.isPlaying && (!playback.playbackReady || !playback.canStartPlayback || playback.currentTime === 0))}
+            articleText={article.content}
             onTogglePlay={handleTogglePlay}
             onPageChange={setReaderPage}
             words={playback.words}
@@ -1267,11 +1274,12 @@ export function App({
             viewMode={viewMode}
             fontSize={settings.fontSize || 'md'}
             theme={settings.readerTheme === 'light' ? 'light' : 'dark'}
-            emptyMessage={pendingLoadUrl ? 'Fetching article…' : undefined}
           />
 
           {/* 3. Bottom Controls */}
           <Controls
+            isFetching={!!pendingLoadUrl}
+            awaitingSavedRecording={awaitingPregeneration}
             pageNumber={readerPage.number}
             pageCount={readerPage.count}
             isPlaying={playback.isPlaying}

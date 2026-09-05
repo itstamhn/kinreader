@@ -224,7 +224,7 @@ test('a failed synthesis offers a Soniox retry instead of a device voice', async
     fireEvent.click(narrateButton);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Soniox audio is unavailable');
+      expect(container.textContent).toContain('Audio couldn’t be loaded');
     });
 
     // Never silently reported as if the neural voice had loaded.
@@ -263,7 +263,7 @@ test('when speech synthesis is unsupported and neural synthesis fails, lands in 
     fireEvent.click(narrateButton);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Soniox audio is unavailable');
+      expect(container.textContent).toContain('Audio couldn’t be loaded');
     });
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
@@ -459,8 +459,8 @@ test('without MediaSource Play unlocks when audio is ready', async () => {
       transport.streams[0]!.options.handlers.onDone();
     });
 
-    // A short completed recording unlocks immediately, without a minute-long wait.
-    expect(playButton.disabled).toBe(false);
+    // The preparation ring is replaced by a playable transport button.
+    expect((container.querySelector('button[title="Play (Space)"]') as HTMLButtonElement).disabled).toBe(false);
     fireEvent.keyDown(window, { code: 'Space' });
     await waitFor(() => expect(elementPlays).toBe(1));
     expect(engine.getSnapshot().isBuffering).toBe(false);
@@ -628,15 +628,15 @@ test('a failed Soniox REST recording never switches to the on-device voice', asy
       expect(restUrls).toHaveLength(1);
       // REST still plays the neural voice; what it lacks is exact word sync,
       // and the notice must say that rather than claim on-device speech.
-      expect(container.textContent).toContain('Exact word sync unavailable');
+      expect(container.textContent).toContain('Word highlighting is estimated for this article');
     });
     expect(container.textContent).not.toContain('Neural voice unavailable');
     expect(restUrls[0]).toContain('clientId=');
 
     act(() => (window as any).__engine.audio.onerror(new Event('error')));
     expect(browserFallbackTexts).toEqual([]);
-    await waitFor(() => expect(container.textContent).toContain('Soniox audio is unavailable'));
-    expect(container.textContent).toContain('Retry audio');
+    await waitFor(() => expect(container.textContent).toContain('Audio couldn’t be loaded'));
+    expect(container.textContent).toContain('Retry');
     expect(container.textContent).not.toContain('using on-device speech');
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
@@ -671,8 +671,8 @@ test('timestamps that stop lining up mid-stream keep the audio and degrade only 
       handlers.onTerminated?.();
     });
 
-    await waitFor(() => expect(container.textContent).toContain('Exact word sync unavailable'));
-    expect(container.textContent).toContain('Reason: exact word sync lost partway (1 words are exact)');
+    await waitFor(() => expect(container.textContent).toContain('Word highlighting is estimated for this article'));
+    expect(container.querySelector('.reader-status-message > span')?.getAttribute('title')).toContain('Reason: exact word sync lost partway (1 words are exact)');
     // No REST re-synthesis, and the live stream was not torn down.
     expect(restUrls).toHaveLength(0);
     expect(transport.streams[0]!.cancelCalls).toBe(0);
@@ -938,7 +938,7 @@ test('a failed deep-link extraction shows a load notice instead of silently keep
   try {
     const { container } = renderApp();
     await waitFor(() => {
-      expect(container.textContent).toContain('Could not load dead.example');
+      expect(container.textContent).toContain('Couldn’t read dead.example');
       expect(container.textContent).toContain('Too many article requests');
     });
     // Back on the sample article, and it is playable.
@@ -961,7 +961,7 @@ test('a deep link shows a fetching state instead of the sample article while ext
   try {
     const { container } = renderApp();
     await waitFor(() => {
-      expect(container.textContent).toContain('Fetching article');
+      expect(container.textContent).toContain('Fetching the article');
       expect(container.textContent).toContain('slow.example');
     });
     expect(container.textContent).not.toContain('digital renaissance');
@@ -1060,7 +1060,7 @@ test('a socket failure mid-article resumes the REST fallback from the current wo
     seeks.length = 0;
     act(() => transport.streams[0]!.options.handlers.onError(new Error('socket dropped')));
 
-    await waitFor(() => expect(container.textContent).toContain('Exact word sync unavailable'));
+    await waitFor(() => expect(container.textContent).toContain('Word highlighting is estimated for this article'));
     expect(seeks).toContain(5);
     expect(((window as any).__engine as SpeechEngine).currentWordIndex).toBe(5);
   } finally {
@@ -1286,7 +1286,12 @@ test('a very long article is narrated as a sentence-aligned prefix and says so',
   expect(streamed.length).toBeLessThanOrEqual(45000);
   expect(streamed.endsWith('.')).toBe(true);
   expect(longText.startsWith(streamed)).toBe(true);
-  await waitFor(() => expect(container.textContent).toMatch(/Long article: narrating the first [\d,]+ of [\d,]+ words/));
+  expect(container.textContent).toContain('Preparing audio');
+  act(() => {
+    transport.streams[0]!.options.handlers.onAudio(new Uint8Array([1, 2, 3]));
+    transport.streams[0]!.options.handlers.onDone();
+  });
+  await waitFor(() => expect(container.textContent).toMatch(/Narrating the first [\d,]+ of [\d,]+ words/));
   // The displayed word list is the narrated prefix, not the whole text.
   const engine = (window as any).__engine as SpeechEngine;
   expect(engine.words.length).toBe(streamed.split(/\s+/).length);
@@ -1306,7 +1311,7 @@ test('the degraded banner names the reason the live stream failed', async () => 
     await narrateRawText(container, 'Explain the failure please');
     await waitFor(() => expect(transport.streams).toHaveLength(1));
     act(() => transport.streams[0]!.options.handlers.onError(new Error('Soniox returned too_many_sessions')));
-    await waitFor(() => expect(container.textContent).toContain('Reason: live stream failed: Soniox returned too_many_sessions'));
+    await waitFor(() => expect(container.querySelector('.reader-status-message > span')?.getAttribute('title')).toContain('Reason: live stream failed: Soniox returned too_many_sessions'));
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
   }
@@ -1460,10 +1465,10 @@ test('Soniox preparation failure offers an explicit retry without invoking devic
       requestPregeneration: async () => { preparationCalls++; throw new Error('Soniox is busy. Please retry.'); },
     });
     await narrateRawText(container, 'Only the saved Soniox voice should read this article.');
-    await waitFor(() => expect(container.textContent).toContain('Soniox is busy'));
+    await waitFor(() => expect(container.querySelector('.reader-status-message > span')?.getAttribute('title')).toContain('Soniox is busy'));
     expect(preparationCalls).toBe(1);
     expect(deviceCalls).toBe(0);
-    const retry = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Retry audio')!;
+    const retry = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Retry')!;
     expect(retry).toBeTruthy();
     fireEvent.click(retry);
     await waitFor(() => expect(preparationCalls).toBe(2));
@@ -1482,8 +1487,8 @@ test('an asynchronous sample audio error never starts device speech', async () =
     const { container } = renderApp();
     await waitFor(() => expect((window as any).__engine?.audio?.src).toContain('sample_audio.mp3'));
     act(() => (window as any).__engine.audio.onerror(new Event('error')));
-    await waitFor(() => expect(container.textContent).toContain('Soniox audio is unavailable'));
-    expect(container.textContent).toContain('Retry audio');
+    await waitFor(() => expect(container.textContent).toContain('Audio couldn’t be loaded'));
+    expect(container.textContent).toContain('Retry');
     expect(deviceCalls).toBe(0);
   } finally {
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;

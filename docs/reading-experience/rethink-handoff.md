@@ -46,6 +46,23 @@ Layout: identical, `background:#0F110F`.
 - **Status banners** (degraded / error / loading progress / notices from Controls.tsx) render as a single line above the bottom cluster, `font 11px`, same colours as today (rose for error, amber for degraded, `rgba(236,234,228,.7)` for info). Keep their existing copy and actions ("Retry audio", "Play now", "Dismiss").
 - **Empty / fetching state**: stage shows "Fetching article…" in `Instrument Sans 14px rgba(236,234,228,.4)` centred (existing).
 
+## Reader states (Turn 2 frames, `[data-screen-label^="2"]`)
+All states share the 1c layout. A single **status line** (`Instrument Sans 11px`, centred, gap 12px between message and action) sits at the top of the bottom cluster, above the transport. Colour encodes kind: neutral `rgba(236,234,228,.55)`, estimated/warning `#F2A33C` at opacity .85, failure `#F28B82`. Actions in the line are text, weight 600, underlined (failure) or accent-coloured (neutral). No icons, no banners, no borders.
+
+| id | State (source) | Stage | Bottom cluster | Status line |
+|----|----------------|-------|----------------|-------------|
+| 2a | Fetching article (`pendingLoadUrl`, words empty) | "Fetching the article…" in Newsreader 34px `#3a3b36` + "Usually a few seconds" 12px `.35` | 64px spinner ring only (track `rgba(236,234,228,.12)` 2px, arc `#F2A33C` 2px, dasharray 48/140, rotates 1s linear) | — ; title line shows `<host> · Loading article…` |
+| 2b | Preparing audio (`synthesizing` / buffer waiting) | Estimated words, all pending `#6e6f68` | Spinner ring replaces the play button; "Full text is available now" 12px `.45` below | "Preparing audio · 00:04 of 00:12 ready" + 96×2px bar (`.12` track, `#F2A33C` fill). Progress line at top shows buffered % in `rgba(236,234,228,.2)` |
+| 2c | Waiting for saved recording (`awaitingPregeneration`) | Pending words | Spinner ring | "Checking for a saved recording…" + **Play now** (accent) |
+| 2d | Playing with estimated sync (`degraded`) | Normal | Ghost pause + tempo (playing state) | "Word highlighting is estimated for this article" in amber. Keep the full `fallbackReason` as the element's `title` |
+| 2e | Audio failed (`error`) | Normal | Full paused chrome at **opacity .4**, play disabled | "Audio couldn’t be loaded" + **Retry** (rose) |
+| 2f | Link could not be read (`loadError`) | Previous/sample article, playable | Full paused chrome | "Couldn’t read <host> — <reason>" + **Dismiss** (rose message, dismiss in `.6` neutral). Wraps to two lines if needed, `padding:0 28px`, centred |
+| 2g | Long article truncated (`truncationNotice`) | Normal | Full paused chrome | "Narrating the first 4,000 of 6,212 words" neutral |
+| 2h | First visit | Pending words, paused | Full paused chrome | No status line. A one-time hint card: `top:96px; left/right:28px; padding:12px 14px; radius:12px; background:#1A1C19; border:1px solid rgba(255,255,255,.08); 12px/1.45 .75` + **Got it** (accent, 600). Copy: "Tap the text to play or pause. Tap any word to hear it again. Swipe to turn the page." Desktop copy: "Space plays or pauses. Click any word to hear it again. ← → turn the page." Set `kinreader_hint_seen` on dismiss or first play |
+| 2i | Full text (`viewMode = full`) | Scrolling column `padding:92px 28px 0` (desktop: max-width 680px centred), Newsreader 20px/1.65; past text `#c9c7bf`, active word `#F4F0E6` on `rgba(242,163,60,.18)` radius 3px, future `#6e6f68`; fade mask 48px top / 200px bottom so text dissolves under the cluster | Same cluster | Secondary row shows **Kinetic** (`.85`) in place of "Full text"; page counter hidden |
+
+Priority when several apply (mirrors Controls.tsx): loadError → info (preparing / saved recording / truncation) → error → degraded.
+
 ## State Management
 Reuse the engine snapshot from `useSyncExternalStore`. New UI state only:
 - `chromeVisible: boolean` — derived: `!isPlaying || recentPointerActivity`.
@@ -81,5 +98,5 @@ Spacing / sizes
 - Fonts: Newsreader, Instrument Sans, Spline Sans Mono (already loaded by the app).
 
 ## Files
-- `Kinreader Reader Review.dc.html` — the design canvas. Frames `[data-screen-label="1c desktop paused"]` and `[data-screen-label="1c mobile playing"]` are the spec; the critique panel at the far left lists the rationale for each removal.
+- `Kinreader Reader Review.dc.html` — the design canvas. Turn 2 (top row, ids 2a–2i) holds every reader state; Turn 1 frames `[data-screen-label="1c desktop paused"]` and `[data-screen-label="1c mobile playing"]` are the base spec; the critique panel at the far left lists the rationale for each removal.
 - `support.js` — runtime the HTML file needs to open in a browser; not part of the design.

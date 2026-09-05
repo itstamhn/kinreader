@@ -4,6 +4,9 @@ import { editorialPages, editorialPageAtTime, type EditorialLayout } from '../ut
 
 interface KineticDisplayProps {
   words: WordTiming[];
+  isFetching?: boolean;
+  isPending?: boolean;
+  articleText?: string;
   onTogglePlay?: () => void;
   onPageChange?: (page: { number: number; count: number }) => void;
   currentWordIndex: number;
@@ -18,6 +21,9 @@ interface KineticDisplayProps {
 
 export function KineticDisplay({
   words,
+  isFetching = false,
+  isPending = false,
+  articleText,
   onTogglePlay,
   onPageChange,
   currentWordIndex,
@@ -95,6 +101,25 @@ export function KineticDisplay({
     return () => window.removeEventListener('keydown', handlePageKey);
   }, [pages, activePageIndex, onSelectWord]);
 
+  const paragraphs = useMemo(() => {
+    if (!articleText) return [words.map((_, index) => index)];
+    const sourceParagraphs = articleText.trim().split(/\n\s*\n/).map(text => text.split(/\s+/).filter(Boolean));
+    const sourceWords = sourceParagraphs.flat();
+    if (!words.every((word, index) => word.text === sourceWords[index])) return [words.map((_, index) => index)];
+    let offset = 0;
+    return sourceParagraphs.flatMap(paragraph => {
+      const start = offset;
+      offset += paragraph.length;
+      return start < words.length ? [Array.from({ length: Math.min(offset, words.length) - start }, (_, index) => start + index)] : [];
+    });
+  }, [articleText, words]);
+
+  if (isFetching) {
+    return <div className="reader-fetching" role="status">
+      <p>Fetching the article…</p><span>Usually a few seconds</span>
+    </div>;
+  }
+
   if (words.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-[#ECEAE4]/40">
@@ -130,8 +155,8 @@ export function KineticDisplay({
                     {position > 0 ? ' ' : null}
                     <button
                       type="button"
-                      className={`editorial-word ${index <= currentWordIndex ? 'is-spoken' : ''}`}
-                      aria-current={index === currentWordIndex ? 'true' : undefined}
+                      className={`editorial-word ${!isPending && index <= currentWordIndex ? 'is-spoken' : ''}`}
+                      aria-current={!isPending && index === currentWordIndex ? 'true' : undefined}
                       onClick={() => onSelectWord(index)}
                       title="Read from this word"
                     >{words[index]!.text}</button>
@@ -145,31 +170,19 @@ export function KineticDisplay({
     );
   }
 
-  // 2. Full Article Mode
   return (
-    <div className="reader-full-text">
-      <div className="space-y-4 text-left">
-        {words.map((word, idx) => {
-          const isActive = idx === currentWordIndex;
-          const isPast = idx < currentWordIndex;
-
-          return (
-            <span
-              key={idx}
-              onClick={() => onSelectWord(idx)}
-              className={`cursor-pointer transition-colors duration-100 mr-2 inline-block ${
-                isActive
-                  ? 'reader-full-active'
-                  : isPast
-                  ? 'reader-full-past'
-                  : 'reader-full-pending'
-              }`}
-            >
-              {word.text}
-            </span>
-          );
-        })}
-      </div>
+    <div className="reader-full-text" aria-label="Full article text" tabIndex={0}>
+      {paragraphs.map((paragraph, paragraphIndex) => <p key={paragraphIndex}>
+        {paragraph.map((index, position) => <React.Fragment key={index}>
+          {position > 0 ? ' ' : null}
+          <button type="button" onClick={() => onSelectWord(index)}
+            aria-current={!isPending && index === currentWordIndex ? 'true' : undefined}
+            className={`reader-full-word ${isPending ? 'reader-full-pending' : index === currentWordIndex
+              ? 'reader-full-active' : index < currentWordIndex ? 'reader-full-past' : 'reader-full-pending'}`}>
+            {words[index]!.text}
+          </button>
+        </React.Fragment>)}
+      </p>)}
     </div>
   );
 }

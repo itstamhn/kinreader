@@ -34,3 +34,12 @@ test('the reading hint stays dismissed after remount', () => {
   const second = render(<ReaderFrame isPlaying={false} theme="light">text</ReaderFrame>);
   expect(second.queryByRole('button', { name: 'Dismiss reading hint' })).toBeNull();
 });
+
+test('first playback dismisses the hint permanently', () => {
+  const ui = render(<ReaderFrame isPlaying={false} theme="dark">text</ReaderFrame>);
+  expect(ui.getByRole('button', { name: 'Dismiss reading hint' })).toBeTruthy();
+  ui.rerender(<ReaderFrame isPlaying theme="dark">text</ReaderFrame>);
+  ui.rerender(<ReaderFrame isPlaying={false} theme="dark">text</ReaderFrame>);
+  expect(ui.queryByRole('button', { name: 'Dismiss reading hint' })).toBeNull();
+  expect(localStorage.getItem('kinreader_hint_seen')).toBe('1');
+});

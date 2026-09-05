@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { LoadingRing } from './LoadingRing';
 import { useReaderChrome } from './ReaderFrame';
 
 interface ControlsProps {
   isPlaying: boolean;
+  isFetching?: boolean;
+  awaitingSavedRecording?: boolean;
   pageNumber?: number;
   pageCount?: number;
   onTogglePlay: () => void;
@@ -44,6 +46,8 @@ const SPEED_OPTIONS = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.5, 3.0, 3.5];
 
 export function Controls({
   isPlaying,
+  isFetching = false,
+  awaitingSavedRecording = false,
   pageNumber = 0,
   pageCount = 0,
   onTogglePlay,
@@ -59,20 +63,25 @@ export function Controls({
   isSynthesizing = false,
   isPlayable = true,
   isBuffering = isSynthesizing,
+  bufferedProgress,
   loadingProgress,
   isDegraded = false,
   isError = false,
-  degradedMessage = 'Neural voice unavailable (using on-device speech).',
-  errorMessage = 'Audio playback unavailable on this device.',
+  degradedMessage = 'Word highlighting is estimated for this article',
+  errorMessage = 'Audio couldn’t be loaded',
   noticeMessage,
   onDismissNotice,
   infoMessage,
-  infoBusy = true,
   infoAction,
 }: ControlsProps) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [hoverSeek, setHoverSeek] = useState<number | null>(null);
-  const visible = useReaderChrome();
+  const chromeVisible = useReaderChrome();
+  const waitingForAudio = !isFetching && !isError && !isPlaying &&
+    (awaitingSavedRecording || (!isPlayable && (isBuffering || isSynthesizing)));
+  const visible = chromeVisible || isFetching || waitingForAudio || isError || !!noticeMessage;
+  const bufferPercent = Math.max(0, Math.min(100, loadingProgress?.waiting && loadingProgress.targetSeconds > 0
+    ? loadingProgress.readySeconds / loadingProgress.targetSeconds * 100 : bufferedProgress ?? 0));
 
   const formatTime = (secs: number) => {
     if (isNaN(secs) || secs < 0) return '00:00';
@@ -131,7 +140,7 @@ export function Controls({
   const play = (ghost = false) => (
     <button onClick={onTogglePlay} disabled={!isPlayable || isError}
       className={ghost ? 'reader-ghost-pause' : 'reader-play'} title={playTitle}>
-      {isBuffering ? <Loader2 size={20} className="animate-spin" /> : isPlaying ? (
+      {isPlaying ? (
         <svg width={ghost ? 14 : 22} height={ghost ? 16 : 26} viewBox="0 0 22 26" aria-hidden="true">
           <rect x="3" y="2" width="5.5" height="22" rx="2.2" fill="currentColor" />
           <rect x="13.5" y="2" width="5.5" height="22" rx="2.2" fill="currentColor" />
@@ -155,54 +164,79 @@ export function Controls({
     aria-expanded={showSpeedMenu} aria-haspopup="menu"
     onContextMenu={e => { e.preventDefault(); cycleSpeed(); }}
     title="Change Tempo (Click to select, right-click or ↑/↓ to cycle)">{speed.toFixed(1)}×</button>;
-  const preparation = loadingProgress && (loadingProgress.waiting
-    ? `${isPlaying ? 'Refilling audio' : 'Preparing audio'} · ${formatTime(loadingProgress.readySeconds)} / ${formatTime(loadingProgress.targetSeconds)} ready. ${isPlaying ? 'Playback will resume automatically.' : 'Play unlocks when the buffer is ready. Full Text is available now.'}`
-    : `${formatTime(loadingProgress.readySeconds)} ready · Loading the rest as you listen`);
-  const message = noticeMessage || (isError ? infoMessage || errorMessage :
-    [preparation, infoMessage, isDegraded ? degradedMessage : null].filter(Boolean).join(' · '));
-  const tone = noticeMessage || isError ? 'error' : isDegraded ? 'degraded' : 'info';
+  const preparation = loadingProgress?.waiting
+    ? `${isPlaying ? 'Refilling audio' : 'Preparing audio'} · ${formatTime(loadingProgress.readySeconds)} of ${formatTime(loadingProgress.targetSeconds)} ready`
+    : waitingForAudio ? 'Preparing audio…' : undefined;
+  // Preparation details may contain a failure reason. Errors retain it as a
+  // tooltip, while the visible action stays short and consistent.
+  const message = isFetching ? undefined : noticeMessage ||
+    (awaitingSavedRecording && !isError ? 'Checking for a saved recording…' : undefined) ||
+    (!isError ? preparation || infoMessage : undefined) ||
+    (isError ? 'Audio couldn’t be loaded' : isDegraded ? 'Word highlighting is estimated for this article' : undefined);
+  const tone = noticeMessage ? 'notice' : isError ? 'error' :
+    !preparation && !infoMessage && !awaitingSavedRecording && isDegraded ? 'degraded' : 'info';
+  const statusLine = message && (
+    <div className="reader-status" data-tone={tone} role={tone === 'error' || tone === 'notice' ? 'alert' : 'status'}>
+      <div className="reader-status-message">
+        <span title={tone === 'degraded' ? degradedMessage : isError ? infoMessage || errorMessage : message}>{message}</span>
+        {noticeMessage && onDismissNotice ? <button onClick={onDismissNotice} title="Dismiss">Dismiss</button>
+          : infoAction && <button onClick={infoAction.onClick} title={isError ? 'Retry audio' : undefined}>{isError ? 'Retry' : infoAction.label}</button>}
+      </div>
+      {loadingProgress?.waiting && !noticeMessage && !isError && !awaitingSavedRecording && (
+        <progress className="reader-buffer-progress" aria-label="Audio preparation"
+          max={Math.max(1, loadingProgress.targetSeconds)} value={Math.min(loadingProgress.readySeconds, loadingProgress.targetSeconds)} />
+      )}
+      {isPlaying && isBuffering && <span className="sr-only">Playback will resume automatically.</span>}
+    </div>
+  );
 
   return (
     <>
-      <div className="reader-seek" role="slider" aria-label="Audio position" tabIndex={0}
+      <div className="reader-seek" role="slider" aria-label="Audio position" tabIndex={isFetching ? -1 : 0} aria-disabled={isFetching}
         aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}
         aria-valuetext={`${formatTime(currentTime / safeSpeed)} of ${formatTime(duration / safeSpeed)}`}
         onKeyDown={e => {
+          if (isFetching) return;
           if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
             e.preventDefault(); e.stopPropagation();
             if (e.key === 'Home' || e.key === 'End') onSeekProgress(e.key === 'Home' ? 0 : 100);
             else handleSkip(e.key === 'ArrowLeft' ? -15 : 15);
           }
         }}
-        onPointerDown={handleTimelinePointerDown}
+        onPointerDown={isFetching ? undefined : handleTimelinePointerDown}
         onPointerMove={e => {
           const rect = e.currentTarget.getBoundingClientRect();
           setHoverSeek(Math.max(0, Math.min(100, (e.clientX - rect.left) / rect.width * 100)));
         }} onPointerLeave={() => setHoverSeek(null)} title="Drag to seek anywhere in the audio article">
-        <div className="reader-seek-track"><div style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>
+        <div className="reader-seek-track"><div data-buffered={waitingForAudio || isError}
+          style={{ width: `${isFetching ? 0 : waitingForAudio ? bufferPercent : Math.max(0, Math.min(100, progress))}%` }} /></div>
         {hoverSeek !== null && <span className="reader-seek-tooltip" style={{ left: `${Math.max(3, Math.min(97, hoverSeek))}%` }}>{formatTime(duration * hoverSeek / 100 / safeSpeed)}</span>}
       </div>
-      <footer className="reader-controls">
-        {message && <div className="reader-status" data-tone={tone} role={tone === 'error' ? 'alert' : 'status'}>
-          {infoMessage && infoBusy && !isError && !noticeMessage ? <Loader2 size={13} className="animate-spin" /> : <AlertCircle size={13} />}
-          <span title={message || undefined}>{message}</span>
-          {noticeMessage && onDismissNotice ? <button onClick={onDismissNotice} title="Dismiss">Dismiss</button>
-            : infoAction && <button onClick={infoAction.onClick}>{infoAction.label}</button>}
-        </div>}
-        {loadingProgress?.waiting && <progress className="sr-only" aria-label="Audio preparation"
-          max={Math.max(1, loadingProgress.targetSeconds)} value={Math.min(loadingProgress.readySeconds, loadingProgress.targetSeconds)} />}
-        <div className="reader-bottom reader-fading" inert={!visible}>
-          <div className="reader-transport">{skip(-1)}{play()}{skip(1)}</div>
-          <div className="reader-secondary">
-            {tempo()}
-            {onToggleViewMode && <><span aria-hidden="true">·</span><button onClick={onToggleViewMode}
-              title={viewMode === 'kinetic' ? 'Show Full Article Text' : 'Return to Kinetic Reader'}>{viewMode === 'kinetic' ? 'Full text' : 'Kinetic'}</button></>}
-            {sourceUrl && <><span aria-hidden="true">·</span><a href={sourceUrl} target="_blank" rel="noopener noreferrer" title="Open Original Source Article">Source</a></>}
-            <span aria-hidden="true">·</span><span className="reader-page-count">{pageNumber} / {pageCount}</span>
+      <footer className="reader-controls" data-loading={isFetching || waitingForAudio} data-error={isError}>
+        {isFetching || waitingForAudio ? (
+          <div className="reader-loading-cluster">
+            {statusLine}
+            {isFetching ? <div className="reader-loading-indicator"><LoadingRing /></div> :
+              <button className="reader-loading-indicator" disabled title="Play when audio is ready"><LoadingRing /></button>}
+            {!isFetching && onToggleViewMode && <button className="reader-full-available" onClick={onToggleViewMode}>
+              {viewMode === 'full' ? 'Return to Kinetic' : 'Full text is available now'}
+            </button>}
           </div>
-        </div>
-        {!visible && <div className="reader-ghost">{play(true)}{tempo()}</div>}
-        {showSpeedMenu && <>
+        ) : <>
+          <div className="reader-bottom reader-fading" inert={!visible} data-force-visible={visible && !chromeVisible}>
+            {visible && statusLine}
+            <div className="reader-transport">{skip(-1)}{play()}{skip(1)}</div>
+            <div className="reader-secondary">
+              {tempo()}
+              {onToggleViewMode && <><span aria-hidden="true">·</span><button onClick={onToggleViewMode} className={viewMode === 'full' ? 'reader-kinetic-link' : undefined}
+                title={viewMode === 'kinetic' ? 'Show Full Article Text' : 'Return to Kinetic Reader'}>{viewMode === 'kinetic' ? 'Full text' : 'Kinetic'}</button></>}
+              {sourceUrl && <><span aria-hidden="true">·</span><a href={sourceUrl} target="_blank" rel="noopener noreferrer" title="Open Original Source Article">Source</a></>}
+              {viewMode === 'kinetic' && <><span aria-hidden="true">·</span><span className="reader-page-count">{pageNumber} / {pageCount}</span></>}
+            </div>
+          </div>
+          {!visible && <div className="reader-ghost-cluster">{statusLine}<div className="reader-ghost">{play(true)}{tempo()}</div></div>}
+        </>}
+        {showSpeedMenu && !isFetching && !waitingForAudio && <>
           <button className="reader-menu-dismiss" aria-label="Close tempo menu" onClick={() => setShowSpeedMenu(false)} />
           <div className="reader-menu reader-speed-menu" role="menu" data-reader-menu
             onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setShowSpeedMenu(false); } }}>

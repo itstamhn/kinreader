@@ -7,6 +7,7 @@ import { buildShareLink } from '../utils/shareLink';
 
 interface HeaderProps {
   article: ArticleData | null;
+  pendingUrl?: string | null;
   onOpenSettings: () => void;
   onOpenInput: () => void;
   onOpenLibrary?: () => void;
@@ -19,6 +20,7 @@ interface HeaderProps {
 
 export function Header({
   article,
+  pendingUrl,
   onOpenSettings,
   onOpenInput,
   onOpenLibrary,
@@ -66,23 +68,30 @@ export function Header({
       // ignore
     }
   };
+  let loadingHost = '';
+  try { if (pendingUrl) loadingHost = new URL(pendingUrl).hostname.replace(/^www\./, ''); } catch { loadingHost = 'Article'; }
   const remaining = Math.max(0, Math.ceil(remainingSeconds));
   return (
     <header className="reader-header">
       <button className="reader-icon reader-back reader-fading" onClick={onOpenLibrary}
         title="Library & Queue" inert={!visible}><ChevronLeft size={18} /></button>
       <div className="reader-meta">
-        <span className="reader-author">{article?.author || 'Kinreader'}</span><span>·</span>
-        <span className="reader-title">{article?.title}</span><span className="reader-title-dot">·</span>
-        <span className="reader-remaining">{remaining < 60 ? `${remaining}s left` : `${Math.ceil(remaining / 60)} min left`}</span>
+        {pendingUrl ? <>
+          <span className="reader-author">{loadingHost}</span><span>·</span><span>Loading article…</span>
+        </> : <>
+          <span className="reader-author">{article?.author || 'Kinreader'}</span><span>·</span>
+          <span className="reader-title">{article?.title}</span><span className="reader-title-dot">·</span>
+          <span className="reader-remaining">{remaining < 60 ? `${remaining}s left` : `${Math.ceil(remaining / 60)} min left`}</span>
+        </>}
       </div>
       <div className="reader-actions reader-fading" inert={!visible}>
-        <button className="reader-icon" onClick={onOpenInput} title="Add Article or URL"><PlusCircle size={18} /></button>
+        <button className="reader-icon reader-add" onClick={onOpenInput} title="Add Article or URL"><PlusCircle size={18} /></button>
         <button className="reader-icon" onClick={() => setMenuOpen(!menuOpen)} title="More options"
           aria-expanded={menuOpen} aria-haspopup="menu"><Ellipsis size={18} /></button>
         {menuOpen && <>
           <button className="reader-menu-dismiss" aria-label="Close options" onClick={() => setMenuOpen(false)} />
           <div className="reader-menu" role="menu" data-reader-menu onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setMenuOpen(false); } }}>
+            <button role="menuitem" className="reader-menu-add" onClick={() => { onOpenInput(); setMenuOpen(false); }}>Add article</button>
             <button role="menuitem" onClick={handleShare} title={copied ? 'Link copied!' : 'Share article link'}>{copied ? 'Link copied!' : 'Share link'}</button>
             {article?.sourceUrl && <a role="menuitem" href={article.sourceUrl} target="_blank" rel="noopener noreferrer">Open source</a>}
             <button role="menuitem" onClick={() => { onToggleViewMode?.(); setMenuOpen(false); }}>{viewMode === 'kinetic' ? 'Full text' : 'Kinetic'}</button>
