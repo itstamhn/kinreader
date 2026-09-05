@@ -15,6 +15,7 @@ import type { OrmTriggerContext } from 'kitcn/orm';
 
 const procedureRegistry = {
   "claim": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/listening").claim>("routers/listening:claim"), () => (require("../../routers/listening") as Record<string, unknown>)["claim"])],
+  "control": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/listening").control>("routers/listening:control"), () => (require("../../routers/listening") as Record<string, unknown>)["control"])],
   "create": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/listening").create>("routers/listening:create"), () => (require("../../routers/listening") as Record<string, unknown>)["create"])],
   "get": ["query", typedProcedureResolver(createGeneratedFunctionReference<"query", "public", typeof import("../../routers/listening").get>("routers/listening:get"), () => (require("../../routers/listening") as Record<string, unknown>)["get"])],
   "setVisibility": ["mutation", typedProcedureResolver(createGeneratedFunctionReference<"mutation", "public", typeof import("../../routers/listening").setVisibility>("routers/listening:setVisibility"), () => (require("../../routers/listening") as Record<string, unknown>)["setVisibility"])],

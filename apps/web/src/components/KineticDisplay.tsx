@@ -11,7 +11,7 @@ interface KineticDisplayProps {
   onPageChange?: (page: { number: number; count: number }) => void;
   currentWordIndex: number;
   currentTime: number;
-  onSelectWord: (index: number) => void;
+  onSelectWord: (index: number, startPlayback?: boolean) => void;
   viewMode: 'kinetic' | 'full';
   fontSize?: 'sm' | 'md' | 'lg';
   theme?: 'dark' | 'light';
@@ -42,6 +42,20 @@ export function KineticDisplay({
     return () => query.removeEventListener('change', update);
   }, []);
   const stageRef = useRef<HTMLDivElement>(null);
+  const fullTextRef = useRef<HTMLDivElement>(null);
+  const revealedFullText = useRef(false);
+  useLayoutEffect(() => {
+    if (viewMode !== 'full' || isFetching || !words.length) {
+      revealedFullText.current = false;
+      return;
+    }
+    if (revealedFullText.current || isPending) return;
+    const activeWord = fullTextRef.current?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!activeWord) return;
+    // Reveal the listening position on entry, then leave manual scrolling alone.
+    activeWord.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    revealedFullText.current = true;
+  }, [viewMode, isFetching, isPending, words.length, currentWordIndex]);
   const [layout, setLayout] = useState<EditorialLayout>();
   const hasWords = words.length > 0;
   useLayoutEffect(() => {
@@ -172,11 +186,11 @@ export function KineticDisplay({
   }
 
   return (
-    <div className="reader-full-text" aria-label="Full article text" tabIndex={0}>
+    <div ref={fullTextRef} className="reader-full-text" aria-label="Full article text" tabIndex={0}>
       {paragraphs.map((paragraph, paragraphIndex) => <p key={paragraphIndex}>
         {paragraph.map((index, position) => <React.Fragment key={index}>
           {position > 0 ? ' ' : null}
-          <button type="button" onClick={() => onSelectWord(index)}
+          <button type="button" onClick={() => onSelectWord(index, true)} title="Play from this word"
             aria-current={!isPending && index === currentWordIndex ? 'true' : undefined}
             className={`reader-full-word ${isPending ? 'reader-full-pending' : index === currentWordIndex
               ? 'reader-full-active' : index < currentWordIndex ? 'reader-full-past' : 'reader-full-pending'}`}>

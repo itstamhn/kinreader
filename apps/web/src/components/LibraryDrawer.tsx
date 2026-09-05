@@ -1,3 +1,4 @@
+import { preparationLabel } from '../utils/listeningSession';
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -437,12 +438,13 @@ export function LibraryDrawer({
                     />
                     <div className="flex flex-col truncate">
                       <span className="font-serif text-base text-[#ECEAE4] group-hover:text-white truncate transition">
-                        {item.article.title}
+                        {item.article.title}{preparationLabel(item.article) && <span className="block text-xs opacity-60 mt-1">{preparationLabel(item.article)}</span>}
                       </span>
                       <div className="flex items-center gap-1.5 text-[11px] text-[#ECEAE4]/40 font-sans">
                         <span>{item.article.author || 'Author'}</span>
                         <span>·</span>
                         {(() => {
+                          if (!item.article.content.trim()) return null;
                           const estimate = listenMinutes(wordCountOf(item.article), speed);
                           return (
                             <span className="text-[#F2A33C]">

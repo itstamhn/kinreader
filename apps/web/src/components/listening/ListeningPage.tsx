@@ -1,24 +1,28 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowUpRight, Book, Bookmark, Check, Ellipsis, Share, Text } from 'lucide-react';
+import { ArrowUpRight, Book, Bookmark, Check, Ellipsis, Share, Text, UserRound } from 'lucide-react';
 import type { ArticleData, WordTiming } from '../../types';
 import { KineticDisplay } from '../KineticDisplay';
 import { LoadingRing } from '../LoadingRing';
 import { formatListeningTime as time } from './ListeningSheets';
 
-export type PreparationState = 'finding' | 'preparing' | 'partial' | 'complete' | 'extractFailed' | 'audioFailed';
+export type PreparationState = 'finding' | 'preparing' | 'loadingSaved' | 'partial' | 'complete' | 'extractFailed' | 'audioFailed' | 'needsReview' | 'cancelled';
 export interface ListeningPlayback {
   words: WordTiming[]; currentWordIndex: number; currentTime: number; duration: number;
   isPlaying: boolean; rate: number; progress: number; bufferedSeconds: number;
 }
 export interface ListeningPageProps {
   article: ArticleData; playback: ListeningPlayback; prepState: PreparationState; saved: boolean; signedIn: boolean;
-  onPlay: () => void; onSeek: (percent: number) => void; onSpeed: (speed: number) => void; onWord: (index: number) => void;
+  onPlay: () => void; onSeek: (percent: number) => void; onSpeed: (speed: number) => void; onWord: (index: number, startPlayback?: boolean) => void;
   onSave: () => void; onShare: () => void; onCreate: () => void; onLibrary: () => void; onAuth: () => void; onRetry: () => void;
+  canManage?: boolean; onApprove?: () => void; onReplace?: (content: string) => void; onCancel?: () => void;
   toast?: string | null; notice?: string | null;
+  theme?: 'dark' | 'light'; accountName?: string; avatarUrl?: string;
 }
 const speeds = [0.8, 1, 1.2, 1.5, 1.8, 2, 2.5, 3, 3.5];
 
-export function ListeningPage({ article, playback: p, prepState: state, saved, signedIn, onPlay, onSeek, onSpeed, onWord, onSave, onShare, onCreate, onLibrary, onAuth, onRetry, toast, notice }: ListeningPageProps) {
+export function ListeningPage({ article, playback: p, prepState: state, saved, signedIn, onPlay, onSeek, onSpeed, onWord, onSave, onShare, onCreate, onLibrary, onAuth, onRetry, canManage = false, onApprove, onReplace, onCancel, toast, notice, theme = 'dark', accountName, avatarUrl }: ListeningPageProps) {
+  const [replacement, setReplacement] = useState('');
+  const [replacing, setReplacing] = useState(false);
   const [follow, setFollow] = useState(false);
   const [fullText, setFullText] = useState(false);
   const [menu, setMenu] = useState<'more' | 'speed' | null>(null);
@@ -26,7 +30,9 @@ export function ListeningPage({ article, playback: p, prepState: state, saved, s
   useEffect(() => { if (!p.isPlaying) setFollow(false); }, [p.isPlaying]);
   useEffect(() => { setFollow(false); setFullText(false); setMenu(null); }, [article.sourceUrl, article.recordingId]);
   const finding = state === 'finding', extractFailed = state === 'extractFailed', audioFailed = state === 'audioFailed';
-  const unavailable = finding || state === 'preparing' || extractFailed || audioFailed;
+  const needsReview = state === 'needsReview', cancelled = state === 'cancelled';
+  const loadingSaved = state === 'loadingSaved';
+  const unavailable = needsReview || cancelled || finding || loadingSaved || state === 'preparing' || extractFailed || audioFailed;
   const partial = state === 'partial';
   const estimated = finding || state === 'preparing' || partial;
   const safeRate = Math.max(0.1, p.rate);
@@ -39,7 +45,7 @@ export function ListeningPage({ article, playback: p, prepState: state, saved, s
   const toggle = () => {
     if (unavailable) return;
     if (!p.isPlaying) {
-      setFollow(true);
+      setFollow(!window.matchMedia('(min-width: 640px)').matches);
       try { if (!localStorage.getItem('kinreader_listening_hint')) { setHint(true); localStorage.setItem('kinreader_listening_hint', '1'); } } catch {}
     }
     onPlay();
@@ -58,7 +64,11 @@ export function ListeningPage({ article, playback: p, prepState: state, saved, s
   const tempo = <button className="listening-tempo" aria-label="Playback speed" aria-haspopup="menu" aria-expanded={menu === 'speed'} onClick={() => setMenu(menu === 'speed' ? null : 'speed')}>{p.rate.toFixed(1)}×</button>;
   return <section className="listening-page" data-state={state} data-immersive={immersive}>
     {immersive ? <><div className="listening-top-progress"><span style={{ width: `${p.progress}%` }} /></div><div className="listening-immersive-meta">{author} · {Math.max(1, Math.ceil((p.duration - p.currentTime) / safeRate / 60))} min left</div></> : <>
-      <header className="listening-top">{signedIn ? <button className="listening-icon" aria-label="Open library" onClick={onLibrary}><Book size={18} /></button> : <span className="listening-wordmark">Kinetic Reader</span>}<button className="listening-icon" aria-label="More options" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Ellipsis size={20} /></button></header>
+      <header className="listening-top">{signedIn ? <button className="listening-icon" aria-label="Open library" onClick={onLibrary}><Book size={18} /></button> : <span className="listening-wordmark">Kinetic Reader</span>}<div className="listening-top-actions">
+        <button className={signedIn ? 'listening-account listening-desktop-only' : 'listening-sign-in listening-desktop-only'} aria-label={signedIn ? 'Account' : 'Sign in'} onClick={onAuth}>
+          {signedIn ? avatarUrl ? <img src={avatarUrl} alt="" referrerPolicy="no-referrer" /> : accountName ? accountName.charAt(0).toUpperCase() : <UserRound size={16} /> : 'Sign in'}
+        </button>
+        <button className="listening-icon" aria-label="More options" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Ellipsis size={20} /></button></div></header>
       {toast && <div className="listening-toast" role="status"><Check size={16} /><span>{toast}</span></div>}
       <div className="listening-title" data-cover={!!article.image && !finding && !extractFailed}>
         <div><div className="listening-meta"><strong>{author}</strong>{!finding && !extractFailed && <><span>·</span><span>AI narration</span>{durationLabel && <><span>·</span><span data-partial={partial}>{durationLabel}</span></>}</>}</div>
@@ -69,13 +79,17 @@ export function ListeningPage({ article, playback: p, prepState: state, saved, s
       </div>
     </>}
     <main className="listening-stage" data-full={fullText}>
-      {finding ? <div className="listening-finding" role="status"><p>Getting the article ready…</p><span>Usually a few seconds.</span></div> : extractFailed ? <div className="listening-extract-error" role="alert"><h2>We couldn’t read this article.</h2><p>{notice || 'The page may be unavailable, or require a login. Nothing was added to your library.'}</p></div> : <KineticDisplay words={p.words} articleText={article.content} currentWordIndex={p.currentWordIndex} currentTime={p.currentTime}
-        isPending={p.currentTime === 0 || unavailable} onTogglePlay={toggle} onSelectWord={fullText ? onWord : toggle} viewMode={fullText ? 'full' : 'kinetic'} theme="dark" />}
+      {needsReview ? <div><h2>Check the captured article</h2><p>{notice || 'This may be a partial article.'}</p><div className="listening-review-text">{article.content}</div></div> : cancelled ? <div role="status">Preparation cancelled. Your saved text and completed audio are kept.</div> : finding ? <div className="listening-finding" role="status"><p>Getting the article ready…</p><span>You can leave this page. Your request is saved.</span></div> : extractFailed ? <div className="listening-extract-error" role="alert"><h2>We couldn’t read this article.</h2><p>{notice || 'The page may be unavailable, or require a login. Your request is saved in your library.'}</p></div> : <KineticDisplay words={p.words} articleText={article.content} currentWordIndex={p.currentWordIndex} currentTime={p.currentTime}
+        isPending={p.currentTime === 0 || unavailable} onTogglePlay={toggle} onSelectWord={(index, startPlayback) => { if (fullText || window.matchMedia('(min-width: 640px)').matches) onWord(index, startPlayback); else toggle(); }} viewMode={fullText ? 'full' : 'kinetic'} theme={theme} />}
     </main>
     {immersive ? <div className="listening-ghost"><div>{playButton(true)}{tempo}</div>{hint && <span>Tap anywhere to pause</span>}</div> : <footer className="listening-bottom">
-      {extractFailed ? <div className="listening-form">{source && <a className="listening-secondary-button" href={source} target="_blank" rel="noopener noreferrer">Open the original <ArrowUpRight size={14} /></a>}<button className="listening-primary" onClick={onCreate}>Try another link</button></div> : <>
-        {(state === 'preparing' || partial || audioFailed || notice) && <div className="listening-status" role={audioFailed ? 'alert' : 'status'} data-error={audioFailed}>
-          {audioFailed ? <>We couldn’t finish the audio.<small>The text is still here to read.</small></> : state === 'preparing' ? <>Preparing your audio. You can come back to this link anytime.<button onClick={onShare}>Copy link</button></> : partial ? 'Start listening. The rest is still being prepared.' : notice}
+      {(needsReview || cancelled || extractFailed) ? <div className="listening-form">
+        {canManage && <>{needsReview ? <button className="listening-primary" onClick={onApprove}>Use this text</button> : <button className="listening-primary" onClick={onRetry}>Try again</button>}
+        {(needsReview || extractFailed) && <button onClick={() => setReplacing(!replacing)}>Paste text instead</button>}
+        {replacing && <><textarea aria-label="Replacement article text" rows={6} value={replacement} onChange={e => setReplacement(e.target.value)} /><button disabled={!replacement.trim()} onClick={() => { onReplace?.(replacement); setReplacing(false); }}>Create audio from this text</button></>}</>}
+        {source && <a className="listening-secondary-button" href={source} target="_blank" rel="noopener noreferrer">Open the original <ArrowUpRight size={14} /></a>}<button className="listening-primary" onClick={onCreate}>Try another link</button></div> : <>
+        {(state === 'preparing' || loadingSaved || partial || audioFailed || notice) && <div className="listening-status" role={audioFailed ? 'alert' : 'status'} data-error={audioFailed}>
+          {audioFailed ? <>We couldn’t finish the audio.<small>The text is still here to read.</small></> : loadingSaved ? 'Loading saved audio…' : state === 'preparing' ? <>Preparing your audio. You can come back to this link anytime.<button onClick={onShare}>Copy link</button></> : partial ? 'Start listening. The rest is still being prepared.' : notice}
         </div>}
         <div className="listening-scrubber" data-unknown={finding || audioFailed}>
           <span>{finding || audioFailed ? '–:––' : time(p.currentTime / safeRate)}</span>
@@ -87,9 +101,10 @@ export function ListeningPage({ article, playback: p, prepState: state, saved, s
           </div>
           <span data-estimated={estimated}>{finding || audioFailed ? '–:––' : estimated ? `~${time(duration)}` : `−${time(Math.max(0, duration - p.currentTime / safeRate))}`}</span>
         </div>
-        <div className="listening-transport">{finding || state === 'preparing' ? <div className="listening-spinner" aria-label="Preparing audio"><LoadingRing /></div> : <>{skipButton(-1)}{playButton()}{skipButton(1)}</>}</div>
-        {audioFailed && <button className="listening-primary" onClick={onRetry}>Try again</button>}
-        <div className="listening-actions" data-disabled={finding}>{tempo}<button disabled={finding} onClick={() => { if (unavailable || fullText) { setFullText(!fullText); setFollow(false); } else { setFollow(true); if (!p.isPlaying) onPlay(); } }}><Text size={14} />{fullText ? 'Back to listening' : unavailable ? 'Read the text' : 'Follow along'}</button><button disabled={finding} data-saved={saved} onClick={onSave}><Bookmark size={14} fill={saved ? 'currentColor' : 'none'} />{saved ? 'Saved' : 'Save'}</button><button disabled={finding} onClick={onShare}><Share size={14} />Share</button></div>
+        <div className="listening-transport">{finding || state === 'preparing' || loadingSaved ? <div className="listening-spinner" aria-label={loadingSaved ? 'Loading saved audio' : 'Preparing audio'}><LoadingRing /></div> : <>{skipButton(-1)}{playButton()}{skipButton(1)}</>}</div>
+        {audioFailed && canManage && <button className="listening-primary" onClick={onRetry}>Try again</button>}
+        <div className="listening-actions" data-disabled={finding}>{tempo}<button disabled={finding} onClick={() => { if (unavailable || fullText) { setFullText(!fullText); setFollow(false); } else { setFollow(true); if (!p.isPlaying) onPlay(); } }}><Text size={14} />{fullText ? 'Back to listening' : unavailable ? 'Read the text' : 'Follow along'}</button><button data-saved={saved} onClick={onSave}><Bookmark size={14} fill={saved ? 'currentColor' : 'none'} />{saved ? 'Saved' : 'Save'}</button><button onClick={onShare}><Share size={14} />Share</button><span className="listening-keyboard-hint listening-desktop-only"><kbd>Space</kbd>{p.isPlaying ? 'pause' : 'play'}</span></div>
+        {canManage && (finding || state === 'preparing' || partial) && <button className="listening-dismiss" onClick={onCancel}>Cancel preparation</button>}
         {state !== 'preparing' && !partial && !audioFailed && <button className="listening-invitation" onClick={onCreate}>Turn your next article into audio <span>→</span></button>}
       </>}
     </footer>}

@@ -87,19 +87,13 @@ test('extract rejects a missing url instead of calling any provider', async () =
   expect(fetchCalled).toBe(false);
 });
 
-test('extract returns a handled fallback (not a throw) when every fetch fails', async () => {
+test('extract fails instead of returning a sentence that could be narrated when every fetch fails', async () => {
   stubFetch(() => {
     throw new TypeError('network unreachable');
   });
 
   const t = convexTest(schema, modules);
-  const result = await t.action(api.routers.articles.extract, {
-    url: 'https://unreachable.example/page',
-  });
-
-  expect(result.content).toBe('No readable text could be extracted from this page.');
-  expect(result.sourceType).toBe('article');
-  expect(result.truncated).toBe(false);
+  await expect(t.action(api.routers.articles.extract, { url: 'https://unreachable.example/page' })).rejects.toThrow('No readable article');
 });
 
 const rejectedUrls = [
@@ -254,4 +248,20 @@ test('the global extraction ceiling holds regardless of clientId', async () => {
     t.action(api.routers.articles.extract, { url: 'https://example.com/a', clientId: crypto.randomUUID() })
   ).rejects.toThrow(/Too many article requests/);
   expect(fetchCalled).toBe(false);
+});
+
+test('blocked direct HTML continues to a readable fallback', async () => {
+  stubFetch(url => url.includes('r.jina.ai') ? Response.json({ data: { title: 'Actual article', content: 'A thoughtful article about reading and memory. '.repeat(20) } }) : htmlResponse('<main><p>Sign in to continue. '.repeat(5) + '</p></main>'));
+  const t = convexTest(schema, modules);
+  const result = await t.action(api.routers.articles.extract, { url: 'https://example.com/gate' });
+  expect(result.title).toBe('Actual article'); expect(result.needsReview).toBe(false); expect(result.content).not.toContain('Sign in');
+});
+test('X status fallback is not a verified short post and host matching excludes query-string lookalikes', async () => {
+  let fxCalls = 0;
+  stubFetch(url => { if (url.includes('api.fxtwitter.com')) { fxCalls++; return new Response('', { status: 404 }); } return htmlResponse('<main><p>A brief introduction with enough words to review, but not a complete story.</p></main>'); });
+  const t = convexTest(schema, modules);
+  const result = await t.action(api.routers.articles.extract, { url: 'https://x.com/user/status/123' });
+  expect(result.needsReview).toBe(true); expect(fxCalls).toBe(1);
+  await t.action(api.routers.articles.extract, { url: 'https://example.com/?source=x.com/user/status/123' });
+  expect(fxCalls).toBe(1);
 });

@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun run --filter '@kinreader/web' dev",
+    "dev": "bun run --parallel --filter '@kinreader/web' --filter '@kinreader/backend' dev",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun run --filter '*' test",
     "build": "bun run --filter '*' build"

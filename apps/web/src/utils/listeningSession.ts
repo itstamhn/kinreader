@@ -22,3 +22,17 @@ export function listeningCallbackURL(article: ArticleData, seconds: number, word
   writeListeningValue('pendingSave', { key: listeningKey(article), seconds, wordIndex });
   return url.href;
 }
+
+export function preparationLabel(article: ArticleData): string | null {
+  switch (article.stage) {
+    case 'finding': return 'Finding the article';
+    case 'needsReview': return 'Check captured text';
+    case 'preparing': return 'Preparing audio';
+    case 'partial': return 'Opening audio ready';
+    case 'complete': return 'Ready to listen';
+    case 'extractFailed': return 'Article needs retry';
+    case 'audioFailed': return 'Audio needs retry';
+    case 'cancelled': return 'Preparation cancelled';
+    default: return null;
+  }
+}

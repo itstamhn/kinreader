@@ -1,5 +1,7 @@
 import { test, expect } from 'bun:test';
 import { SpeechEngine } from './speechEngine';
+import { planNarrationSections } from '../../../../packages/backend/convex/shared/tts/durableNarration';
+import { splitIntoSegments } from '../../../../packages/backend/convex/shared/tts/parallelSoniox';
 
 // `useSyncExternalStore` calls `getSnapshot()` on every render and compares
 // the result with `Object.is` against what it returned last time. If
@@ -746,6 +748,71 @@ function rangeTo(end: number) {
   return { length: end > 0 ? 1 : 0, start: () => 0, end: () => end };
 }
 
+function driveEngineSimulation(sections: string[], charsPerSecond: number, initialWallSeconds: number) {
+  const engine = new SpeechEngine();
+  let playCalls = 0;
+  const audio = fakeAudio({ paused: true, buffered: rangeTo(0), play() { playCalls += 1; this.paused = false; return Promise.resolve(); } });
+  attachStreaming(engine, audio, evenWords(10000));
+  engine.duration = 10000;
+  engine.rate = 1.5;
+  (engine as any).refillBufferWallSeconds = initialWallSeconds;
+  let now = 1;
+  (engine as any).bufferClock = () => now * 1000;
+  engine.play();
+
+  const slots = [0, 0];
+  const events = sections.map((section, index) => {
+    const slot = slots[0]! <= slots[1]! ? 0 : 1;
+    const at = slots[slot]! + 1 + section.length / charsPerSecond;
+    slots[slot] = at;
+    return { index, at, duration: section.length / 15 };
+  }).sort((a, b) => a.at - b.at);
+  const done = new Map<number, number>();
+  let releasedIndex = 0;
+  let available = 0;
+  let startedAt: number | null = null;
+  let underruns = 0;
+  let wasBuffering = true;
+  for (const event of events) {
+    if (!audio.paused) {
+      const wanted = audio.currentTime + (event.at - now) * 1.5;
+      audio.currentTime = Math.min(wanted, Math.max(0, available - 0.1));
+      if (wanted > available) {
+        (engine as any).syncFromAudioTick(0.1);
+        if (!wasBuffering && engine.isBuffering) underruns += 1;
+        wasBuffering = engine.isBuffering;
+      }
+    }
+    now = event.at;
+    done.set(event.index, event.duration);
+    while (done.has(releasedIndex)) available += done.get(releasedIndex++)!;
+    audio.buffered = rangeTo(available);
+    (engine as any).sourceBuffer.buffered = audio.buffered;
+    (engine as any).syncFromAudioTick(0.1);
+    if (startedAt === null && playCalls > 0) startedAt = now;
+    if (!wasBuffering && engine.isBuffering) underruns += 1;
+    wasBuffering = engine.isBuffering;
+  }
+  return { startedAt, underruns, target: engine.getSnapshot().bufferTargetSeconds, requests: sections.length };
+}
+
+test('two-slot opening plan reaches the 1.5x cushion without moving the wait into early stalls', () => {
+  // Simulation only: 15 chars per media second, two slots, and one second of
+  // request/save overhead per section. It is not a live provider benchmark.
+  const text = 'A measured sentence for deterministic scheduling. '.repeat(500);
+  const planned = planNarrationSections(text);
+  const uniform = splitIntoSegments(text, Math.ceil(text.length / 650)).map(section => section.trim());
+  const actual = driveEngineSimulation(planned, 15, 10);
+  const oldPolicy = driveEngineSimulation(uniform, 15, 60);
+  expect(actual.startedAt).toBeCloseTo(10.93, 2);
+  expect(actual.underruns).toBe(0);
+  expect(oldPolicy.startedAt).toBeGreaterThan(80);
+  expect(actual.requests).toBeGreaterThan(oldPolicy.requests);
+  const slow = driveEngineSimulation(planned, 8, 10);
+  expect(slow.underruns).toBeGreaterThan(0);
+  expect(slow.target).toBeGreaterThan(15);
+});
+
 test('play holds for a buffer cushion while the stream is live, then starts on its own', () => {
   const engine = new SpeechEngine();
   let playCalls = 0;
@@ -767,7 +834,7 @@ test('play holds for a buffer cushion while the stream is live, then starts on i
   expect(engine.getSnapshot().isBuffering).toBe(true);
   expect(playCalls).toBe(0);
 
-  // One minute at 1.5x needs 90 media seconds.
+  // Ten listening seconds at 1.5x needs 15 media seconds.
   audio.buffered = rangeTo(2.0);
   (engine as any).sourceBuffer.buffered = audio.buffered;
   (engine as any).maybeResumeFromBuffering();
@@ -775,10 +842,57 @@ test('play holds for a buffer cushion while the stream is live, then starts on i
   expect(playCalls).toBe(0);
 
   // ...and now it is.
-  audio.buffered = rangeTo(90);
+  audio.buffered = rangeTo(15);
   (engine as any).sourceBuffer.buffered = audio.buffered;
   (engine as any).maybeResumeFromBuffering();
   expect(engine.getSnapshot().isBuffering).toBe(false);
+  expect(playCalls).toBe(1);
+});
+
+test('finished sources use one listening second, keep it across pause, and adapt after a real underrun', () => {
+  const engine = new SpeechEngine();
+  let plays = 0;
+  const audio = fakeAudio({ paused: true, buffered: { length: 1, start: () => 10, end: () => 20 }, play() { plays++; this.paused = false; return Promise.resolve(); } });
+  attachStreaming(engine, audio, evenWords(120));
+  engine.rate = 1.5;
+  engine.markStreamingSourceFinished();
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(1.5);
+  engine.play();
+  expect(plays).toBe(0);
+  audio.buffered = rangeTo(1.5);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).maybeResumeFromBuffering();
+  expect(plays).toBe(1);
+  engine.pause();
+  engine.play();
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(1.5);
+  (engine as any).enterBuffering(true);
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(9);
+});
+
+test('MSE waiting and canplay handlers refill before resuming, while seek waiting is not an underrun', () => {
+  const engine = new SpeechEngine();
+  const waiting = (engine as any).audio.onwaiting;
+  const canplay = (engine as any).audio.oncanplay;
+  let playCalls = 0;
+  const audio = fakeAudio({ paused: false, buffered: rangeTo(2), play() { playCalls += 1; this.paused = false; return Promise.resolve(); } });
+  attachStreaming(engine, audio, evenWords(120));
+  (engine as any).audioErrorHandler = () => {};
+  (engine as any).hasStartedStreamingPlayback = true;
+  engine.isPlaying = true;
+  engine.rate = 1.5;
+
+  Object.defineProperty(audio, 'seeking', { value: true, configurable: true });
+  waiting();
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(15);
+  Object.defineProperty(audio, 'seeking', { value: false, configurable: true });
+  audio.buffered = rangeTo(10);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  canplay();
+  expect(playCalls).toBe(0);
+  audio.buffered = rangeTo(15);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  canplay();
   expect(playCalls).toBe(1);
 });
 
@@ -832,12 +946,77 @@ test('startup cushion follows playback speed and never exceeds the remaining art
   const audio = fakeAudio({ paused: true, buffered: rangeTo(6) });
   attachStreaming(engine, audio, evenWords(300));
   engine.rate = 2.0;
-  expect(engine.getSnapshot().bufferTargetSeconds).toBe(120);
-  engine.rate = 3.5;
-  expect(engine.getSnapshot().bufferTargetSeconds).toBe(210);
-  engine.duration = 20;
-  engine.rate = 1.5;
   expect(engine.getSnapshot().bufferTargetSeconds).toBe(20);
+  engine.rate = 3.5;
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(35);
+  engine.duration = 5;
+  engine.rate = 1.5;
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(5);
+});
+
+test('real underruns and sustained slow delivery raise the bounded refill cushion once per observation', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ currentTime: 5, buffered: rangeTo(20), paused: false });
+  attachStreaming(engine, audio, evenWords(300));
+  engine.isPlaying = true;
+  (engine as any).hasStartedStreamingPlayback = true;
+  engine.rate = 1.5;
+
+  let now = 1000;
+  (engine as any).bufferClock = () => now;
+  (engine as any).syncFromAudioTick(0.1);
+  now = 2000;
+  audio.buffered = rangeTo(21);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(18);
+
+  // Repeated polls with no newly delivered media do not distort the sample.
+  now = 5000;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(18);
+
+  (engine as any).enterBuffering(true);
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(25.5);
+  (engine as any).enterBuffering(true);
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(25.5);
+
+  for (let index = 0; index < 8; index += 1) {
+    engine.isBuffering = false;
+    (engine as any).enterBuffering(true);
+  }
+  expect(engine.getSnapshot().bufferTargetSeconds).toBe(45);
+
+  (engine as any).bufferObservationAt = 123;
+  engine.pause();
+  expect((engine as any).bufferObservationAt).toBe(0);
+  (engine as any).bufferObservationAt = 123;
+  (engine as any).seekAudioTo(4);
+  expect((engine as any).bufferObservationAt).toBe(0);
+  (engine as any).bufferObservationAt = 123;
+  engine.rate = 2;
+  expect((engine as any).bufferObservationAt).toBe(0);
+  (engine as any).resetBufferControl();
+  expect((engine as any).refillBufferWallSeconds).toBe(10);
+});
+
+test('completed continuous audio waits for first bytes, then releases the numeric cushion', () => {
+  const engine = new SpeechEngine();
+  let playCalls = 0;
+  const audio = fakeAudio({ paused: true, buffered: rangeTo(0), play() { playCalls += 1; return Promise.resolve(); } });
+  attachStreaming(engine, audio, evenWords(120));
+  (engine as any).continuous = true;
+  engine.duration = 0.2;
+  engine.isStreaming = false;
+  engine.isPlaying = true;
+  engine.isBuffering = true;
+  (engine as any).maybeResumeFromBuffering();
+  expect(playCalls).toBe(0);
+
+  audio.buffered = rangeTo(0.2);
+  (engine as any).sourceBuffer.buffered = audio.buffered;
+  (engine as any).maybeResumeFromBuffering();
+  expect(playCalls).toBe(1);
 });
 
 test('once the stream is complete nothing is held back, even with a thin buffer', () => {
@@ -1024,7 +1203,7 @@ test('seeking across parts loads the right part at the right offset', () => {
   });
 });
 
-test('long articles wait for a minute of listening before starting, then resume automatically', () => {
+test('long articles wait for ten listening seconds before starting, then resume automatically', () => {
   const engine = new SpeechEngine();
   const audio = fakeAudio({ paused: true, buffered: rangeTo(4) });
   attachStreaming(engine, audio, evenWords(600));
@@ -1032,7 +1211,7 @@ test('long articles wait for a minute of listening before starting, then resume 
   engine.play();
   expect(audio.paused).toBe(true);
   expect(engine.isBuffering).toBe(true);
-  audio.buffered = rangeTo(90);
+  audio.buffered = rangeTo(15);
   (engine as any).sourceBuffer.buffered = audio.buffered;
   (engine as any).maybeResumeFromBuffering();
   expect(audio.paused).toBe(false);
@@ -1112,6 +1291,45 @@ test('saved sections keep independent sources, latest rewind wins before metadat
   requests.at(-1)!.resolve();
   await Promise.resolve();
   expect(engine.isPlaying).toBe(true);
+  engine.stop();
+});
+
+test('prepending lazy saved sections does not invalidate pending metadata for the current part', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ paused: true });
+  (engine as any).audio = audio;
+  engine.startSavedSections(evenWords(120), 120);
+  engine.setSavedSectionStart(60, 60);
+  engine.appendSavedSection(new Uint8Array([2]), 60, 60);
+  (engine as any).loadPart(0, 5);
+  engine.prependSavedSections([{ bytes: new Uint8Array([1]), start: 0, duration: 60 }]);
+  audio.currentTime = 0;
+  audio.onloadedmetadata?.();
+  expect((engine as any).currentPart).toBe(1);
+  expect((engine as any).pendingPartSeek).toBeNull();
+  expect(audio.currentTime).toBe(5);
+  engine.stop();
+});
+
+test('a rewind before the first target part arrives requests the unloaded prefix and stays unready', () => {
+  const engine = new SpeechEngine();
+  let plays = 0;
+  const audio = fakeAudio({ paused: true, play() { plays++; this.paused = false; return Promise.resolve(); } });
+  let requested = -1;
+  (engine as any).audio = audio;
+  engine.startSavedSections(evenWords(120), 120, 80);
+  engine.setSavedSectionStart(60, 60);
+  engine.setSavedSectionLoader(seconds => { requested = seconds; });
+  engine.seekToProgress(10);
+  expect(requested).toBe(12);
+  expect((engine as any).pendingSeekTime).toBe(12);
+  expect(engine.getSnapshot().canStartPlayback).toBe(false);
+  engine.play();
+  expect(plays).toBe(0);
+  engine.prependSavedSections([{ bytes: new Uint8Array([1]), start: 0, duration: 60 }]);
+  audio.onloadedmetadata?.();
+  expect((engine as any).pendingSeekTime).toBeNull();
+  expect(plays).toBe(1);
   engine.stop();
 });
 

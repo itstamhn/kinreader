@@ -1,3 +1,4 @@
+import { playContinuousNarration, type ContinuousSource } from './continuousNarration';
 import type { NarrationPage } from '@kinreader/backend/tts/durableNarration';
 import type { WordTiming } from '../types';
 import type { SpeechEngine } from './speechEngine';
@@ -9,9 +10,11 @@ export async function playDurableNarration(options: {
   initialWords: WordTiming[];
   duration: number;
   resumeWordIndex?: number;
+  readSavedFirst?: boolean;
+  continuousSource?: ContinuousSource;
   signal: AbortSignal;
   prepare: () => Promise<unknown>;
-  page: (from: number) => Promise<NarrationPage>;
+  page: (from: number, completedManifest?: boolean) => Promise<NarrationPage>;
   fetchAudio?: (url: string, signal: AbortSignal) => Promise<Uint8Array>;
   pollMs?: number;
   onAudioError?: () => void;
@@ -32,16 +35,121 @@ export async function playDurableNarration(options: {
     if (!response.ok) throw new Error('Could not download saved audio');
     return new Uint8Array(await response.arrayBuffer());
   });
-  await bounded(options.prepare());
+  // Recording-backed opens try the read-only HLS artifact first. Its fallback
+  // manifest is requested only when HLS is absent, so successful opens do not
+  // download the same timing metadata twice.
+  let firstPage: NarrationPage | null = null;
+  let resumeWord = options.resumeWordIndex;
+  let resumePlaying = false;
+  const readSavedFirst = Boolean(options.continuousSource?.recordingId || options.readSavedFirst);
+  if (options.continuousSource && readSavedFirst) {
+    try {
+      await playContinuousNarration({
+        ...options,
+        source: options.continuousSource,
+      });
+      return;
+    } catch (error) {
+      alive();
+      resumeWord = engine.currentWordIndex || resumeWord;
+      resumePlaying = engine.isPlaying;
+      console.warn('Continuous packaging unavailable; using saved sections.', error);
+    }
+  }
+  if (readSavedFirst) firstPage = await bounded(options.page(0, true));
+  if (!options.continuousSource?.recordingId && firstPage?.status !== 'done') {
+    await bounded(options.prepare());
+    if (firstPage?.status === 'none') firstPage = null;
+  }
   alive();
-  engine.startSavedSections(initialWords, options.duration, options.resumeWordIndex, options.onAudioError);
+  engine.startSavedSections(initialWords, options.duration, resumeWord, options.onAudioError);
   let index = 0;
   let offset = 0;
   const exact: WordTiming[] = [];
   let lastProgress = Date.now();
+  if (firstPage?.status === 'done' && firstPage.total > 0) {
+    const manifest = [...firstPage.sections];
+    if (manifest.length !== firstPage.total || manifest.length > 1000) throw new Error('Saved audio metadata is incomplete');
+    const starts: number[] = [];
+    const wordStarts: number[] = [];
+    const exact: WordTiming[] = [];
+    let offset = 0;
+    for (const section of manifest) {
+      if (section.index !== starts.length) throw new Error('Saved audio sections are out of order');
+      starts.push(offset);
+      wordStarts.push(exact.length);
+      exact.push(
+        ...section.words.map((word) => ({
+          ...word,
+          start: word.start + offset,
+          end: word.end + offset,
+        }))
+      );
+      offset += section.duration;
+    }
+    if (exact.length !== initialWords.length || exact.some((word, i) => word.text !== initialWords[i]?.text)) {
+      throw new Error('Saved word timings do not match this article');
+    }
+    engine.appendWordTimings(exact, offset, { authoritative: true });
+    options.onWords?.(exact);
+
+    const targetWord = resumeWord ?? 0;
+    let startSection = manifest.findIndex((section, sectionIndex) => wordStarts[sectionIndex]! + section.words.length > targetWord);
+    if (startSection < 0) startSection = manifest.length - 1;
+    engine.setSavedSectionStart(starts[startSection]!, wordStarts[startSection]!);
+    engine.markStreamingSourceFinished();
+
+    let earliestLoaded = startSection;
+    let backwardLoad: Promise<void> | null = null;
+    let pendingBackward: number | null = null;
+    const loadBackward = () => {
+      if (backwardLoad || pendingBackward === null || pendingBackward >= earliestLoaded) return;
+      const requested = pendingBackward;
+      pendingBackward = null;
+      const through = earliestLoaded;
+      backwardLoad = (async () => {
+        const sections = [];
+        for (let sectionIndex = requested; sectionIndex < through; sectionIndex += 1) {
+          const section = manifest[sectionIndex]!;
+          const bytes = await bounded(fetchAudio(section.audioUrl, signal));
+          alive();
+          sections.push({ bytes, start: starts[sectionIndex]!, duration: section.duration });
+        }
+        earliestLoaded = requested;
+        engine.prependSavedSections(sections);
+      })().catch(error => {
+        if (!signal.aborted) options.onAudioError?.();
+        console.warn('Could not load an earlier saved section.', error);
+      }).finally(() => {
+        backwardLoad = null;
+        loadBackward();
+      });
+    };
+    engine.setSavedSectionLoader(targetTime => {
+      let requested = starts.findIndex((start, sectionIndex) => targetTime < start + manifest[sectionIndex]!.duration);
+      if (requested < 0) requested = manifest.length - 1;
+      pendingBackward = pendingBackward === null ? requested : Math.min(pendingBackward, requested);
+      loadBackward();
+    });
+
+    for (let sectionIndex = startSection; sectionIndex < manifest.length; sectionIndex += 1) {
+      const section = manifest[sectionIndex]!;
+      const bytes = await bounded(fetchAudio(section.audioUrl, signal));
+      alive();
+      engine.appendSavedSection(bytes, section.duration, section.words.length);
+      if (resumePlaying) {
+        engine.play();
+        resumePlaying = false;
+      }
+    }
+    engine.finishStreamingSession();
+    return;
+  }
   while (!signal.aborted) {
-    const page = await bounded(options.page(index));
+    const page = index === 0 && firstPage ? firstPage : await bounded(options.page(index));
+    firstPage = null;
     alive();
+    if (page.status === 'done') engine.markStreamingSourceFinished();
     options.onProgress?.(page.completed, page.total);
     for (const section of page.sections) {
       if (section.index !== index) throw new Error('Saved audio sections are out of order');
@@ -55,6 +163,7 @@ export async function playDurableNarration(options: {
       const words = [...exact, ...tail.map(w => ({ ...w, start: offset + w.start - join, end: offset + w.end - join }))];
       engine.appendWordTimings(words, Math.max(offset, words.at(-1)?.end ?? 0), { authoritative: true });
       engine.appendSavedSection(bytes, section.duration, section.words.length);
+      if (resumePlaying) { engine.play(); resumePlaying = false; }
       options.onWords?.(exact);
       index++;
       lastProgress = Date.now();

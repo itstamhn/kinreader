@@ -6,6 +6,10 @@ export interface WordTiming {
 
 export interface ArticleData {
   recordingId?: string;
+  stage?: 'finding' | 'needsReview' | 'preparing' | 'partial' | 'complete' | 'extractFailed' | 'audioFailed' | 'cancelled';
+  narrationText?: string;
+  error?: string;
+  truncated?: boolean;
   title: string;
   author?: string;
   authorHandle?: string;

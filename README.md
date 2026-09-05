@@ -24,12 +24,12 @@ A personal audio-visual speed-reader web app inspired by **Announcr.fm** and mod
 
 ```bash
 bun install          # from the repo root — this is a Bun workspace
-bun run dev          # Vite on :3000, the Spiceflow API on :3008
+bun run dev          # Vite on :3000 and the Convex development watcher
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-Convex runs from its own package:
+The root command runs both packages so changes to backend arguments are deployed along with frontend changes. Keep it running while developing. If you run Vite separately, also start the backend watcher:
 
 ```bash
 cd packages/backend && bunx convex dev
@@ -87,11 +87,12 @@ Root scripts fan out with `bun run --filter`: `bun run typecheck`, `bun run test
 
 ## Deployment
 
-Three deployables, in this order (the backend first, so nothing in front of it
+Four deployables, in this order (the backend first, so nothing in front of it
 calls a procedure that is not there yet):
 
 ```bash
 cd packages/backend && bunx convex deploy    # Convex functions, auth, storage
+cd apps/audio-packager && bun run deploy     # Saved audio delivery
 cd apps/web && bun run build && bunx wrangler deploy        # app.kinreader.com
 cd apps/marketing && bun run build && bunx wrangler deploy  # kinreader.com
 ```

@@ -1,3 +1,4 @@
+import { recordingProgress } from '../../lib/ingestion';
 import { accessibleRecording } from './listening';
 import type { MutationCtx } from '../_generated/server';
 import { z } from 'zod';
@@ -64,7 +65,7 @@ export const getUserPlaylist = query
         if ('recordingId' in article && article.recordingId) {
           try {
             const recording = await accessibleRecording(ctx as any, { recordingId: String(article.recordingId) });
-            Object.assign(article, { url: recording.sourceUrl, recordingId: recording._id });
+            Object.assign(article, { url: recording.sourceUrl, recordingId: recording._id, title: recording.title, content: recording.content, author: recording.author, image: recording.image, sourceType: recording.sourceType, ...(await recordingProgress(ctx as any, recording)) });
           } catch { continue; }
         }
         results.push({

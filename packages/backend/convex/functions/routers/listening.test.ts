@@ -8,6 +8,8 @@ import { v } from 'convex/values';
 import { listeningAudioResponse } from '../../lib/listeningAudio';
 const modules = {
   './_generated/server.js': () => import('../_generated/server'),
+  './routers/ingestionInternal.ts': () => import('./ingestionInternal'),
+  './routers/ingestionWorker.ts': () => import('./ingestionWorker'),
   './routers/listening.ts': () => import('./listening'),
   './routers/listeningInternal.ts': () => import('./listeningInternal'),
   './routers/narration.ts': () => import('./narration'),
@@ -40,10 +42,13 @@ test('a repeated create joins the same record and record audio stays separate fr
   const contentDigest = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
   await t.action(api.routers.narration.prepare, { recordingId, ownerToken, text, voice: input.voice, clientId: 'test' });
   await t.action(api.routers.narration.prepare, { recordingId, ownerToken, text, voice: input.voice, clientId: 'test' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await t.finishInProgressScheduledFunctions();
   const jobs = await t.run(ctx => ctx.db.query('narrationJobs').collect()); expect(jobs).toHaveLength(1);
   expect(jobs[0]!.contentDigest).toBe(`${recordingId}:${contentDigest}`);
   expect((await t.query(api.routers.narration.page, { contentDigest, voice: input.voice, from: 0 })).status).toBe('none');
   await expect(t.query(api.routers.narration.page, { recordingId, contentDigest, voice: input.voice, from: 0 })).rejects.toThrow('private');
+  await new Promise(resolve => setTimeout(resolve, 5));
   await t.finishInProgressScheduledFunctions();
 });
 test('audio ranges support seeking without a permanent storage redirect', async () => {
@@ -62,6 +67,8 @@ test('published listeners join one recording job and revocation denies section b
   await t.mutation(api.routers.listening.setVisibility, { recordingId, ownerToken, visibility: 'link' });
   const requests = Array.from({ length: 10 }, (_, i) => t.action(api.routers.narration.prepare, { recordingId, text: input.content, voice: input.voice, clientId: `visitor-${i}` }));
   await Promise.all(requests);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await t.finishInProgressScheduledFunctions();
   const jobs = await t.run(ctx => ctx.db.query('narrationJobs').collect()); expect(jobs).toHaveLength(1);
   const section = (await t.run(ctx => ctx.db.query('narrationSections').first()))!;
   const storageId = await t.run(ctx => ctx.storage.store(new Blob(['audio'])));
@@ -70,5 +77,6 @@ test('published listeners join one recording job and revocation denies section b
   await t.mutation(api.routers.listening.setVisibility, { recordingId, ownerToken, visibility: 'private' });
   await expect(t.query(internal.routers.listeningInternal.section, { recordingId, sectionId: section._id })).rejects.toThrow('private');
   expect(await t.query(internal.routers.listeningInternal.section, { recordingId, ownerToken, sectionId: section._id })).toBe(storageId);
+  await new Promise(resolve => setTimeout(resolve, 5));
   await t.finishInProgressScheduledFunctions();
 });

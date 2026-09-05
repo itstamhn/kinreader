@@ -2,6 +2,11 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 
 export default defineSchema({
+  audioPackagingJobs: defineTable({
+    key: v.string(), generation: v.string(),
+    status: v.union(v.literal('queued'), v.literal('running'), v.literal('done'), v.literal('failed')),
+    leaseUntil: v.number(),
+  }).index('by_key', ['key']),
   // 1. Better Auth: User Table
   user: defineTable({
     name: v.string(),
@@ -76,8 +81,13 @@ export default defineSchema({
     title: v.string(), content: v.string(), author: v.optional(v.string()),
     sourceUrl: v.optional(v.string()), image: v.optional(v.string()),
     sourceType: v.optional(v.union(v.literal('article'), v.literal('x'), v.literal('text'))),
+    stage: v.optional(v.union(v.literal('finding'), v.literal('needsReview'), v.literal('preparing'), v.literal('extractFailed'), v.literal('audioFailed'), v.literal('cancelled'))),
+    needsReview: v.optional(v.boolean()), authorHandle: v.optional(v.string()), authorAvatar: v.optional(v.string()),
+    handoffAttempt: v.optional(v.number()), attempt: v.optional(v.number()), error: v.optional(v.string()),
+    narrationText: v.optional(v.string()), narrationJobId: v.optional(v.id('narrationJobs')),
+    truncated: v.optional(v.boolean()),
     voice: v.string(), visibility: v.union(v.literal('private'), v.literal('link')), createdAt: v.number(),
-  }).index('by_owner_token', ['ownerToken']),
+  }).index('by_owner_token', ['ownerToken']).index('by_owner', ['ownerId']),
 
   // 6. Saved / Extracted Articles
   articles: defineTable({
@@ -172,7 +182,7 @@ export default defineSchema({
   narrationJobs: defineTable({
     contentDigest: v.string(),
     voice: v.string(),
-    status: v.union(v.literal('running'), v.literal('done'), v.literal('failed')),
+    status: v.union(v.literal('running'), v.literal('done'), v.literal('failed'), v.literal('cancelled')),
     total: v.number(),
     completed: v.number(),
     createdAt: v.number(),

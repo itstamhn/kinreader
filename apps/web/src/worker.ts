@@ -8,6 +8,7 @@ export default {
       // The Convex deployment's HTTP-actions origin (`<deployment>.convex.site`).
       // Set per environment in wrangler.jsonc `vars`; the fallback is production.
       CONVEX_SITE_ORIGIN?: string;
+      AUDIO_PACKAGER?: { fetch: (req: Request) => Promise<Response> };
     }
   ): Promise<Response> {
     const url = new URL(request.url);
@@ -53,6 +54,8 @@ export default {
           headers: { 'Content-Type': 'application/json' },
         }
       );
+    } else if (url.pathname === '/api/tts/continuous' || url.pathname.startsWith('/api/tts/continuous/')) {
+      return env.AUDIO_PACKAGER ? env.AUDIO_PACKAGER.fetch(request) : new Response(null, { status: 503 });
     } else if (url.pathname.startsWith('/api/auth') || url.pathname.startsWith('/api/tts')) {
       // Proxy Better Auth & TTS streaming endpoints directly to Convex HTTP router
       const convexSiteOrigin = env.CONVEX_SITE_ORIGIN || DEFAULT_CONVEX_SITE_ORIGIN;
@@ -113,6 +116,8 @@ export default {
           headers: { 'Content-Type': 'application/json' },
         }
       );
+    } else if (url.pathname === '/sample_audio.mp3' && ['GET', 'HEAD'].includes(request.method)) {
+      response = await serveSampleAudio(request, env.ASSETS);
     } else {
       // Serve static SPA assets from dist/
       response = await env.ASSETS.fetch(request);
@@ -130,7 +135,7 @@ export default {
     newHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     newHeaders.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://tts-rt.soniox.com; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+      "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://tts-rt.soniox.com; media-src 'self' data: blob: https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
     );
 
     return new Response(response.body, {
@@ -140,3 +145,34 @@ export default {
     });
   },
 };
+
+// Workers Assets does not return byte ranges for this small bundled recording.
+// Browsers need them to seek to the word selected in the full-text view.
+async function serveSampleAudio(request: Request, assets: { fetch: (req: Request) => Promise<Response> }) {
+  const headers = new Headers(request.headers);
+  headers.delete('Range');
+  headers.delete('If-Range');
+  const response = await assets.fetch(new Request(request.url, { method: request.method, headers }));
+  if (response.status !== 200) return response;
+  const output = new Headers(response.headers);
+  output.set('Accept-Ranges', 'bytes');
+  const range = request.headers.get('Range');
+  const ifRange = request.headers.get('If-Range');
+  const matchesVersion = !ifRange || ifRange === output.get('ETag') || ifRange === output.get('Last-Modified');
+  const match = range?.match(/^bytes=(\d*)-(\d*)$/);
+  if (request.method === 'HEAD' || !matchesVersion || !match || (!match[1] && !match[2])) {
+    return new Response(response.body, { status: 200, headers: output });
+  }
+  const bytes = await response.arrayBuffer();
+  const length = bytes.byteLength;
+  const start = match[1] ? Number(match[1]) : Math.max(0, length - Number(match[2]));
+  const end = match[1] && match[2] ? Math.min(length - 1, Number(match[2])) : length - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= length) {
+    output.set('Content-Range', `bytes */${length}`);
+    output.set('Content-Length', '0');
+    return new Response(null, { status: 416, headers: output });
+  }
+  output.set('Content-Range', `bytes ${start}-${end}/${length}`);
+  output.set('Content-Length', String(end - start + 1));
+  return new Response(bytes.slice(start, end + 1), { status: 206, headers: output });
+}

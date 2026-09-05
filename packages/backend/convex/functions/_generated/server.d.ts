@@ -30,6 +30,8 @@ import type { DataModel } from "./dataModel.js";
 type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
+  readonly AUDIO_PACKAGER_ORIGIN: string | undefined;
+  readonly AUDIO_PACKAGER_SECRET: string | undefined;
   readonly SONIOX_API_KEY: string | undefined;
 };
 

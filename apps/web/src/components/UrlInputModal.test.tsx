@@ -1,105 +1,29 @@
+import React from 'react';
 import { test, expect, afterEach } from 'bun:test';
-import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { ConvexReactClient } from 'convex/react';
+import { render, fireEvent, cleanup, screen } from '@testing-library/react';
 import { UrlInputModal } from './UrlInputModal';
-import { ConvexAppProvider } from '../lib/convex';
-import type { ArticleData } from '../types';
-
-// The component now calls the Convex `extract` action through
-// useCRPC()/useMutation() instead of a plain fetch to the old extraction
-// route. Rather than mocking an ES module (bun:test's mock.module()
-// persists process-wide and would leak into other test files sharing this
-// process), stub the one real network boundary directly:
-// ConvexReactClient#action is what the generated mutationFn ultimately
-// calls. Save/restore it per test, exactly like the existing global.fetch
-// stubbing pattern elsewhere in this repo.
-const originalAction = ConvexReactClient.prototype.action;
-
-afterEach(() => {
-  ConvexReactClient.prototype.action = originalAction;
-  cleanup();
+afterEach(cleanup);
+test('form submits a normalized link and closes without extracting in the component', () => {
+  let submitted: unknown; let closed = false;
+  render(<UrlInputModal isOpen onClose={() => { closed = true; }} onCreate={input => { submitted = input; }} />);
+  fireEvent.change(screen.getByLabelText('Article link'), { target: { value: 'example.com/article' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create audio' }));
+  expect(submitted).toEqual({ sourceUrl: 'https://example.com/article' }); expect(closed).toBe(true);
+  expect(screen.queryByText(/3,120|14 min|Thread detected/)).toBeNull();
 });
-
-function stubExtractAction(impl: () => Promise<ArticleData>) {
-  ConvexReactClient.prototype.action = (async () => impl()) as typeof originalAction;
-}
-
-function renderModal(props: Partial<Parameters<typeof UrlInputModal>[0]> = {}) {
-  const onClose = props.onClose ?? (() => {});
-  const onLoadArticle = props.onLoadArticle ?? (() => {});
-  return render(
-    <ConvexAppProvider>
-      <UrlInputModal
-        isOpen={true}
-        onClose={onClose}
-        onLoadArticle={onLoadArticle}
-        onAddToQueue={props.onAddToQueue}
-      />
-    </ConvexAppProvider>
-  );
-}
-
-test('submitting a URL calls the Convex extract mutation and loads the result', async () => {
-  const extracted: ArticleData = {
-    title: 'A Real Article',
-    author: 'Jane Doe',
-    content: 'Extracted body content.',
-    sourceUrl: 'https://example.com/article',
-    sourceType: 'article',
-  };
-  stubExtractAction(async () => extracted);
-
-  let loaded: ArticleData | null = null;
-  let closed = false;
-  const { container } = renderModal({
-    onLoadArticle: (article) => {
-      loaded = article;
-    },
-    onClose: () => {
-      closed = true;
-    },
-  });
-
-  const urlInput = container.querySelector('input[type="url"]') as HTMLInputElement;
-  fireEvent.change(urlInput, { target: { value: 'https://example.com/article' } });
-
-  const narrateButton = Array.from(container.querySelectorAll('button')).find((b) =>
-    b.textContent?.includes('Narrate now')
-  ) as HTMLButtonElement;
-  fireEvent.click(narrateButton);
-
-  await waitFor(() => {
-    expect(loaded).not.toBeNull();
-  });
-
-  expect(loaded!).toEqual(extracted);
-  expect(closed).toBe(true);
+test('pasted text retains paragraphs and punctuation', () => {
+  let submitted: unknown;
+  render(<UrlInputModal isOpen onClose={() => {}} onCreate={input => { submitted = input; }} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Paste text' }));
+  fireEvent.change(screen.getByLabelText('Article text'), { target: { value: 'C# and user_id.\n\nNext paragraph.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create audio' }));
+  expect(submitted).toEqual({ content: 'C# and user_id.\n\nNext paragraph.', title: undefined });
 });
-
-test('a failing extraction shows the error state instead of throwing', async () => {
-  stubExtractAction(async () => {
-    throw new Error('Extraction failed');
-  });
-
-  let loadArticleCalled = false;
-  const { container } = renderModal({
-    onLoadArticle: () => {
-      loadArticleCalled = true;
-    },
-  });
-
-  const urlInput = container.querySelector('input[type="url"]') as HTMLInputElement;
-  fireEvent.change(urlInput, { target: { value: 'https://example.com/bad' } });
-
-  const narrateButton = Array.from(container.querySelectorAll('button')).find((b) =>
-    b.textContent?.includes('Narrate now')
-  ) as HTMLButtonElement;
-
-  expect(() => fireEvent.click(narrateButton)).not.toThrow();
-
-  await waitFor(() => {
-    expect(container.textContent).toContain('Extraction failed');
-  });
-
-  expect(loadArticleCalled).toBe(false);
+test('oversized content stays in the form with a clear error before submission', () => {
+  let calls = 0;
+  render(<UrlInputModal isOpen onClose={() => {}} onCreate={() => { calls++; }} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Paste text' }));
+  fireEvent.change(screen.getByLabelText('Article text'), { target: { value: 'x'.repeat(150001) } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create audio' }));
+  expect(screen.getByRole('alert').textContent).toContain('150,000'); expect(calls).toBe(0);
 });

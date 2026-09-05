@@ -13,6 +13,7 @@ export const api = {
     },
     listening: {
       claim: createApiLeaf<"mutation", typeof import("../functions/routers/listening").claim>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").claim>("routers/listening:claim"), { type: "mutation" }),
+      control: createApiLeaf<"mutation", typeof import("../functions/routers/listening").control>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").control>("routers/listening:control"), { type: "mutation" }),
       create: createApiLeaf<"mutation", typeof import("../functions/routers/listening").create>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").create>("routers/listening:create"), { type: "mutation" }),
       get: createApiLeaf<"query", typeof import("../functions/routers/listening").get>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/listening").get>("routers/listening:get"), { type: "query" }),
       setVisibility: createApiLeaf<"mutation", typeof import("../functions/routers/listening").setVisibility>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").setVisibility>("routers/listening:setVisibility"), { type: "mutation" }),

@@ -3,9 +3,9 @@
 // Do not edit manually. Run `kitcn codegen` to regenerate.
 
 export const procedureNames = {
-  "routers/articles.ts": [{ column: 3, line: 104, name: "routers/articles:extract" }],
-  "routers/listening.ts": [{ column: 49, line: 47, name: "routers/listening:claim" }, { column: 4, line: 26, name: "routers/listening:create" }, { column: 44, line: 36, name: "routers/listening:get" }, { column: 109, line: 42, name: "routers/listening:setVisibility" }],
-  "routers/narration.ts": [{ column: 3, line: 22, name: "routers/narration:page" }, { column: 3, line: 10, name: "routers/narration:prepare" }],
+  "routers/articles.ts": [{ column: 3, line: 9, name: "routers/articles:extract" }],
+  "routers/listening.ts": [{ column: 49, line: 83, name: "routers/listening:claim" }, { column: 172, line: 54, name: "routers/listening:control" }, { column: 4, line: 31, name: "routers/listening:create" }, { column: 44, line: 72, name: "routers/listening:get" }, { column: 109, line: 78, name: "routers/listening:setVisibility" }],
+  "routers/narration.ts": [{ column: 3, line: 24, name: "routers/narration:page" }, { column: 3, line: 10, name: "routers/narration:prepare" }],
   "routers/tts.ts": [{ column: 3, line: 289, name: "routers/tts:generateTrackUploadUrl" }, { column: 3, line: 160, name: "routers/tts:getExactTrack" }, { column: 3, line: 332, name: "routers/tts:persistTrack" }, { column: 3, line: 234, name: "routers/tts:pregenerate" }, { column: 3, line: 212, name: "routers/tts:pregenerationStatus" }, { column: 3, line: 459, name: "routers/tts:synthesize" }, { column: 3, line: 375, name: "routers/tts:temporaryKey" }],
-  "routers/users.ts": [{ column: 3, line: 201, name: "routers/users:addToPlaylist" }, { column: 3, line: 153, name: "routers/users:deleteUserArticle" }, { column: 3, line: 35, name: "routers/users:getCurrentUser" }, { column: 3, line: 50, name: "routers/users:getUserPlaylist" }, { column: 3, line: 96, name: "routers/users:saveUserProgress" }],
+  "routers/users.ts": [{ column: 3, line: 202, name: "routers/users:addToPlaylist" }, { column: 3, line: 154, name: "routers/users:deleteUserArticle" }, { column: 3, line: 36, name: "routers/users:getCurrentUser" }, { column: 3, line: 51, name: "routers/users:getUserPlaylist" }, { column: 3, line: 97, name: "routers/users:saveUserProgress" }],
 };

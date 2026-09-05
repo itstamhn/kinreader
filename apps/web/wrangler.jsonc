@@ -5,10 +5,12 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "services": [{ "binding": "AUDIO_PACKAGER", "service": "kinreader-audio-packager" }],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "none"
+    "not_found_handling": "none",
+    "run_worker_first": ["/sample_audio.mp3"]
   },
   // The deployed `kinetic-reader` script once exported a `NarrationSession`
   // Durable Object (an out-of-repo experiment during the plan 022 spike). The

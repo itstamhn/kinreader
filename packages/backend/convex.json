@@ -1,7 +1,10 @@
 {
   "functions": "convex/functions",
   "node": {
-    "externalPackages": ["ws"]
+    "externalPackages": [
+      "ws",
+      "ffmpeg-static"
+    ]
   },
   "codegen": {
     "staticApi": true,

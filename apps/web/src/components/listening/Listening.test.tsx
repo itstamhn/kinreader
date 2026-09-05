@@ -26,6 +26,13 @@ test('preparation retains the title and provides reading and sharing without pla
   expect(view.getByRole('button', { name: 'Copy link' })).toBeTruthy();
   expect(view.queryByRole('button', { name: /^Play$/ })).toBeNull();
 });
+test('a completed recording waiting for bytes is described as saved audio without creation controls', () => {
+  const view = render(<ListeningPage {...props({ prepState: 'loadingSaved', canManage: true })} />);
+  expect(view.getByText('Loading saved audio…')).toBeTruthy();
+  expect(view.getByLabelText('Loading saved audio')).toBeTruthy();
+  expect(view.queryByText('Preparing your audio. You can come back to this link anytime.')).toBeNull();
+  expect(view.queryByRole('button', { name: 'Cancel preparation' })).toBeNull();
+});
 test('extraction failure preserves the original link and offers another article', () => {
   let creates = 0;
   const view = render(<ListeningPage {...props({ prepState: 'extractFailed', onCreate: () => creates++ })} />);
@@ -35,10 +42,10 @@ test('extraction failure preserves the original link and offers another article'
 });
 test('create rejects non-web links and submits a valid source', () => {
   let created = '';
-  const view = render(<CreateListening isPlaying remainingSeconds={600} onBack={() => {}} onCreate={url => { created = url; }} />);
+  const view = render(<CreateListening isPlaying remainingSeconds={600} onBack={() => {}} onCreate={input => { created = input.sourceUrl || ''; }} />);
   const input = view.getByRole('textbox');
   fireEvent.change(input, { target: { value: 'javascript:alert(1)' } });
-  expect((view.getByRole('button', { name: 'Create audio' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.submit(view.container.querySelector('form')!); expect(created).toBe('');
   fireEvent.change(input, { target: { value: article.sourceUrl } });
   fireEvent.submit(view.container.querySelector('form')!);
   expect(created).toBe(article.sourceUrl);

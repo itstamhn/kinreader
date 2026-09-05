@@ -1,6 +1,6 @@
 import { registerRoutes } from 'kitcn/auth/http';
 import { httpRouter } from 'convex/server';
-import { httpAction } from './_generated/server';
+import { httpAction, env } from './_generated/server';
 import { internal } from './_generated/api';
 import { getAuth } from './generated/auth';
 import { getEnv } from '../lib/get-env';
@@ -8,6 +8,22 @@ import { handleTtsStreamRequest } from '../lib/ttsStream';
 
 import { listeningAudioResponse } from '../lib/listeningAudio';
 const http = httpRouter();
+http.route({ path: '/api/internal/audio-packaging', method: 'POST', handler: httpAction(async (ctx, req) => {
+  if (!env.AUDIO_PACKAGER_SECRET || req.headers.get('Authorization') !== `Bearer ${env.AUDIO_PACKAGER_SECRET}`) return new Response(null, { status: 403 });
+  try {
+    const body: unknown = await req.json();
+    if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !/^[a-f0-9]{64}$/.test(body.key) || !('input' in body) || !body.input || typeof body.input !== 'object') return new Response(null, { status: 400 });
+    const input = body.input as Record<string, unknown>;
+    if (typeof input.contentDigest !== 'string' || !/^[a-f0-9]{64}$/.test(input.contentDigest) || typeof input.voice !== 'string' || input.voice.length > 100 ||
+      (input.recordingId !== undefined && typeof input.recordingId !== 'string') || (input.ownerToken !== undefined && typeof input.ownerToken !== 'string')) return new Response(null, { status: 400 });
+    const result = await ctx.runMutation(internal.audioPackaging.start, { key: body.key, input: {
+      contentDigest: input.contentDigest, voice: input.voice,
+      ...(typeof input.recordingId === 'string' ? { recordingId: input.recordingId } : {}),
+      ...(typeof input.ownerToken === 'string' ? { ownerToken: input.ownerToken } : {}),
+    } });
+    return Response.json(result);
+  } catch { return new Response(null, { status: 503 }); }
+}) });
 
 registerRoutes(http, getAuth, {
   cors: {

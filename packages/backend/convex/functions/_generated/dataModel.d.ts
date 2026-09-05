@@ -107,6 +107,25 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  audioPackagingJobs: {
+    document: {
+      generation: string;
+      key: string;
+      leaseUntil: number;
+      status: "queued" | "running" | "done" | "failed";
+      _id: Id<"audioPackagingJobs">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      "_creationTime" | "_id" | "generation" | "key" | "leaseUntil" | "status";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_key: ["key", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   audioTracks: {
     document: {
       articleId: Id<"articles">;
@@ -169,15 +188,31 @@ export type DataModel = {
   };
   listeningRecords: {
     document: {
+      attempt?: number;
       author?: string;
+      authorAvatar?: string;
+      authorHandle?: string;
       content: string;
       createdAt: number;
+      error?: string;
+      handoffAttempt?: number;
       image?: string;
+      narrationJobId?: Id<"narrationJobs">;
+      narrationText?: string;
+      needsReview?: boolean;
       ownerId?: string;
       ownerToken: string;
       sourceType?: "article" | "x" | "text";
       sourceUrl?: string;
+      stage?:
+        | "finding"
+        | "needsReview"
+        | "preparing"
+        | "extractFailed"
+        | "audioFailed"
+        | "cancelled";
       title: string;
+      truncated?: boolean;
       visibility: "private" | "link";
       voice: string;
       _id: Id<"listeningRecords">;
@@ -186,20 +221,31 @@ export type DataModel = {
     fieldPaths:
       | "_creationTime"
       | "_id"
+      | "attempt"
       | "author"
+      | "authorAvatar"
+      | "authorHandle"
       | "content"
       | "createdAt"
+      | "error"
+      | "handoffAttempt"
       | "image"
+      | "narrationJobId"
+      | "narrationText"
+      | "needsReview"
       | "ownerId"
       | "ownerToken"
       | "sourceType"
       | "sourceUrl"
+      | "stage"
       | "title"
+      | "truncated"
       | "visibility"
       | "voice";
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
+      by_owner: ["ownerId", "_creationTime"];
       by_owner_token: ["ownerToken", "_creationTime"];
     };
     searchIndexes: {};
@@ -210,7 +256,7 @@ export type DataModel = {
       completed: number;
       contentDigest: string;
       createdAt: number;
-      status: "running" | "done" | "failed";
+      status: "running" | "done" | "failed" | "cancelled";
       total: number;
       voice: string;
       _id: Id<"narrationJobs">;

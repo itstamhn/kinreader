@@ -1,7 +1,10 @@
+import { ArticleCreationForm } from './ArticleCreationForm';
+import type { CreationInput } from '../../hooks/useArticleCreation';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ChevronLeft, Lock, X } from 'lucide-react';
 import type { ArticleData } from '../../types';
 import { authClient } from '../../lib/auth-client';
+import { buildShareLink } from '../../utils/shareLink';
 
 export const formatListeningTime = (seconds: number) => {
   const value = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
@@ -62,15 +65,17 @@ export function SaveListeningSheet({ currentTime, callbackURL, onClose, sendMagi
       <div className="listening-sheet-links"><button disabled={busy} onClick={() => void send()}>{busy ? 'Sending…' : 'Resend'}</button><button disabled={busy} onClick={() => { setSent(false); setError(''); }}>Use a different email</button></div>
     </> : <>
       <p>We’ll save the article and hold your place, <span className="listening-position">{formatListeningTime(currentTime)}</span>, so you can pick it up on any device.</p>
-      <form onSubmit={send} className="listening-form">
+      <form onSubmit={send} className="listening-form listening-save-form">
         <label className="sr-only" htmlFor="save-email">Email address</label>
         <input id="save-email" type="email" autoComplete="email" required placeholder="you@email.com" value={email} onChange={e => setEmail(e.target.value)} />
-        <button className="listening-primary" disabled={busy}>{busy ? 'Sending…' : 'Email me a sign-in link'}</button>
+        <button className="listening-primary" disabled={busy} aria-label={busy ? 'Sending…' : 'Email me a sign-in link'}>{busy ? 'Sending…' : <><span className="listening-mobile-only">Email me a sign-in link</span><span className="listening-desktop-only">Email me a link</span></>}</button>
       </form>
-      <p className="listening-helper">No password. The audio keeps playing while you check your inbox.</p>
     </>}
     {error && <p className="listening-error" role="alert">{error}</p>}
-    <button className="listening-dismiss" onClick={onClose}>Not now, keep listening</button>
+    <div className="listening-save-footer">
+      {!sent && <p className="listening-helper"><span className="listening-mobile-only">No password. The audio keeps playing while you check your inbox.</span><span className="listening-desktop-only">No password. The audio keeps playing.</span></p>}
+      <button className="listening-dismiss" onClick={onClose} aria-label="Not now, keep listening"><span className="listening-mobile-only">Not now, keep listening</span><span className="listening-desktop-only">Not now</span></button>
+    </div>
   </ListeningSheet>;
 }
 
@@ -105,32 +110,21 @@ export function ShareListeningSheet({ article, duration, visibility, canManage, 
     <div className="listening-share-preview"><span className="listening-preview-play" aria-hidden="true">▶</span><div><h3>{article.title}</h3><p>{article.author || 'Unknown author'} · AI narration{duration > 0 ? ` · ${Math.max(1, Math.round(duration / 60))} min` : ''}</p></div></div>
     <p>Your notes and listening progress stay private.</p>
     {error && <p className="listening-error" role="alert">{error}</p>}
-    {manualLink && <label className="listening-form">Copy this link<input aria-label="Listening link" value={manualLink} readOnly onFocus={e => e.target.select()} /></label>}
-    <button className="listening-primary" disabled={busy} onClick={() => void apply()}>{busy ? 'Saving…' : selected === 'private' ? 'Done' : copied ? 'Link copied' : 'Copy link'}</button>
+    <div className="listening-share-link-row listening-form" data-link={selected === 'link'} data-manual={!!manualLink}>
+      {selected === 'link' && <input className="listening-share-link" aria-label="Listening link" value={manualLink || buildShareLink(article) || ''} readOnly onFocus={e => e.target.select()} />}
+      <button className="listening-primary" disabled={busy} aria-label={busy ? 'Saving…' : selected === 'private' ? 'Done' : copied ? 'Link copied' : 'Copy link'} onClick={() => void apply()}>{busy ? 'Saving…' : selected === 'private' ? 'Done' : copied ? 'Link copied' : <><span className="listening-mobile-only">Copy link</span><span className="listening-desktop-only">Copy</span></>}</button>
+    </div>
     {copied && <span className="sr-only" role="status">Listening link copied</span>}
     <p className="listening-helper">Sharing a link does not add this recording to public collections.</p>
   </ListeningSheet>;
 }
 
 export function CreateListening({ isPlaying, remainingSeconds, onBack, onCreate }: {
-  isPlaying: boolean; remainingSeconds: number; onBack: () => void; onCreate: (url: string) => void;
+  isPlaying: boolean; remainingSeconds: number; onBack: () => void; onCreate: (input: CreationInput) => void;
 }) {
-  const [url, setUrl] = useState('');
-  const [error, setError] = useState('');
-  let valid = false;
-  try { const parsed = new URL(url.trim()); valid = ['http:', 'https:'].includes(parsed.protocol) && !!parsed.hostname && !parsed.username && !parsed.password; } catch {}
-  const paste = async () => {
-    try { setUrl(await navigator.clipboard.readText()); setError(''); }
-    catch { setError('Paste the article link into the field using your keyboard or touch menu.'); }
-  };
   return <section className="listening-create">
-    <header className="listening-top"><button className="listening-icon" onClick={onBack} aria-label="Back to listening"><ChevronLeft size={18} /></button><span>{isPlaying ? `Still playing · ${Math.max(1, Math.ceil(remainingSeconds / 60))} min left` : ''}</span><span className="listening-icon" /></header>
-    <form className="listening-create-body" onSubmit={e => { e.preventDefault(); if (valid) onCreate(url.trim()); }}>
-      <h1>What would you like to listen to?</h1>
-      <label className="listening-url-label" htmlFor="article-link">Paste an article link<div className="listening-url-field"><input id="article-link" aria-label="Paste an article link" type="url" placeholder="https://" autoComplete="url" value={url} onChange={e => setUrl(e.target.value)} /><button type="button" onClick={() => void paste()}>Paste</button></div></label>
-      <div className="listening-form"><button className="listening-primary" disabled={!valid}>Create audio</button><p className="listening-privacy"><Lock size={14} /><span>Added to your private library. You choose whether to share it.</span></p></div>
-      {error && <p className="listening-error" role="alert">{error}</p>}
-    </form>
-    <p className="listening-create-footer">Works with most articles, essays and newsletters.<br />Preparation time depends on the article’s length.</p>
+    <header className="listening-top"><div className="listening-create-back"><button className="listening-icon" onClick={onBack} aria-label="Back to listening"><ChevronLeft size={18} /></button><span>{isPlaying ? `Still playing · ${Math.max(1, Math.ceil(remainingSeconds / 60))} min left` : ''}</span></div><span className="listening-wordmark listening-desktop-only">Kinetic Reader</span></header>
+    <div className="listening-create-body"><h1>What would you like to listen to?</h1><ArticleCreationForm onCreate={onCreate} layout="page" /><p className="listening-privacy"><Lock size={14} /><span>Added to your private library. You choose whether to share it.</span></p></div>
+    <p className="listening-create-footer">Works with most articles, essays and newsletters.<br className="listening-mobile-only" /> Preparation time depends on the article’s length.</p>
   </section>;
 }

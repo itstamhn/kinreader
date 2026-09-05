@@ -1,0 +1,15 @@
+{
+  "name": "@kinreader/audio-packager",
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^5",
+    "wrangler": "^4.127.0"
+  },
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "deploy": "wrangler deploy"
+  },
+  "type": "module"
+}

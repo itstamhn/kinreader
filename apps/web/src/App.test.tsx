@@ -1,3 +1,4 @@
+import { saveArticleToLibrary } from './lib/storage';
 import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { render, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
 import { ConvexReactClient } from 'convex/react';
@@ -206,22 +207,7 @@ test('a failed synthesis offers a Soniox retry instead of a device voice', async
   try {
     const { container } = renderApp();
 
-    const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
-    expect(addButton).toBeTruthy();
-    fireEvent.click(addButton);
-
-    const textTabButton = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('Paste Raw Text')
-    ) as HTMLButtonElement;
-    fireEvent.click(textTabButton);
-
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: 'Some article body long enough to narrate.' } });
-
-    const narrateButton = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Narrate now')
-    ) as HTMLButtonElement;
-    fireEvent.click(narrateButton);
+    await narrateRawText(container, 'Some article body long enough to narrate.');
 
     await waitFor(() => {
       expect(container.textContent).toContain('Audio couldn’t be loaded');
@@ -246,21 +232,7 @@ test('when speech synthesis is unsupported and neural synthesis fails, lands in 
   try {
     const { container } = renderApp();
 
-    const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
-    fireEvent.click(addButton);
-
-    const textTabButton = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('Paste Raw Text')
-    ) as HTMLButtonElement;
-    fireEvent.click(textTabButton);
-
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: 'Some article body long enough to narrate.' } });
-
-    const narrateButton = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Narrate now')
-    ) as HTMLButtonElement;
-    fireEvent.click(narrateButton);
+    await narrateRawText(container, 'Some article body long enough to narrate.');
 
     await waitFor(() => {
       expect(container.textContent).toContain('Audio couldn’t be loaded');
@@ -284,38 +256,17 @@ test('a global paste event with a valid URL opens the clipboard detection sheet'
   });
 
   await waitFor(() => {
-    expect(container.textContent).toContain('Link on your clipboard');
+    expect(container.textContent).toContain('Create audio from this link?');
     expect(container.textContent).toContain('theatlantic.com/ideas/future-of-reading');
   });
 });
 
-test('loading app with ?url= parameter extracts and opens that article', async () => {
-  window.location.href = 'http://localhost/?url=https%3A%2F%2Fpaulgraham.com%2Flesson.html';
-
-  const originalAction = ConvexReactClient.prototype.action;
-  ConvexReactClient.prototype.action = (async (actionName: any, args: any) => {
-    const name = typeof actionName === 'string' ? actionName : actionName?.name || '';
-    if (name.includes('extractArticle') || name.includes('extract') || args?.url) {
-      return {
-        title: 'What You (Will) Wish You Knew',
-        content: 'When I was in high school, I had to take a course in Latin.',
-        author: 'Paul Graham',
-        sourceUrl: 'https://paulgraham.com/lesson.html',
-      };
-    }
-    return { audioUrl: '/sample_audio.mp3', wordTimings: [], duration: 5 };
-  }) as typeof originalAction;
-
-  try {
-    const { container } = renderApp();
-
-    await waitFor(() => {
-      expect(container.textContent).toContain('What You (Will) Wish You Knew');
-      expect(container.textContent).toContain('Paul Graham');
-    });
-  } finally {
-    ConvexReactClient.prototype.action = originalAction;
-  }
+test('legacy link entry 1 asks to create audio without fetching or starting a paid action', async () => {
+  window.location.href = 'http://localhost/' + '?url=https%3A%2F%2Fexample.com%2Farticle';
+  const originalAction = ConvexReactClient.prototype.action; let calls = 0;
+  ConvexReactClient.prototype.action = (async () => { calls++; throw new Error('Unexpected action'); }) as typeof originalAction;
+  try { const { container } = renderApp(); await waitFor(() => expect(container.textContent).toContain('Create audio from this link?')); expect(calls).toBe(0); }
+  finally { ConvexReactClient.prototype.action = originalAction; }
 });
 
 test('opening library drawer updates the browser URL with ?view=queue', async () => {
@@ -334,17 +285,14 @@ test('opening library drawer updates the browser URL with ?view=queue', async ()
 });
 
 async function narrateRawText(container: HTMLElement, text: string) {
-  const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
-  fireEvent.click(addButton);
-  const textTabButton = Array.from(container.querySelectorAll('button')).find((button) =>
-    button.textContent?.includes('Paste Raw Text')
-  ) as HTMLButtonElement;
-  fireEvent.click(textTabButton);
-  fireEvent.change(container.querySelector('textarea') as HTMLTextAreaElement, { target: { value: text } });
-  const narrateButton = Array.from(container.querySelectorAll('button')).find((button) =>
-    button.textContent?.includes('Narrate now')
-  ) as HTMLButtonElement;
-  fireEvent.click(narrateButton);
+  // This fixture opens a legacy saved note to keep audio-engine coverage independent of ingestion.
+  saveArticleToLibrary({ title: 'Pasted Note', content: text, author: 'Custom Text', sourceType: 'text' });
+  fireEvent.click(container.querySelector('button[title="Library & Queue"]')!);
+  const row = await waitFor(() => {
+    const found = Array.from(container.querySelectorAll('span')).find(node => node.textContent === 'Pasted Note');
+    expect(found).toBeTruthy(); return found!;
+  });
+  fireEvent.click(row);
 }
 
 function timestampBatch(text: string, start = 0.1) {
@@ -714,7 +662,7 @@ test('an exact cache hit loads stored audio before minting a key or opening a so
   const loadedUrls: string[] = [];
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
-    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    if (url.split('?')[0] !== '/sample_audio.mp3') loadedUrls.push(url);
     return originalLoadAudioUrl.call(this, url, words, duration, onError);
   };
 
@@ -792,7 +740,7 @@ test('pasted notes share exact audio only when their content is identical', asyn
   const loadedUrls: string[] = [];
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
-    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    if (url.split('?')[0] !== '/sample_audio.mp3') loadedUrls.push(url);
     return originalLoadAudioUrl.call(this, url, words, duration, onError);
   };
 
@@ -887,34 +835,12 @@ test('exact-track persistence failure does not replace completed WebSocket playb
   }
 });
 
-test('a ?read= share id is resolved into the ?url= load and stripped from the address bar', async () => {
-  const sharedUrl = 'https://paulgraham.com/lesson.html';
-  const shareId = btoa(sharedUrl).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  window.location.href = `http://localhost/?read=${shareId}`;
-
-  const extractedUrls: string[] = [];
-  const originalAction = ConvexReactClient.prototype.action;
-  ConvexReactClient.prototype.action = (async (_name: any, args: any) => {
-    extractedUrls.push(args?.url);
-    return {
-      title: 'What You (Will) Wish You Knew',
-      content: 'When I was in high school, I had to take a course in Latin.',
-      author: 'Paul Graham',
-      sourceUrl: sharedUrl,
-    };
-  }) as typeof originalAction;
-
-  try {
-    const { container } = renderApp();
-    await waitFor(() => {
-      expect(container.textContent).toContain('What You (Will) Wish You Knew');
-    });
-    expect(extractedUrls).toEqual([sharedUrl]);
-    expect(window.location.search).not.toContain('read=');
-    expect(new URLSearchParams(window.location.search).get('url')).toBe(sharedUrl);
-  } finally {
-    ConvexReactClient.prototype.action = originalAction;
-  }
+test('legacy link entry 2 asks to create audio without fetching or starting a paid action', async () => {
+  window.location.href = 'http://localhost/' + '?read=' + btoa('https://example.com/article').replace(/=+$/, '');
+  const originalAction = ConvexReactClient.prototype.action; let calls = 0;
+  ConvexReactClient.prototype.action = (async () => { calls++; throw new Error('Unexpected action'); }) as typeof originalAction;
+  try { const { container } = renderApp(); await waitFor(() => expect(container.textContent).toContain('Create audio from this link?')); expect(calls).toBe(0); }
+  finally { ConvexReactClient.prototype.action = originalAction; }
 });
 
 test('an invalid ?read= id shows a notice and leaves the sample article playable', async () => {
@@ -928,54 +854,20 @@ test('an invalid ?read= id shows a notice and leaves the sample article playable
   expect(playButton.disabled).toBe(false);
 });
 
-test('a failed deep-link extraction shows a load notice instead of silently keeping the sample', async () => {
-  window.location.href = 'http://localhost/?url=https%3A%2F%2Fdead.example%2Fpost';
-  const originalAction = ConvexReactClient.prototype.action;
-  ConvexReactClient.prototype.action = (async () => {
-    throw new Error('Too many article requests. Please try again in a minute.');
-  }) as typeof originalAction;
-
-  try {
-    const { container } = renderApp();
-    await waitFor(() => {
-      expect(container.textContent).toContain('Couldn’t read dead.example');
-      expect(container.textContent).toContain('Too many article requests');
-    });
-    // Back on the sample article, and it is playable.
-    expect(container.textContent).toContain('Dan Koe');
-    expect(window.location.search).not.toContain('url=');
-  } finally {
-    ConvexReactClient.prototype.action = originalAction;
-  }
+test('legacy link entry 3 asks to create audio without fetching or starting a paid action', async () => {
+  window.location.href = 'http://localhost/' + '?url=https%3A%2F%2Fexample.com%2Farticle';
+  const originalAction = ConvexReactClient.prototype.action; let calls = 0;
+  ConvexReactClient.prototype.action = (async () => { calls++; throw new Error('Unexpected action'); }) as typeof originalAction;
+  try { const { container } = renderApp(); await waitFor(() => expect(container.textContent).toContain('Create audio from this link?')); expect(calls).toBe(0); }
+  finally { ConvexReactClient.prototype.action = originalAction; }
 });
 
-test('a deep link shows a fetching state instead of the sample article while extraction runs', async () => {
-  window.location.href = 'http://localhost/?url=https%3A%2F%2Fslow.example%2Fpost';
-  let resolveExtract!: (value: unknown) => void;
-  const originalAction = ConvexReactClient.prototype.action;
-  ConvexReactClient.prototype.action = (() =>
-    new Promise((resolve) => {
-      resolveExtract = resolve;
-    })) as typeof originalAction;
-
-  try {
-    const { container } = renderApp();
-    await waitFor(() => {
-      expect(container.textContent).toContain('Fetching the article');
-      expect(container.textContent).toContain('slow.example');
-    });
-    expect(container.textContent).not.toContain('digital renaissance');
-
-    resolveExtract({
-      title: 'Slow but here',
-      content: 'It arrived in the end after a long wait.',
-      author: 'Someone',
-      sourceUrl: 'https://slow.example/post',
-    });
-    await waitFor(() => expect(container.textContent).toContain('Slow but here'));
-  } finally {
-    ConvexReactClient.prototype.action = originalAction;
-  }
+test('legacy link entry 4 asks to create audio without fetching or starting a paid action', async () => {
+  window.location.href = 'http://localhost/' + '?url=https%3A%2F%2Fexample.com%2Farticle';
+  const originalAction = ConvexReactClient.prototype.action; let calls = 0;
+  ConvexReactClient.prototype.action = (async () => { calls++; throw new Error('Unexpected action'); }) as typeof originalAction;
+  try { const { container } = renderApp(); await waitFor(() => expect(container.textContent).toContain('Create audio from this link?')); expect(calls).toBe(0); }
+  finally { ConvexReactClient.prototype.action = originalAction; }
 });
 
 test('opening a saved article resumes from its recorded word once exact timings are loaded', async () => {
@@ -1126,31 +1018,20 @@ test('the header share button copies a kinreader.com/r/ link that decodes back t
   }
 });
 
-test('adding an article to the queue asks the server to pre-generate it', async () => {
-  const requests: Array<{ text: string; voice: string; title?: string }> = [];
-  const { container } = renderApp({
-    requestPregeneration: async (input) => {
-      requests.push(input);
-    },
-  });
-
-  const addButton = container.querySelector('button[title="Add Article or URL"]') as HTMLButtonElement;
-  fireEvent.click(addButton);
-  const textTabButton = Array.from(container.querySelectorAll('button')).find((b) =>
-    b.textContent?.includes('Paste Raw Text')
-  ) as HTMLButtonElement;
-  fireEvent.click(textTabButton);
-  fireEvent.change(container.querySelector('textarea') as HTMLTextAreaElement, {
-    target: { value: 'Queue this for later listening.' },
-  });
-  const queueButton = Array.from(container.querySelectorAll('button')).find((b) =>
-    /add to queue/i.test(b.textContent ?? '')
-  ) as HTMLButtonElement;
-  expect(queueButton).toBeTruthy();
-  fireEvent.click(queueButton);
-
-  await waitFor(() => expect(requests).toHaveLength(1));
-  expect(requests[0]).toMatchObject({ text: 'Queue this for later listening.', voice: 'Adrian' });
+test('creation submits one durable request and does not ask the browser to generate audio', async () => {
+  const originalMutation = ConvexReactClient.prototype.mutation;
+  const requests: any[] = []; let paid = 0;
+  ConvexReactClient.prototype.mutation = (async (_name: any, args: any) => { requests.push(args); return 'created-record'; }) as typeof originalMutation;
+  try {
+    const { container } = renderApp({ requestPregeneration: async () => { paid++; } });
+    fireEvent.click(container.querySelector('button[title="Add Article or URL"]')!);
+    fireEvent.click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Paste text')!);
+    fireEvent.change(container.querySelector('textarea')!, { target: { value: 'Queue this for later listening.' } });
+    fireEvent.click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Create audio')!);
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].content).toBe('Queue this for later listening.'); expect(requests[0].ownerToken.length).toBeGreaterThan(31);
+    expect(paid).toBe(0);
+  } finally { ConvexReactClient.prototype.mutation = originalMutation; }
 });
 
 test('anonymous listeners read the global exact cache and skip persistence', async () => {
@@ -1160,7 +1041,7 @@ test('anonymous listeners read the global exact cache and skip persistence', asy
   const loadedUrls: string[] = [];
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
-    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    if (url.split('?')[0] !== '/sample_audio.mp3') loadedUrls.push(url);
     return originalLoadAudioUrl.call(this, url, words, duration, onError);
   };
 
@@ -1219,7 +1100,7 @@ test('an article whose pre-generation is running is awaited and then played from
   const loadedUrls: string[] = [];
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   SpeechEngine.prototype.loadAudioUrl = function (url, words, duration, onError) {
-    if (url !== '/sample_audio.mp3') loadedUrls.push(url);
+    if (url.split('?')[0] !== '/sample_audio.mp3') loadedUrls.push(url);
     return originalLoadAudioUrl.call(this, url, words, duration, onError);
   };
 
@@ -1456,6 +1337,7 @@ test('Soniox preparation failure offers an explicit retry without invoking devic
   try {
     const { container } = renderApp({
       durableNarration: true,
+      narrationPage: async () => ({ status: 'none', total: 0, completed: 0, error: null, sections: [] }),
       requestPregeneration: async () => { preparationCalls++; throw new Error('Soniox is busy. Please retry.'); },
     });
     await narrateRawText(container, 'Only the saved Soniox voice should read this article.');
@@ -1498,20 +1380,24 @@ test('durable saved progress prevents playing the opening before the resume sect
   }]));
   window.location.href = `http://localhost/?url=${encodeURIComponent(url)}`;
   let release!: () => void;
+  let targetRequested = false;
   const secondSection = new Promise<void>(resolve => { release = resolve; });
-  global.fetch = (async () => new Response(new Uint8Array([1, 2, 3]))) as unknown as typeof fetch;
+  global.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/1.mp3')) { targetRequested = true; await secondSection; }
+    return new Response(new Uint8Array([1, 2, 3]));
+  }) as unknown as typeof fetch;
   const { container } = renderApp({
     durableNarration: true,
-    narrationPage: async ({ from }) => {
-      if (from === 1) await secondSection;
-      return { status: 'done', total: 2, completed: 2, error: null, sections: [{
-        index: from, audioUrl: `https://audio.example/${from}.mp3`, duration: 150,
-        words: words.slice(from * 150, (from + 1) * 150).map(w => ({ ...w, start: w.start - from * 150, end: w.end - from * 150 })),
-      }] };
+    narrationPage: async () => {
+      return { status: 'done', total: 2, completed: 2, error: null, sections: [0, 1].map(index => ({
+        index, audioUrl: `https://audio.example/${index}.mp3`, duration: 150,
+        words: words.slice(index * 150, (index + 1) * 150).map(w => ({ ...w, start: w.start - index * 150, end: w.end - index * 150 })),
+      })) };
     },
   });
-  await waitFor(() => expect(((window as any).__engine as SpeechEngine).getSnapshot().bufferedSeconds).toBe(150));
+  await waitFor(() => expect(targetRequested).toBe(true));
   const engine = (window as any).__engine as SpeechEngine;
+  expect(engine.getSnapshot().bufferedSeconds).toBe(0);
   expect(engine.getSnapshot().canStartPlayback).toBe(false);
   fireEvent.keyDown(window, { code: 'Space' });
   expect(engine.isPlaying).toBe(false);

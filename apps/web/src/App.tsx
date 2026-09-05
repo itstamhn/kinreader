@@ -1,3 +1,4 @@
+import { useArticleCreation, type CreationInput } from './hooks/useArticleCreation';
 import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
@@ -20,7 +21,7 @@ import { createWordTimingAccumulator } from './utils/wordTimings';
 import { openParallelSonioxStream } from './utils/parallelSoniox';
 import { playDurableNarration } from './utils/durableNarration';
 import { DURABLE_NARRATION_MAX_CHARS, DURABLE_NARRATION_MAX_WORDS, type NarrationPage } from '@kinreader/backend/tts/durableNarration';
-import { narrationText, MAX_PREGENERATION_CHARS } from '@kinreader/backend/tts/limits';
+import { narrationText } from '@kinreader/backend/tts/limits';
 import { articleCacheKey, articleContentDigest } from './utils/articleCacheKey';
 import { decodeShareId, buildShareLink } from './utils/shareLink';
 import {
@@ -104,7 +105,7 @@ const SONIOX_UNAVAILABLE_MESSAGE = 'Soniox audio is unavailable. Retry audio to 
 
 export interface AppProps {
   durableNarration?: boolean;
-  narrationPage?: (input: { contentDigest: string; voice: string; from: number }) => Promise<NarrationPage>;
+  narrationPage?: (input: { contentDigest: string; voice: string; from: number; completedManifest?: boolean }) => Promise<NarrationPage>;
   streamingTransport?: (options: OpenSonioxStreamOptions) => { cancel(): void };
   requestTemporaryKey?: (clientId: string) => Promise<{ apiKey: string; expiresAt: string }>;
   loadExactTrack?: (input: { url: string; voice: string }) => Promise<ExactTrackCacheEntry | null>;
@@ -176,11 +177,9 @@ export function App({
 }: AppProps = {}) {
   const crpc = useCRPC();
   const crpcClient = useCRPCClient();
-  const extractArticleMutation = useMutation(crpc.routers.articles.extract.mutationOptions());
   const temporaryKeyMutation = useMutation(crpc.routers.tts.temporaryKey.mutationOptions());
   const trackUploadUrlMutation = useMutation(crpc.routers.tts.generateTrackUploadUrl.mutationOptions());
   const persistTrackMutation = useMutation(crpc.routers.tts.persistTrack.mutationOptions());
-  const pregenerateMutation = useMutation(crpc.routers.tts.pregenerate.mutationOptions());
   const prepareNarrationMutation = useMutation(crpc.routers.narration.prepare.mutationOptions());
   const getNarrationText = (content: string) => narrationText(content, durableNarration ? { maxChars: DURABLE_NARRATION_MAX_CHARS, maxWords: DURABLE_NARRATION_MAX_WORDS } : undefined);
   const saveProgressMutation = useMutation(crpc.routers.users.saveUserProgress.mutationOptions());
@@ -217,25 +216,6 @@ export function App({
   // signed-in listeners can persist their own streamed tracks.
   const canReadServerExactCache = serverExactCacheEnabled ?? true;
   const canPersistExactTrack = serverExactCacheEnabled ?? Boolean(user);
-
-  // Fire-and-forget: synthesise into the global cache so the next open of this
-  // article (by anyone) is an instant cached track instead of a live stream.
-  const pregenerateArticle = (target: ArticleData) => {
-    const text = getNarrationText(target.content).text;
-    if (target.recordingId || !text || (!durableNarration && text.length > MAX_PREGENERATION_CHARS) || target.title === SAMPLE_ARTICLE.title) return;
-    const request: PregenerationRequest = {
-      title: target.title,
-      author: target.author,
-      text,
-      voice: settings.sonioxVoice || 'Adrian',
-      clientId: getOrCreateClientId(),
-    };
-    void Promise.resolve()
-      .then(() => (requestPregeneration ? requestPregeneration(request) : durableNarration ? prepareNarrationMutation.mutateAsync(request) : pregenerateMutation.mutateAsync(request)))
-      .catch((error) => {
-        console.warn('Audio preparation request failed:', error);
-      });
-  };
 
   const { data: cloudPlaylist } = useQuery(
     crpc.routers.users.getUserPlaylist.queryOptions({}, { enabled: !!user })
@@ -360,8 +340,9 @@ export function App({
     engine.seekToProgress(percent);
   };
 
-  const handleSelectWord = (wordIndex: number) => {
+  const handleSelectWord = (wordIndex: number, startPlayback = false) => {
     engine.seekToWordIndex(wordIndex);
+    if (startPlayback) engine.play();
   };
 
   const revokeRestObjectUrl = () => {
@@ -378,7 +359,7 @@ export function App({
     art: ArticleData,
     eng: SpeechEngine,
     currSettings: ReaderSettings,
-    options: { resumeWordIndex?: number } = {}
+    options: { resumeWordIndex?: number; savedArtifactExpected?: boolean } = {}
   ) => {
     const currentLoadId = ++loadIdRef.current;
 
@@ -422,7 +403,7 @@ export function App({
 
     if (!art.recordingId && art.title === SAMPLE_ARTICLE.title) {
       try {
-        eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION, () => reportAudioFailure('The sample recording could not be loaded.'));
+        eng.loadAudioUrl('/sample_audio.mp3?v=word-seek', SAMPLE_TIMINGS, SAMPLE_DURATION, () => reportAudioFailure('The sample recording could not be loaded.'));
         if (loadIdRef.current === currentLoadId) {
           applyResume(SAMPLE_TIMINGS);
           setPlaybackStatus('ready');
@@ -440,7 +421,7 @@ export function App({
     // the displayed words, the stream, the cache key and pre-generation all
     // use this same text so they agree word for word.
     setPreparationProgress(null);
-    const narration = getNarrationText(art.content);
+    const narration = getNarrationText(art.narrationText || art.content);
     const narratedText = narration.text;
     if (narration.truncated) {
       setTruncationNotice(
@@ -775,12 +756,15 @@ export function App({
           await playDurableNarration({
             engine: eng, initialWords: initialWordTimings, duration: totalDuration, signal: controller.signal,
             resumeWordIndex: pendingResumeIndex,
+            readSavedFirst: Boolean(art.recordingId || options.savedArtifactExpected),
+            continuousSource: narrationPage ? undefined : { contentDigest, voice, ...(art.recordingId ? { recordingId: art.recordingId, ownerToken: recordingOwnerToken(art.recordingId) } : {}) },
             onAudioError: () => { if (isCurrentLoad()) reportAudioFailure('The saved Soniox recording could not be played.'); },
             prepare: () => {
+              if (art.recordingId) return Promise.resolve();
               const input = { text: narratedText, voice, clientId, title: art.title, author: art.author, ...(art.recordingId ? { recordingId: art.recordingId, ownerToken: recordingOwnerToken(art.recordingId) } : {}) };
               return requestPregeneration ? requestPregeneration(input) : prepareNarrationMutation.mutateAsync(input);
             },
-            page: from => narrationPage ? narrationPage({ contentDigest, voice, from }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from, ...(art.recordingId ? { recordingId: art.recordingId, ownerToken: recordingOwnerToken(art.recordingId) } : {}) }),
+            page: (from, completedManifest) => narrationPage ? narrationPage({ contentDigest, voice, from, completedManifest }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from, completedManifest, ...(art.recordingId ? { recordingId: art.recordingId, ownerToken: recordingOwnerToken(art.recordingId) } : {}) }),
             pollMs: pregenerationPollMs,
             onProgress: (completed, total) => {
               if (isCurrentLoad()) setPreparationProgress(completed === total ? null : `Audio saved: ${completed} of ${total} sections. Preparation continues if you leave.`);
@@ -852,9 +836,9 @@ export function App({
   const effectiveSavedArticles: SavedArticleItem[] = useMemo(() => {
     if (user && cloudPlaylist && cloudPlaylist.length > 0) {
       return cloudPlaylist.map((cp: any) => ({
-        id: cp.article.url || cp.articleId,
+        id: cp.article.recordingId ? `recording:${cp.article.recordingId}` : cp.article.url || cp.articleId,
         article: {
-          recordingId: cp.article.recordingId,
+          recordingId: cp.article.recordingId, stage: cp.article.stage, error: cp.article.error, truncated: cp.article.truncated,
           title: cp.article.title,
           author: cp.article.author,
           authorHandle: cp.article.authorHandle,
@@ -881,12 +865,13 @@ export function App({
     if (listening && position) return position.wordIndex;
     const id = articleLibraryId(target);
     const item =
-      effectiveSavedArticles.find((entry) => entry.id === id || entry.article.title === target.title) ??
-      getSavedArticles().find((entry) => entry.id === id || entry.article.title === target.title);
+      effectiveSavedArticles.find((entry) => entry.id === id || (!target.recordingId && !entry.article.recordingId && entry.article.title === target.title)) ??
+      getSavedArticles().find((entry) => entry.id === id || (!target.recordingId && !entry.article.recordingId && entry.article.title === target.title));
     return resumeWordIndexFor(item);
   };
 
-  const handleLoadNewArticle = (newArticle: ArticleData, options: { resume?: boolean } = {}) => {
+  const handleLoadNewArticle = (newArticle: ArticleData, options: { resume?: boolean; savedArtifactExpected?: boolean } = {}) => {
+    extractionRef.current += 1;
     const resumeWordIndex = options.resume === false ? 0 : resumeIndexFor(newArticle);
     setPendingLoadUrl(null);
     setArticle(newArticle);
@@ -913,103 +898,29 @@ export function App({
       });
     }
     // Opening starts or joins the same durable job used by the queue.
-    loadArticleContent(newArticle, engine, settings, { resumeWordIndex });
+    loadArticleContent(newArticle, engine, settings, { resumeWordIndex, savedArtifactExpected: options.savedArtifactExpected });
   };
 
-  // Fetch a remote article and open it, with the reader showing that a load
-  // is in progress and saying so when it fails. Shared by the `?url=` deep
-  // link, the `?read=` share link and the library's quick-paste field.
-  const extractAndOpen = (url: string, asListening = false) => {
-    const extraction = ++extractionRef.current;
-    const decodedUrl = url.trim();
-    let host = decodedUrl;
-    try {
-      host = new URL(decodedUrl).hostname.replace(/^www\./, '');
-    } catch {}
-
-    const placeholder: ArticleData = {
-      title: 'Loading article…',
-      author: host,
-      content: '',
-      sourceUrl: decodedUrl,
-      sourceType: 'article',
-    };
-    loadIdRef.current += 1;
-    activeStreamRef.current?.cancel();
-    activeStreamRef.current = null;
-    engine.stop();
-    engine.setWordTimings([], 0);
-    setArticle(placeholder);
-    setPendingLoadUrl(decodedUrl);
-    setLoadError(null);
-    setPlaybackStatus('synthesizing');
-
-    return extractArticleMutation
-      .mutateAsync({ url: decodedUrl, clientId: getOrCreateClientId() })
-      .then(async (data) => {
-        if (extraction !== extractionRef.current) return null;
-        if (!data.title || !data.content || data.content === 'No readable text could be extracted from this page.') {
-          throw new Error('No readable text could be extracted from this page.');
-        }
-        if (asListening) {
-          const ownerToken = crypto.randomUUID();
-          const content = getNarrationText(data.content).text;
-          const recordingId = await crpcClient.routers.listening.create.mutate({
-            ownerToken, title: data.title, content, author: data.author, sourceUrl: data.sourceUrl,
-            sourceType: data.sourceType, image: data.image, voice: settings.sonioxVoice || 'Adrian',
-          });
-          writeListeningValue(`owner_${recordingId}`, ownerToken);
-          const recording = { ...data, content, recordingId };
-          saveArticleToLibrary(recording); setSavedArticles(getSavedArticles());
-          if (extraction !== extractionRef.current) return null;
-          setShareState({ visibility: 'private', canManage: true });
-          handleLoadNewArticle(recording);
-          window.history.replaceState({}, '', `/?read=p_${recordingId}`);
-          return recording;
-        }
-        handleLoadNewArticle(data);
-        return data;
-      })
-      .catch((err: unknown) => {
-        if (extraction !== extractionRef.current) return null;
-        console.warn('Failed to load article:', err);
-        const reason = err instanceof Error && err.message ? err.message : 'Please try again.';
-        setPendingLoadUrl(null);
-        if (!listening && !asListening) {
-          setArticle(SAMPLE_ARTICLE);
-          setQueryUrl(null, { history: 'replace' });
-          loadArticleContent(SAMPLE_ARTICLE, engine, settings);
-        }
-        setLoadError(`Couldn’t read ${host}: ${reason}`);
-        return null;
-      });
+  const [createdArticle, setCreatedArticle] = useState<ArticleData | null>(null);
+  const creator = useArticleCreation(input => crpcClient.routers.listening.create.mutate({ ...input, voice: settings.sonioxVoice || 'Adrian', clientId: getOrCreateClientId() }), target => {
+    saveArticleToLibrary(target); setSavedArticles(getSavedArticles()); setCreatedArticle(target);
+  });
+  const submitCreation = (input: CreationInput) => {
+    const selection = extractionRef.current;
+    const shouldOpen = !engine.getSnapshot().isPlaying;
+    void creator.submit(input).then(target => {
+      if (shouldOpen && !engine.getSnapshot().isPlaying && selection === extractionRef.current) openListeningArticle(target);
+    }).catch(() => {});
   };
 
   const handleViewChange = (newView: 'reader' | 'queue' | 'settings' | 'auth') => {
+    extractionRef.current += 1;
     // Reading positions are written straight to storage while listening;
     // refresh the in-memory library when it is about to be shown.
     if (newView !== 'reader') setSavedArticles(getSavedArticles());
     setActiveView(newView === 'reader' ? null : newView, {
       history: newView === 'reader' ? 'replace' : 'push',
     });
-  };
-
-  const handleAddToQueue = (newArt: ArticleData) => {
-    saveArticleToLibrary(newArt);
-    setSavedArticles(getSavedArticles());
-    pregenerateArticle(newArt);
-    if (user) {
-      addToPlaylistMutation.mutate({
-        url: newArt.sourceUrl || newArt.title,
-        title: newArt.title,
-        content: newArt.content,
-        author: newArt.author,
-        authorHandle: newArt.authorHandle,
-        authorAvatar: newArt.authorAvatar,
-        image: newArt.image,
-        sourceType: newArt.sourceType,
-      });
-    }
   };
 
   const handleDeleteArticle = (id: string) => {
@@ -1066,11 +977,13 @@ export function App({
       setArticle(foundLocal.article);
       loadArticleContent(foundLocal.article, engine, settings, {
         resumeWordIndex: resumeWordIndexFor(foundLocal),
+        savedArtifactExpected: true,
       });
       return;
     }
 
-    void extractAndOpen(decodedUrl);
+    // Old source links remain usable, but generation begins only with an explicit creation action.
+    setDetectedClipboardUrl(decodedUrl);
   }, [queryUrl]);
 
   // 2. Initial sample audio load on mount (only if no custom ?url= query is present)
@@ -1249,46 +1162,63 @@ export function App({
   }, []);
 
 
-  const createListeningArticle = async (data: ArticleData) => {
-    setLoadError(null);
-    try {
-      const ownerToken = crypto.randomUUID();
-      const content = getNarrationText(data.content).text;
-      const recordingId = await crpcClient.routers.listening.create.mutate({ ownerToken, title: data.title, content, author: data.author, sourceUrl: data.sourceUrl, sourceType: data.sourceType, image: data.image, voice: settings.sonioxVoice || 'Adrian' });
-      writeListeningValue(`owner_${recordingId}`, ownerToken);
-      const target = { ...data, content, recordingId };
-      saveArticleToLibrary(target); setSavedArticles(getSavedArticles());
-      setShareState({ visibility: 'private', canManage: true });
-      handleLoadNewArticle(target);
-      window.history.replaceState({}, '', `/?read=p_${recordingId}`);
-    } catch (error) { setListeningToast(error instanceof Error ? error.message : 'Could not create audio. Try again.'); }
+  const loadedRecordingRef = useRef('');
+  const openListeningArticle = (target: ArticleData) => {
+    if (!target.recordingId) { handleLoadNewArticle(target, { savedArtifactExpected: true }); return; }
+    extractionRef.current += 1;
+    loadIdRef.current += 1; activeStreamRef.current?.cancel(); engine.stop(); engine.setWordTimings([], 0);
+    loadedRecordingRef.current = '';
+    setListening(true); setListeningView('listen'); setArticle(target); setPendingLoadUrl(null); setLoadError(null);
+    setActiveView(null); setCreatedArticle(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('url'); params.set('read', `p_${target.recordingId}`);
+    window.history.replaceState({}, '', `/?${params}`);
   };
-  const openListeningArticle = async (target: ArticleData) => {
-    if (!target.recordingId) { handleLoadNewArticle(target); return; }
-    const extraction = ++extractionRef.current;
-    try {
-      const record = await crpcClient.routers.listening.get.query({ recordingId: target.recordingId, ownerToken: recordingOwnerToken(target.recordingId) });
-      if (extraction !== extractionRef.current) return;
-      if (record.ownerToken) writeListeningValue(`owner_${record.recordingId}`, record.ownerToken);
-      setShareState({ visibility: record.visibility, canManage: record.canManage });
-      setLoadError(null); setArticle(record); setPendingLoadUrl(null);
-      setSettings(previous => ({ ...previous, sonioxVoice: record.voice }));
+  const recordQuery = useQuery(crpc.routers.listening.get.queryOptions({ recordingId: article.recordingId || 'none', ownerToken: recordingOwnerToken(article.recordingId) }, { enabled: !!article.recordingId, refetchInterval: 1500 }));
+  useEffect(() => {
+    const record = recordQuery.data;
+    if (!record || record.recordingId !== article.recordingId) return;
+    if (record.ownerToken) writeListeningValue(`owner_${record.recordingId}`, record.ownerToken);
+    setShareState({ visibility: record.visibility, canManage: record.canManage });
+    setArticle(record); setPendingLoadUrl(null); setLoadError(null);
+    saveArticleToLibrary(record); setSavedArticles(getSavedArticles());
+    const key = `${record.recordingId}:${record.attempt || 0}`;
+    if (record.content && !['finding', 'needsReview', 'extractFailed', 'cancelled'].includes(record.stage) && loadedRecordingRef.current !== key) {
+      loadedRecordingRef.current = key;
+      const remembered = readListeningValue<{ wordIndex: number } | null>(`position_${record.recordingId}`, null);
       const params = new URLSearchParams(window.location.search);
       const callbackWord = params.get('read') === `p_${record.recordingId}` ? params.get('w') : null;
-      const remembered = readListeningValue<{ wordIndex: number } | null>(`position_${record.recordingId}`, null);
-      const resumeWordIndex = callbackWord && /^\d+$/.test(callbackWord) ? Number(callbackWord) : remembered?.wordIndex ?? resumeIndexFor(record);
-      const resumeParams = new URLSearchParams({ read: `p_${record.recordingId}` });
-      if (params.get('save') === '1') { resumeParams.set('save', '1'); if (callbackWord) resumeParams.set('w', callbackWord); if (params.get('t')) resumeParams.set('t', params.get('t')!); }
-      window.history.replaceState({}, '', `/?${resumeParams}`);
-      await loadArticleContent(record, engine, { ...settings, sonioxVoice: record.voice }, { resumeWordIndex });
-    } catch (error) {
-      if (extraction !== extractionRef.current) return;
-      setPendingLoadUrl(null); setLoadError(error instanceof Error ? error.message : 'This listening link is unavailable.');
+      void loadArticleContent(record, engine, { ...settings, sonioxVoice: record.voice }, { resumeWordIndex: callbackWord && /^\d+$/.test(callbackWord) ? Number(callbackWord) : remembered?.wordIndex ?? resumeIndexFor(record) });
     }
+  }, [recordQuery.data]);
+  useEffect(() => { if (recordQuery.error) setLoadError(recordQuery.error.message); }, [recordQuery.error]);
+  const controlRecording = async (action: 'retry' | 'approve' | 'replace' | 'cancel', content?: string) => {
+    if (!article.recordingId) return;
+    try {
+      await crpcClient.routers.listening.control.mutate({ recordingId: article.recordingId, ownerToken: recordingOwnerToken(article.recordingId), action, content });
+      if (action === 'cancel') { activeStreamRef.current?.cancel(); engine.pause(); }
+      await recordQuery.refetch();
+    } catch (error) { setListeningToast(error instanceof Error ? error.message : 'Could not update preparation. Try again.'); }
   };
+  // Refresh saved pending metadata without changing the selected recording.
+  useEffect(() => {
+    let stopped = false;
+    const refresh = async () => {
+      const items = getSavedArticles().filter(item => item.article.recordingId && !['complete', 'cancelled', 'extractFailed', 'audioFailed', 'needsReview'].includes(item.article.stage || '')).slice(0, 20);
+      await Promise.all(items.map(async item => {
+        try {
+          const record = await crpcClient.routers.listening.get.query({ recordingId: item.article.recordingId!, ownerToken: recordingOwnerToken(item.article.recordingId) });
+          if (!stopped && getSavedArticles().some(saved => saved.id === item.id)) saveArticleToLibrary(record);
+        } catch { /* Private or removed records do not become public through library refresh. */ }
+      }));
+      if (!stopped && items.length) setSavedArticles(getSavedArticles());
+    };
+    void refresh(); const timer = setInterval(refresh, 3000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [crpcClient]);
   const listeningSaved = !!user && (explicitlySaved.includes(listeningKey(article)) || !!cloudPlaylist?.some((item: any) => article.recordingId ? item.article.recordingId === article.recordingId : item.article.url === article.sourceUrl));
   const saveListening = async () => {
-    if (!user || savingRef.current || !article.content || pendingLoadUrl || restoreSecondsRef.current !== null) return;
+    if (!user || savingRef.current || (!article.recordingId && !article.content) || restoreSecondsRef.current !== null) return;
     savingRef.current = true;
     const snapshot = engine.getSnapshot();
     const target = article;
@@ -1317,7 +1247,7 @@ export function App({
     if (!link) throw new Error('Create a saved recording before sharing this text.');
     return link;
   };
-  const listeningPrepState: PreparationState = loadError ? 'extractFailed' : pendingLoadUrl ? 'finding'
+  const listeningPrepState: PreparationState = loadError ? 'extractFailed' : article.recordingId && article.stage ? (['finding', 'needsReview', 'extractFailed', 'cancelled'].includes(article.stage) ? article.stage : playbackStatus === 'error' ? 'audioFailed' : !playback.playbackReady || (!playback.canStartPlayback && !playback.isPlaying) ? article.stage === 'complete' ? 'loadingSaved' : 'preparing' : article.stage) : pendingLoadUrl ? 'finding'
     : playbackStatus === 'error' ? 'audioFailed'
     : (playback.isStreaming || preparationProgress) && playback.playbackReady && (playback.canStartPlayback || playback.isPlaying) ? 'partial'
     : awaitingPregeneration || !playback.playbackReady || (!playback.canStartPlayback && !playback.isPlaying) ? 'preparing' : 'complete';
@@ -1384,18 +1314,20 @@ export function App({
           }}
         />
       ) : listening && activeView === 'reader' ? (
-        <div className="listening-shell">
+        <div className="listening-shell" data-reader-theme={settings.readerTheme}>
           <div style={{ height: '100%' }} inert={savePromptOpen || shareSheetOpen}>
             {listeningView === 'create' ? <CreateListening isPlaying={playback.isPlaying} remainingSeconds={remainingSeconds / playback.rate}
-              onBack={() => setListeningView('listen')} onCreate={url => { setListeningView('listen'); void extractAndOpen(url, true); }} />
+              onBack={() => { extractionRef.current += 1; setListeningView('listen'); }} onCreate={input => { setListeningView('listen'); submitCreation(input); }} />
               : listeningView === 'library' ? <ListeningLibrary items={effectiveSavedArticles} onBack={() => setListeningView('listen')}
                 onAdd={() => setIsInputOpen(true)} onSettings={() => handleViewChange('settings')} onSelect={target => { setListeningView('listen'); void openListeningArticle(target); }} />
               : <ListeningPage article={article} playback={playback} prepState={listeningPrepState} signedIn={!!user} saved={listeningSaved}
+                theme={settings.readerTheme} accountName={user?.name} avatarUrl={user?.avatar}
                 onPlay={handleTogglePlay} onSeek={handleSeekProgress} onSpeed={handleSpeedChange} onWord={handleSelectWord}
                 onSave={() => { if (user) void saveListening(); else setSavePromptOpen(true); }} onShare={() => setShareSheetOpen(true)}
                 onCreate={() => setListeningView('create')} onLibrary={() => { setSavedArticles(getSavedArticles()); setListeningView('library'); }} onAuth={() => handleViewChange('auth')}
-                onRetry={() => loadArticleContent(article, engine, settings, { resumeWordIndex: engine.currentWordIndex })}
-                toast={listeningToast} notice={loadError || truncationNotice} />}
+                onRetry={() => article.recordingId && !['complete', 'partial', 'preparing'].includes(article.stage || '') ? void controlRecording('retry') : void loadArticleContent(article, engine, settings, { resumeWordIndex: engine.currentWordIndex })}
+                canManage={shareState.canManage} onApprove={() => void controlRecording('approve')} onReplace={content => void controlRecording('replace', content)} onCancel={() => void controlRecording('cancel')}
+                toast={listeningToast} notice={loadError || article.error || (article.truncated ? 'This recording contains the first part of a long article.' : truncationNotice)} />}
           </div>
           {savePromptOpen && <SaveListeningSheet currentTime={playback.currentTime / playback.rate} callbackURL={() => listeningCallbackURL(article, engine.getSnapshot().currentTime, engine.currentWordIndex)} onClose={() => setSavePromptOpen(false)} />}
           {shareSheetOpen && <ShareListeningSheet article={article} duration={playback.duration} visibility={article.recordingId ? shareState.visibility : 'link'} canManage={!!article.recordingId && shareState.canManage}
@@ -1409,13 +1341,13 @@ export function App({
           currentArticleId={article.sourceUrl || article.title}
           onSelectArticle={(newArt) => {
             if (newArt.recordingId) { setListening(true); setListeningView('listen'); void openListeningArticle(newArt); }
-            else handleLoadNewArticle(newArt);
+            else handleLoadNewArticle(newArt, { savedArtifactExpected: true });
             handleViewChange('reader');
           }}
           onDeleteArticle={handleDeleteArticle}
           onQuickExtract={(urlToExtract) => {
             handleViewChange('reader');
-            void extractAndOpen(urlToExtract);
+            submitCreation({ sourceUrl: urlToExtract });
           }}
           user={user}
           onOpenAuth={() => handleViewChange('auth')}
@@ -1499,7 +1431,7 @@ export function App({
             onDismissNotice={() => setLoadError(null)}
             infoMessage={
               awaitingPregeneration
-                ? 'Preparing audio… checking for a saved recording.'
+                ? article.recordingId ? 'Loading saved audio…' : 'Preparing audio… checking for a saved recording.'
                 : preparationProgress ?? truncationNotice ?? undefined
             }
             infoBusy={awaitingPregeneration}
@@ -1519,30 +1451,16 @@ export function App({
         </ReaderFrame>
       )}
 
-      {/* Modals & Bottom Sheets */}
-      <ClipboardDetectSheet
-        isOpen={!!detectedClipboardUrl}
-        detectedUrl={detectedClipboardUrl}
-        onClose={() => setDetectedClipboardUrl('')}
-        onNarrateNow={(newArt) => {
-          handleLoadNewArticle(newArt);
-          handleViewChange('reader');
-        }}
-        onAddToQueue={handleAddToQueue}
-      />
+      {/* Creation belongs to the app, so dismissing a form cannot lose the request. */}
+      {(creator.busy || creator.error || creator.pending || createdArticle || listeningToast) && <div className="creation-status" role="status">
+        {creator.busy ? 'Saving your request…' : creator.error || listeningToast || (createdArticle ? 'Recording created. Preparation continues in the background.' : 'A creation request is waiting to be confirmed.')}
+        {!creator.busy && creator.pending && <button onClick={() => void creator.retry().catch(() => {})}>Retry creation</button>}
+        {createdArticle && <button onClick={() => openListeningArticle(createdArticle)}>Open recording</button>}
+      </div>}
+      <ClipboardDetectSheet isOpen={!!detectedClipboardUrl} detectedUrl={detectedClipboardUrl}
+        onClose={() => { extractionRef.current += 1; setDetectedClipboardUrl(''); }} onCreate={submitCreation} />
+      <UrlInputModal isOpen={isInputOpen} onClose={() => { extractionRef.current += 1; setIsInputOpen(false); }} onCreate={submitCreation} />
 
-      <UrlInputModal
-        isOpen={isInputOpen}
-        onClose={() => setIsInputOpen(false)}
-        onLoadArticle={(newArt) => {
-          if (listening) {
-            setListeningView('listen');
-            void createListeningArticle(newArt);
-          } else handleLoadNewArticle(newArt);
-          handleViewChange('reader');
-        }}
-        onAddToQueue={handleAddToQueue}
-      />
     </div>
   );
 }

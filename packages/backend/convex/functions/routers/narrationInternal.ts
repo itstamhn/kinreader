@@ -1,10 +1,24 @@
 import { v } from 'convex/values';
-import { internalMutation, internalQuery, type MutationCtx } from '../_generated/server';
+import { internalMutation, internalQuery, type MutationCtx, env } from '../_generated/server';
 import { internal } from '../_generated/api';
 import type { Doc } from '../_generated/dataModel';
-import { splitIntoSegments } from '../../shared/tts/parallelSoniox';
-import { NARRATION_SECTION_CHARS, NARRATION_CONCURRENCY, NARRATION_LEASE_MS } from '../../shared/tts/durableNarration';
+import { NARRATION_CONCURRENCY, NARRATION_LEASE_MS, planNarrationSections } from '../../shared/tts/durableNarration';
 import schema from '../schema';
+
+async function scheduleCompletedPackaging(ctx: MutationCtx, job: Doc<'narrationJobs'>) {
+  try {
+    if (!env.AUDIO_PACKAGER_ORIGIN || !env.AUDIO_PACKAGER_SECRET) return;
+    const separator = job.contentDigest.lastIndexOf(':');
+    if (separator < 1) return;
+    const recordingId = job.contentDigest.slice(0, separator);
+    const contentDigest = job.contentDigest.slice(separator + 1);
+    if (!/^[a-f0-9]{64}$/.test(contentDigest)) return;
+    const input = { contentDigest, voice: job.voice, recordingId };
+    const bytes = new TextEncoder().encode(JSON.stringify([contentDigest, job.voice, recordingId]));
+    const key = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
+    await ctx.runMutation(internal.audioPackaging.start, { key, input });
+  } catch { /* Saved MP3 completion is authoritative. */ }
+}
 
 async function schedule(ctx: MutationCtx, section: Doc<'narrationSections'>, delay = 0) {
   const attempt = section.attempt + 1;
@@ -37,7 +51,7 @@ export const prepare = internalMutation({
   handler: async (ctx, args) => {
     const existing = await ctx.db.query('narrationJobs')
       .withIndex('by_contentDigest_and_voice', q => q.eq('contentDigest', args.contentDigest).eq('voice', args.voice)).unique();
-    if (existing && existing.status !== 'failed') { await pump(ctx); return existing._id; }
+    if (existing && !['failed', 'cancelled'].includes(existing.status)) { await pump(ctx); return existing._id; }
     const rate: { ok: boolean } = await ctx.runMutation(internal.routers.ttsInternal.consumeTtsRateLimit, {
       key: args.clientKey, purpose: 'synthesize',
     });
@@ -50,7 +64,7 @@ export const prepare = internalMutation({
       await pump(ctx);
       return existing._id;
     }
-    const texts = splitIntoSegments(args.text, Math.ceil(args.text.length / NARRATION_SECTION_CHARS)).map(s => s.trim());
+    const texts = planNarrationSections(args.text);
     const jobId = await ctx.db.insert('narrationJobs', { contentDigest: args.contentDigest, voice: args.voice, status: 'running', total: texts.length, completed: 0, createdAt: Date.now() });
     for (const [index, text] of texts.entries()) {
       await ctx.db.insert('narrationSections', { jobId, index, text, status: 'queued', attempt: 0 });
@@ -67,7 +81,7 @@ export const work = internalQuery({
     const section = await ctx.db.get(args.sectionId);
     if (!section || section.status !== 'running' || section.attempt !== args.attempt) return null;
     const job = await ctx.db.get(section.jobId);
-    return job ? { section, voice: job.voice } : null;
+    return job && job.status === 'running' ? { section, voice: job.voice } : null;
   },
 });
 
@@ -77,12 +91,15 @@ export const complete = internalMutation({
   handler: async (ctx, args) => {
     const section = await ctx.db.get(args.sectionId);
     if (!section || section.status !== 'running' || section.attempt !== args.attempt) return false;
+    const job = await ctx.db.get(section.jobId);
+    if (!job || job.status === 'cancelled') return false;
     const expected = section.text.split(/\s+/);
     if (args.words.length !== expected.length || args.words.some((w, i) => w.text !== expected[i] || !Number.isFinite(w.start) || !Number.isFinite(w.end) || w.start < 0 || w.end <= w.start || w.end > args.duration + 0.05 || (i > 0 && w.start < args.words[i - 1]!.end))) throw new Error('Incomplete or invalid section timings');
     if (!Number.isFinite(args.duration) || args.duration <= 0 || !(await ctx.db.system.get(args.storageId))) throw new Error('Missing section audio');
     await ctx.db.patch(section._id, { status: 'done', storageId: args.storageId, words: args.words, duration: args.duration, error: undefined });
-    const job = (await ctx.db.get(section.jobId))!;
-    await ctx.db.patch(job._id, { completed: job.completed + 1, ...(job.completed + 1 === job.total ? { status: 'done' as const } : {}) });
+    const finished = job.status === 'running' && job.completed + 1 === job.total;
+    await ctx.db.patch(job._id, { completed: job.completed + 1, ...(finished ? { status: 'done' as const } : {}) });
+    if (finished) await scheduleCompletedPackaging(ctx, job);
     await pump(ctx);
     return true;
   },
@@ -104,3 +121,13 @@ export const fail = internalMutation({
     return null;
   },
 });
+
+export const cancel = internalMutation({ args: { jobId: v.id('narrationJobs') }, returns: v.null(), handler: async (ctx, args) => {
+  const job = await ctx.db.get(args.jobId);
+  if (!job || job.status === 'done') return null;
+  const sections = await ctx.db.query('narrationSections').withIndex('by_jobId_and_index', q => q.eq('jobId', job._id)).take(1000);
+  for (const section of sections) if (section.status !== 'done') await ctx.db.patch(section._id, { status: 'failed', attempt: section.attempt + 1, error: 'Preparation cancelled' });
+  await ctx.db.patch(job._id, { status: 'cancelled' });
+  await pump(ctx);
+  return null;
+} });

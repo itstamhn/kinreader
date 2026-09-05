@@ -107,7 +107,7 @@
 
 /* Reader rethink, option 1c. Narration changes ink, never text geometry. */
 .reader-frame {
-  --reader-paper: #0f110f; --reader-ink: #f4f0e6; --reader-pending: #6e6f68; --reader-body-pending: #7d7e76;
+  --reader-paper: #0f110f; --reader-ink: #f4f0e6; --reader-pending: #7d7e76; --reader-body-pending: #7d7e76;
   --reader-accent-text: #f2a33c; --reader-error-text: #f28b82;
   --reader-rgb: 236,234,228; --reader-muted: rgba(var(--reader-rgb),.6);
   --reader-ghost-fill: rgba(255,255,255,.08); --reader-focus: #f2a33c; --reader-track: rgba(var(--reader-rgb),.08);
@@ -264,7 +264,7 @@
 
 /* The listening screens share these colors when integrated with the reader. */
 .listening-shell:not([data-reader-theme="light"]) {
-  --reader-paper: #0f110f; --reader-ink: #f4f0e6; --reader-pending: #6e6f68;
+  --reader-paper: #0f110f; --reader-ink: #f4f0e6; --reader-pending: #7d7e76;
   --reader-body-pending: #7d7e76; --reader-rgb: 236,234,228;
   --reader-muted: rgba(var(--reader-rgb),.6); --reader-accent-text: #f2a33c;
   --reader-error-text: #f28b82; --reader-focus: #f2a33c;
@@ -293,7 +293,17 @@
 .listening-shell .listening-finding p { color: var(--reader-pending); }
 .listening-shell :is(.listening-form input, .listening-url-field input)::placeholder { color: var(--reader-muted); }
 .listening-shell :is(button,a,input,[role="slider"]):focus-visible { outline-color: var(--reader-focus); }
-.listening-shell[data-reader-theme="light"] :is(.listening-menu, .listening-sheet, .listening-toast) { background: #e9e4d8; }
+.listening-shell[data-reader-theme="light"] :is(.listening-menu, .listening-toast) { background: #ede7da; }
+.listening-shell[data-reader-theme="light"] .listening-sheet { background: #fffdf8; }
+.listening-shell[data-reader-theme="light"] .listening-scrim { background: rgba(36,39,32,.35); }
+.listening-shell[data-reader-theme="light"] :is(.listening-cover, .listening-share-preview) { background: #e8e2d4; }
+.listening-shell[data-reader-theme="light"] .listening-seek-track i { background: #242720; }
+.listening-shell[data-reader-theme="light"] :is(.listening-form input, .listening-url-field, .listening-secondary-button) { background: rgba(36,39,32,.05); border-color: rgba(36,39,32,.12); }
+.listening-shell[data-reader-theme="light"] :is(.listening-sheet, .listening-visibility label, .listening-cover, .listening-invitation) { border-color: rgba(36,39,32,.12); }
+.listening-shell[data-reader-theme="light"] .listening-visibility label[data-selected=true] { border-color: #9a5600; }
+.listening-shell[data-reader-theme="light"] .listening-url-field { border-color: rgba(154,86,0,.45); }
+.listening-shell:not([data-reader-theme="light"]) .reader-full-text { --reader-body-pending: #c9c7bf; }
+.listening-shell[data-reader-theme="light"] .reader-full-text { --reader-body-pending: #4a473f; }
 .listening-shell[data-reader-theme="light"] :is(.listening-form input, .listening-url-field, .listening-secondary-button) { color: var(--reader-ink); }
 .listening-shell[data-reader-theme="light"] :is(.listening-wordmark, .listening-meta strong, .listening-actions,
   .listening-tempo, .listening-status, .listening-sheet p, .listening-sheet-close, .listening-position,

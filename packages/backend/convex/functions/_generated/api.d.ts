@@ -36,17 +36,29 @@ export declare const api: {
         { ownerToken?: string; recordingId: string },
         any
       >;
+      control: FunctionReference<
+        "mutation",
+        "public",
+        {
+          action: "retry" | "approve" | "replace" | "cancel";
+          content?: string;
+          ownerToken?: string;
+          recordingId: string;
+        },
+        any
+      >;
       create: FunctionReference<
         "mutation",
         "public",
         {
           author?: string;
-          content: string;
+          clientId?: string;
+          content?: string;
           image?: string;
           ownerToken: string;
           sourceType?: "article" | "x" | "text";
           sourceUrl?: string;
-          title: string;
+          title?: string;
           voice: string;
         },
         any
@@ -73,6 +85,7 @@ export declare const api: {
         "query",
         "public",
         {
+          completedManifest?: boolean;
           contentDigest: string;
           from: number;
           ownerToken?: string;
@@ -226,6 +239,92 @@ export declare const api: {
  * ```
  */
 export declare const internal: {
+  audioPackaging: {
+    claim: FunctionReference<
+      "mutation",
+      "internal",
+      { generation: string; key: string },
+      any
+    >;
+    finish: FunctionReference<
+      "mutation",
+      "internal",
+      { generation: string; key: string; ok: boolean },
+      any
+    >;
+    onComplete: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        context: { generation: string; key: string };
+        result:
+          | { kind: "success"; returnValue: null }
+          | { error: string; kind: "failed" }
+          | { kind: "canceled" };
+        workId: string;
+      },
+      any
+    >;
+    page: FunctionReference<
+      "query",
+      "internal",
+      {
+        from: number;
+        input: {
+          contentDigest: string;
+          ownerToken?: string;
+          recordingId?: string;
+          voice: string;
+        };
+      },
+      any
+    >;
+    reportFailure: FunctionReference<
+      "action",
+      "internal",
+      { generation: string; key: string },
+      any
+    >;
+    start: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        input: {
+          contentDigest: string;
+          ownerToken?: string;
+          recordingId?: string;
+          voice: string;
+        };
+        key: string;
+      },
+      any
+    >;
+  };
+  audioPackagingNode: {
+    convert: FunctionReference<
+      "action",
+      "internal",
+      {
+        generation: string;
+        input: {
+          contentDigest: string;
+          ownerToken?: string;
+          recordingId?: string;
+          voice: string;
+        };
+        key: string;
+      },
+      any
+    >;
+  };
+  audioPackagingProbe: {
+    run: FunctionReference<
+      "action",
+      "internal",
+      { audioUrls: Array<string> },
+      any
+    >;
+  };
   generated: {
     auth: {
       consumeOne: FunctionReference<
@@ -443,6 +542,93 @@ export declare const internal: {
         any
       >;
     };
+    ingestionInternal: {
+      capture: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          attempt: number;
+          author?: string;
+          authorAvatar?: string;
+          authorHandle?: string;
+          content: string;
+          image?: string;
+          needsReview: boolean;
+          recordingId: Id<"listeningRecords">;
+          reviewReason?: string;
+          sourceType: "x" | "article";
+          title: string;
+          truncated: boolean;
+        },
+        boolean
+      >;
+      fail: FunctionReference<
+        "mutation",
+        "internal",
+        { attempt: number; error: string; recordingId: Id<"listeningRecords"> },
+        null
+      >;
+      prepare: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          attempt: number;
+          digest: string;
+          recordingId: Id<"listeningRecords">;
+        },
+        null
+      >;
+      timeout: FunctionReference<
+        "mutation",
+        "internal",
+        { attempt: number; recordingId: Id<"listeningRecords"> },
+        null
+      >;
+      work: FunctionReference<
+        "query",
+        "internal",
+        { attempt: number; recordingId: Id<"listeningRecords"> },
+        null | {
+          _creationTime: number;
+          _id: Id<"listeningRecords">;
+          attempt?: number;
+          author?: string;
+          authorAvatar?: string;
+          authorHandle?: string;
+          content: string;
+          createdAt: number;
+          error?: string;
+          handoffAttempt?: number;
+          image?: string;
+          narrationJobId?: Id<"narrationJobs">;
+          narrationText?: string;
+          needsReview?: boolean;
+          ownerId?: string;
+          ownerToken: string;
+          sourceType?: "article" | "x" | "text";
+          sourceUrl?: string;
+          stage?:
+            | "finding"
+            | "needsReview"
+            | "preparing"
+            | "extractFailed"
+            | "audioFailed"
+            | "cancelled";
+          title: string;
+          truncated?: boolean;
+          visibility: "private" | "link";
+          voice: string;
+        }
+      >;
+    };
+    ingestionWorker: {
+      process: FunctionReference<
+        "action",
+        "internal",
+        { attempt: number; recordingId: Id<"listeningRecords"> },
+        null
+      >;
+    };
     listeningInternal: {
       access: FunctionReference<
         "query",
@@ -451,15 +637,31 @@ export declare const internal: {
         {
           _creationTime: number;
           _id: Id<"listeningRecords">;
+          attempt?: number;
           author?: string;
+          authorAvatar?: string;
+          authorHandle?: string;
           content: string;
           createdAt: number;
+          error?: string;
+          handoffAttempt?: number;
           image?: string;
+          narrationJobId?: Id<"narrationJobs">;
+          narrationText?: string;
+          needsReview?: boolean;
           ownerId?: string;
           ownerToken: string;
           sourceType?: "article" | "x" | "text";
           sourceUrl?: string;
+          stage?:
+            | "finding"
+            | "needsReview"
+            | "preparing"
+            | "extractFailed"
+            | "audioFailed"
+            | "cancelled";
           title: string;
+          truncated?: boolean;
           visibility: "private" | "link";
           voice: string;
         }
@@ -478,6 +680,12 @@ export declare const internal: {
       >;
     };
     narrationInternal: {
+      cancel: FunctionReference<
+        "mutation",
+        "internal",
+        { jobId: Id<"narrationJobs"> },
+        null
+      >;
       complete: FunctionReference<
         "mutation",
         "internal",
@@ -758,4 +966,6 @@ export declare const internal: {
   };
 };
 
-export declare const components: {};
+export declare const components: {
+  audioPackagingPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"audioPackagingPool">;
+};

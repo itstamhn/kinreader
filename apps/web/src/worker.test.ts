@@ -153,3 +153,27 @@ test('no file under src/ references a route that moved away from this Worker', a
 
   expect(offenders).toEqual([]);
 });
+
+
+test('sample narration supports full, partial, suffix and invalid byte ranges for word seeking', async () => {
+  const env = { ASSETS: { fetch: async (request: Request) => {
+    expect(request.headers.get('Range')).toBeNull();
+    return new Response('0123456789', { headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': '10', ETag: '"sample"' } });
+  } } };
+  for (const [range, status, body, contentRange] of [
+    [undefined, 200, '0123456789', null],
+    ['bytes=2-5', 206, '2345', 'bytes 2-5/10'],
+    ['bytes=7-', 206, '789', 'bytes 7-9/10'],
+    ['bytes=-3', 206, '789', 'bytes 7-9/10'],
+    ['bytes=20-', 416, '', 'bytes */10'],
+  ] as const) {
+    const response = await worker.fetch(new Request('https://app.kinreader.com/sample_audio.mp3', { headers: range ? { Range: range } : {} }), env);
+    expect(response.status).toBe(status);
+    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+    expect(response.headers.get('Content-Range')).toBe(contentRange);
+    expect(await response.text()).toBe(body);
+  }
+  const changed = await worker.fetch(new Request('https://app.kinreader.com/sample_audio.mp3', { headers: { Range: 'bytes=2-5', 'If-Range': '"older"' } }), env);
+  expect(changed.status).toBe(200);
+  expect(await changed.text()).toBe('0123456789');
+});

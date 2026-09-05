@@ -1,3 +1,5 @@
+import type Hls from 'hls.js';
+import { continuousBufferPolicy } from './continuousBuffer';
 import type { WordTiming } from '../types';
 import { concatBytes, scanMp3Frames, mp3DurationSeconds } from './mp3Duration';
 
@@ -29,6 +31,11 @@ export interface PlaybackSnapshot {
 
 export class SpeechEngine {
   private audio: HTMLAudioElement | null = null;
+  private hls: Hls | null = null;
+  private continuous = false;
+  private continuousAvailableSeconds = 0;
+  private continuousTimer: ReturnType<typeof setInterval> | null = null;
+
   private audioErrorHandler: (() => void) | null = null;
   private loadingDeadline: ReturnType<typeof setTimeout> | null = null;
   private clearLoadingDeadline() {
@@ -89,7 +96,9 @@ export class SpeechEngine {
   private pendingSeekTime: number | null = null;
   private awaitingNextPart: boolean = false;
   private streamComplete: boolean = false;
+  private finishedSource: boolean = false;
   private savedSections = false;
+  private savedSectionLoader: ((targetTime: number) => void) | null = null;
   private exactWordCount = 0;
   private pendingResumeWord: number | null = null;
   private pendingPartSeek: number | null = null;
@@ -134,14 +143,16 @@ export class SpeechEngine {
       this.audio.oncanplay = () => {
         this.clearLoadingDeadline();
         if (this.audioErrorHandler && this.isBuffering) {
-          if (this.partsMode) this.maybeResumeFromBuffering();
+          if (this.partsMode || this.continuous || this.mediaSource) this.maybeResumeFromBuffering();
           else this.isBuffering = false;
           this.notify();
         }
       };
       this.audio.onwaiting = () => {
         if (!this.audioErrorHandler) return;
-        this.isBuffering = this.isPlaying;
+        const realUnderrun = this.pendingSeekTime === null && this.pendingResumeWord === null &&
+          this.pendingPartSeek === null && !this.audio?.seeking;
+        if (this.isPlaying) this.enterBuffering(realUnderrun);
         this.watchAudioLoad();
         this.notify();
       };
@@ -151,6 +162,7 @@ export class SpeechEngine {
         this.notify();
       };
       this.audio.onended = () => {
+        if (this.continuous && this.isStreaming) { if (this.isPlaying) this.enterBuffering(true); return; }
         if (this.savedSections && (!this.audio?.ended || this.audio.seeking || this.pendingPartSeek !== null)) return;
         if (this.partsMode) this.onPartEnded();
         else this.handleEnded();
@@ -217,11 +229,20 @@ export class SpeechEngine {
 
   public set rate(newRate: number) {
     this._rate = Math.max(0.8, Math.min(3.5, Number(newRate.toFixed(2))));
+    this.resetBufferObservation();
 
     // 1. Update HTML5 Audio Element playback rate immediately
     if (this.audio) {
       this.audio.playbackRate = this._rate;
       this.audio.defaultPlaybackRate = this._rate;
+    }
+
+    if (this.hls) {
+      const policy = continuousBufferPolicy(this._rate);
+      this.hls.config.maxBufferLength = policy.ahead;
+      this.hls.config.maxMaxBufferLength = policy.ahead;
+      this.hls.config.backBufferLength = policy.behind;
+      this.hls.config.frontBufferFlushThreshold = policy.ahead;
     }
 
     // 2. Update Browser Speech Synthesis rate
@@ -258,11 +279,11 @@ export class SpeechEngine {
         navigator.mediaSession.setActionHandler('pause', () => this.pause());
         navigator.mediaSession.setActionHandler('seekbackward', (details) => {
           const offset = details.seekOffset || 15;
-          this.seekToProgress(Math.max(0, (((this.audio?.currentTime || 0) - offset) / (this.duration || 1)) * 100));
+          this.seekToProgress(Math.max(0, ((this.currentTime - offset) / (this.duration || 1)) * 100));
         });
         navigator.mediaSession.setActionHandler('seekforward', (details) => {
           const offset = details.seekOffset || 15;
-          this.seekToProgress(Math.min(100, (((this.audio?.currentTime || 0) + offset) / (this.duration || 1)) * 100));
+          this.seekToProgress(Math.min(100, ((this.currentTime + offset) / (this.duration || 1)) * 100));
         });
       } catch {}
     }
@@ -307,7 +328,7 @@ export class SpeechEngine {
       playbackReady: this.playbackReady,
       authoritativeTimings: this.authoritativeTimings,
       isBuffering: this.isBuffering,
-      bufferedSeconds: this.bufferedEnd(),
+      bufferedSeconds: this.partsMode ? this.parts.reduce((seconds, part) => seconds + part.duration, 0) : this.bufferedEnd(),
       bufferedAheadSeconds: this.bufferedAhead(),
       bufferTargetSeconds: this.bufferTarget(),
       canStartPlayback: this.playbackReady && !this.shouldHoldForBuffer(),
@@ -361,10 +382,16 @@ export class SpeechEngine {
     this.notify();
   }
 
-  // Prepare a minute at the selected speed before starting. After an
-  // underrun, refill fifteen seconds instead of repeatedly playing a few frames.
+  // Start with ten listening seconds. Real underruns and sustained delivery
+  // slower than consumption raise the refill target, with a bounded ceiling.
   private static readonly LOW_WATERMARK_SECONDS = 0.5;
+  private static readonly INITIAL_BUFFER_WALL_SECONDS = 10;
+  private static readonly MAX_BUFFER_WALL_SECONDS = 30;
   private hasStartedStreamingPlayback = false;
+  private refillBufferWallSeconds = SpeechEngine.INITIAL_BUFFER_WALL_SECONDS;
+  private bufferObservationEnd = 0;
+  private bufferObservationAt = 0;
+  private bufferClock = () => Date.now();
 
   private bufferedRanges(): TimeRanges | null {
     return (this.sourceBuffer?.buffered ?? this.audio?.buffered ?? null) as TimeRanges | null;
@@ -398,23 +425,40 @@ export class SpeechEngine {
   // True while a progressive session still has audio on the way. Once the
   // stream is complete, nothing is worth waiting for.
   private moreAudioExpected(): boolean {
+    if (this.continuous) {
+      const remaining = Math.max(0, this.duration - this._currentTime);
+      const ahead = this.bufferedAhead();
+      return this.isStreaming || ahead <= 0 || ahead + 0.25 < remaining;
+    }
     if (this.partsMode) return !this.streamComplete;
     return this.mediaSource !== null && (this.isStreaming || this.pendingAudioChunks.length > 0 || this.sourceBuffer?.updating === true);
   }
 
   private bufferTarget(): number {
     if (!this.moreAudioExpected()) return 0;
-    const wallSeconds = this.hasStartedStreamingPlayback ? 15 : 60;
+    const wallSeconds = this.refillBufferWallSeconds;
     return Math.min(wallSeconds * this._rate, Math.max(0, this.duration - this._currentTime));
   }
 
   private shouldHoldForBuffer(): boolean {
-    return this.pendingResumeWord !== null || (this.moreAudioExpected() && this.bufferedAhead() < this.bufferTarget());
+    if (this.pendingSeekTime !== null || (this.continuous && this.audio?.seeking)) return true;
+    if (this.pendingResumeWord !== null) return true;
+    if (this.continuous && this.bufferedAhead() > 0 && (this.audio?.readyState ?? 0) < 3) return true;
+    // ManagedMediaSource can stop HLS fragment loading once the browser has
+    // enough audio. Waiting for our larger cushion then leaves Play disabled
+    // forever: playback must consume some of that buffer before loading resumes.
+    if (this.continuous && this.hls?.bufferingEnabled === false &&
+      (this.audio?.readyState ?? 0) >= 3 && this.bufferedAhead() > SpeechEngine.LOW_WATERMARK_SECONDS) return false;
+    return this.moreAudioExpected() && this.bufferedAhead() < this.bufferTarget();
   }
 
-  private enterBuffering() {
+  private enterBuffering(realUnderrun = false) {
     if (this.isBuffering) return;
+    if (realUnderrun && this.hasStartedStreamingPlayback) {
+      this.refillBufferWallSeconds = Math.min(SpeechEngine.MAX_BUFFER_WALL_SECONDS, this.refillBufferWallSeconds + 5);
+    }
     this.isBuffering = true;
+    this.resetBufferObservation();
     this.invalidatePlayRequest();
     if (this.audio && !this.audio.paused) this.audio.pause();
     this.notify();
@@ -435,6 +479,7 @@ export class SpeechEngine {
     if (this.shouldHoldForBuffer()) return;
     this.isBuffering = false;
     this.hasStartedStreamingPlayback = true;
+    this.resetBufferObservation();
     this.lastAudioCurrentTime = -1;
     this.requestAudioPlay();
     this.notify();
@@ -443,6 +488,31 @@ export class SpeechEngine {
   private resetBufferControl() {
     this.isBuffering = false;
     this.hasStartedStreamingPlayback = false;
+    this.refillBufferWallSeconds = SpeechEngine.INITIAL_BUFFER_WALL_SECONDS;
+    this.resetBufferObservation();
+  }
+
+  private resetBufferObservation() {
+    this.bufferObservationEnd = 0;
+    this.bufferObservationAt = 0;
+  }
+
+  private observeBufferDelivery() {
+    if (!this.moreAudioExpected() || this.isBuffering || !this.isPlaying || this.audio?.paused) return;
+    const end = this.partOffset + (this.audio?.currentTime ?? 0) + this.bufferedAhead();
+    const now = this.bufferClock();
+    if (this.bufferObservationAt === 0 || end < this.bufferObservationEnd) {
+      this.bufferObservationAt = now;
+      this.bufferObservationEnd = end;
+      return;
+    }
+    if (end <= this.bufferObservationEnd || now - this.bufferObservationAt < 1000) return;
+    const deliveredPerWallSecond = (end - this.bufferObservationEnd) / ((now - this.bufferObservationAt) / 1000);
+    if (deliveredPerWallSecond < this._rate * 1.1) {
+      this.refillBufferWallSeconds = Math.min(SpeechEngine.MAX_BUFFER_WALL_SECONDS, this.refillBufferWallSeconds + 2);
+    }
+    this.bufferObservationAt = now;
+    this.bufferObservationEnd = end;
   }
 
   // --- Parts mode internals -------------------------------------------------
@@ -477,6 +547,8 @@ export class SpeechEngine {
     this.pendingSeekTime = null;
     this.awaitingNextPart = false;
     this.streamComplete = false;
+    this.finishedSource = false;
+    this.savedSectionLoader = null;
   }
 
   // Cut the pending bytes into a part once enough audio has accumulated (or
@@ -531,8 +603,9 @@ export class SpeechEngine {
     if (this.savedSections) {
       this.pendingPartSeek = offsetWithin;
       const generation = this.streamGeneration;
+      const partUrl = part.url;
       this.audio.onloadedmetadata = () => {
-        if (generation !== this.streamGeneration || this.currentPart !== index || !this.audio) return;
+        if (generation !== this.streamGeneration || this.parts[this.currentPart]?.url !== partUrl || !this.audio) return;
         const target = this.pendingPartSeek;
         this.pendingPartSeek = null;
         if (target !== null) this.audio.currentTime = target;
@@ -560,7 +633,7 @@ export class SpeechEngine {
     }
     // Ran off the end of what has arrived: hold until the next part lands.
     this.awaitingNextPart = true;
-    if (this.isPlaying) this.enterBuffering();
+    if (this.isPlaying) this.enterBuffering(true);
   }
 
   // Position the element at a point on the continuous timeline, loading the
@@ -576,15 +649,31 @@ export class SpeechEngine {
 
   private seekAudioTo(targetTime: number) {
     if (!this.audio) return;
+    this.resetBufferObservation();
+    if (this.savedSections && this.savedSectionLoader && (this.parts.length === 0 || targetTime < this.parts[0]!.start)) {
+      this.pendingSeekTime = targetTime;
+      if (this.isPlaying) this.enterBuffering();
+      this.savedSectionLoader?.(targetTime);
+      return;
+    }
+    if (this.continuous && this.isStreaming && (this.pendingResumeWord !== null || targetTime >= this.continuousAvailableSeconds)) {
+      this.pendingSeekTime = targetTime;
+      if (this.isPlaying) this.enterBuffering();
+      return;
+    }
     // A resume position may arrive before its audio. Remember it rather than
     // silently clamping Safari to the last part or seeking MSE into an empty range.
-    if (this.moreAudioExpected() && targetTime > 0 && targetTime >= this.bufferedEnd()) {
+    if (!this.continuous && this.moreAudioExpected() && targetTime > 0 && targetTime >= this.bufferedEnd()) {
       this.pendingSeekTime = targetTime;
       if (this.isPlaying) this.enterBuffering();
       return;
     }
     this.pendingSeekTime = null;
     if (!this.partsMode) {
+      if (this.continuous) {
+        this.invalidatePlayRequest();
+        if (this.isPlaying) this.enterBuffering();
+      }
       this.audio.currentTime = targetTime;
       return;
     }
@@ -609,12 +698,88 @@ export class SpeechEngine {
     }
   }
 
+  public async supportsContinuousAudio(): Promise<boolean> {
+    return (await import('hls.js')).default.isSupported();
+  }
+
+  /** Keep the same source at every saved-section boundary. HLS fetches and
+   * evicts fragments around the playhead instead of retaining the article. */
+  public async loadContinuousAudio(url: string, words: WordTiming[], duration: number, resumeWordIndex = 0, onError?: () => void, signal?: AbortSignal) {
+    const Hls = (await import('hls.js')).default;
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (!this.audio) throw new Error('Audio is unavailable');
+    // Native HLS enters fast-forward mode above 2x on Apple platforms.
+    // MSE/MMS keeps normal audio playback at the reader's full speed range.
+    // Older browsers use saved MP3 sections through the caller's fallback.
+    if (!Hls.isSupported()) throw new Error('Continuous audio requires MediaSource support');
+    this.stop();
+    this.continuous = true;
+    this.finishedSource = true;
+    this.refillBufferWallSeconds = 1;
+    this.mode = 'audio';
+    this.isStreaming = true;
+    this.authoritativeTimings = true;
+    this.progressivePlaybackAvailable = true;
+    this.playbackReady = true;
+    this.words = words;
+    this.duration = duration;
+    this.audioErrorHandler = onError ?? null;
+    this.pendingResumeWord = resumeWordIndex > 0 ? Math.min(words.length - 1, resumeWordIndex) : null;
+    this.audio.playbackRate = this._rate;
+    this.audio.defaultPlaybackRate = this._rate;
+    this.audio.preservesPitch = true;
+    const policy = continuousBufferPolicy(this._rate);
+    const startPosition = this.pendingResumeWord !== null ? (words[this.pendingResumeWord]?.start ?? 0) : 0;
+    this.hls = new Hls({ enableWorker: true, startPosition,
+      maxBufferLength: policy.ahead, maxMaxBufferLength: policy.ahead,
+      maxBufferSize: 4 * 1024 * 1024, backBufferLength: policy.behind,
+      frontBufferFlushThreshold: policy.ahead });
+    this.hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (data.fatal) {
+        this.clearLoadingDeadline();
+        const handler = this.audioErrorHandler;
+        this.audioErrorHandler = null;
+        handler?.();
+      }
+    });
+    this.hls.loadSource(url);
+    this.hls.attachMedia(this.audio);
+    // Timers keep buffer readiness and lock-screen progress alive when the
+    // browser suspends animation frames in a background tab.
+    this.continuousTimer = setInterval(() => {
+      if (this.isPlaying) this.syncFromAudioTick();
+      else this.notify();
+    }, 250);
+    this.watchAudioLoad();
+    this.notify();
+  }
+
+  public updateContinuousTiming(words: WordTiming[], duration: number, exactCount: number, complete: boolean) {
+    if (!this.continuous) return;
+    this.words = words;
+    this.duration = duration;
+    this.isStreaming = !complete;
+    this.finishedSource = complete;
+    this.exactWordCount = exactCount;
+    this.continuousAvailableSeconds = complete ? duration : words[exactCount]?.start ?? duration;
+    if (this.pendingResumeWord !== null && this.pendingResumeWord < exactCount) {
+      const index = this.pendingResumeWord;
+      this.pendingResumeWord = null;
+      this.seekToWordIndex(index);
+    } else if (this.pendingSeekTime !== null && (complete || this.pendingSeekTime < this.continuousAvailableSeconds)) {
+      this.seekAudioTo(this.pendingSeekTime);
+    }
+    this.maybeResumeFromBuffering();
+    this.notify();
+  }
+
   /** Saved MP3s are independent recordings. Keep their headers and seek tables
    * intact instead of concatenating them into a browser SourceBuffer. */
   public startSavedSections(words: WordTiming[], duration: number, resumeWordIndex = 0, onError?: () => void) {
     this.stop();
     this.mode = 'audio';
     this.isStreaming = true;
+    this.finishedSource = false;
     this.words = words;
     this.duration = duration;
     this.savedSections = true;
@@ -626,6 +791,37 @@ export class SpeechEngine {
       this._progress = duration > 0 ? this._currentTime / duration * 100 : 0;
     }
     this.enablePartsMode();
+    this.notify();
+  }
+
+  public markStreamingSourceFinished() {
+    const newlyFinished = !this.finishedSource;
+    this.finishedSource = true;
+    if (newlyFinished && !this.hasStartedStreamingPlayback) this.refillBufferWallSeconds = 1;
+    this.notify();
+  }
+
+  public setSavedSectionStart(offsetSeconds: number, precedingWordCount: number) {
+    if (!this.savedSections || this.parts.length > 0) return;
+    this.partsTotalSeconds = Math.max(0, offsetSeconds);
+    this.exactWordCount = Math.max(0, precedingWordCount);
+  }
+
+  public setSavedSectionLoader(loader: (targetTime: number) => void) {
+    if (this.savedSections) this.savedSectionLoader = loader;
+  }
+
+  public prependSavedSections(sections: Array<{ bytes: Uint8Array; start: number; duration: number }>) {
+    if (!this.savedSections || sections.length === 0) return;
+    const parts = sections.map((section) => ({
+      url: URL.createObjectURL(new Blob([section.bytes as BlobPart], { type: 'audio/mpeg' })),
+      start: section.start,
+      duration: section.duration,
+    }));
+    this.parts.unshift(...parts);
+    if (this.currentPart >= 0) this.currentPart += parts.length;
+    this.applyPendingSeek();
+    this.maybeResumeFromBuffering();
     this.notify();
   }
 
@@ -957,6 +1153,7 @@ export class SpeechEngine {
 
   public pause() {
     this.invalidatePlayRequest();
+    this.resetBufferObservation();
 
     if (this.mode === 'audio' && this.audio) {
       this.audio.pause();
@@ -977,6 +1174,11 @@ export class SpeechEngine {
     }
     this.streamGeneration += 1;
     this.cleanupStreamingSource();
+    this.hls?.destroy();
+    this.hls = null;
+    this.continuous = false;
+    if (this.continuousTimer !== null) clearInterval(this.continuousTimer);
+    this.continuousTimer = null;
     this.audioErrorHandler = null;
     this.pendingAudioChunks = [];
     this.allAudioChunks = [];
@@ -1057,7 +1259,7 @@ export class SpeechEngine {
   public seekToWordIndex(wordIndex: number) {
     if (this.words.length === 0) return;
     const safeIdx = Math.max(0, Math.min(this.words.length - 1, wordIndex));
-    this.pendingResumeWord = this.savedSections && safeIdx >= this.exactWordCount ? safeIdx : null;
+    this.pendingResumeWord = (this.savedSections || this.continuous) && safeIdx >= this.exactWordCount ? safeIdx : null;
     this.currentWordIdx = safeIdx;
     const targetWord = this.words[safeIdx];
     if (!targetWord) return;
@@ -1197,8 +1399,9 @@ export class SpeechEngine {
       !this.audio.paused &&
       this.bufferedAhead() < SpeechEngine.LOW_WATERMARK_SECONDS
     ) {
-      this.enterBuffering();
+      this.enterBuffering(true);
     }
+    this.observeBufferDelivery();
 
     // Keep `duration` honest. This used to be pinned to the estimated word
     // timeline's last `end` on every tick, so whenever that estimate ran short
@@ -1206,7 +1409,7 @@ export class SpeechEngine {
     // playback while Soniox was still talking.
     const lastWord = this.words[this.words.length - 1];
     const wordsDuration = lastWord ? lastWord.end : 0;
-    const realDuration = this.partsMode
+    const realDuration = this.continuous ? (this.isStreaming ? 0 : this.duration) : this.partsMode
       ? this.streamComplete
         ? this.partsTotalSeconds
         : 0
@@ -1269,7 +1472,7 @@ export class SpeechEngine {
     // still arriving there is no real duration, and the estimate is not
     // evidence of the end -- the highlight simply holds on the last word.
     // In parts mode `ended` is a part boundary, handled by onPartEnded.
-    if (!this.partsMode && (this.audio.ended || (realDuration > 0 && curTime >= realDuration - 0.05))) {
+    if (!this.partsMode && (this.continuous ? !this.isStreaming && this.audio.ended : (this.audio.ended || (realDuration > 0 && curTime >= realDuration - 0.05)))) {
       this.handleEnded();
       return;
     }
