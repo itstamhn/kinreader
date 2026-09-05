@@ -6,6 +6,7 @@ import { getAuth } from './generated/auth';
 import { getEnv } from '../lib/get-env';
 import { handleTtsStreamRequest } from '../lib/ttsStream';
 
+import { listeningAudioResponse } from '../lib/listeningAudio';
 const http = httpRouter();
 
 registerRoutes(http, getAuth, {
@@ -49,6 +50,24 @@ const ttsStreamHandler = httpAction(async (ctx, req) => {
 for (const method of ['OPTIONS', 'GET', 'POST'] as const) {
   http.route({ path: '/api/tts/stream', method, handler: ttsStreamHandler });
 }
+
+const recordingAudio = httpAction(async (ctx, req) => {
+  const url = new URL(req.url);
+  try {
+    const storageId = await ctx.runQuery(internal.routers.listeningInternal.section, {
+      recordingId: url.searchParams.get('recordingId') || '', sectionId: url.searchParams.get('sectionId') || '',
+      ownerToken: url.searchParams.get('ownerToken') || undefined,
+    });
+    const blob = storageId ? await ctx.storage.get(storageId) : null;
+    if (!blob) return new Response('Recording unavailable', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+    return listeningAudioResponse(blob, req.headers.get('Range'), req.method === 'HEAD');
+  } catch { return new Response('Recording unavailable', { status: 404, headers: { 'Cache-Control': 'no-store' } }); }
+});
+http.route({ path: '/api/tts/recording', method: 'GET', handler: recordingAudio });
+http.route({ path: '/api/listening/metadata', method: 'GET', handler: httpAction(async (ctx, req) => {
+  const result = await ctx.runQuery(internal.routers.listeningInternal.metadata, { recordingId: new URL(req.url).searchParams.get('recordingId') || '' });
+  return Response.json(result, { status: result ? 200 : 404, headers: { 'Cache-Control': 'no-store' } });
+}) });
 
 // AutoSend Webhook Handler: List hygiene, bounce & complaint tracking
 http.route({

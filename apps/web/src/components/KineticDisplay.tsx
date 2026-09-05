@@ -90,6 +90,7 @@ export function KineticDisplay({
 
   useEffect(() => {
     const handlePageKey = (event: KeyboardEvent) => {
+      if (document.querySelector('[role=dialog]')) return;
       if (event.code !== 'ArrowLeft' && event.code !== 'ArrowRight') return;
       const target = event.target;
       if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable], [role=slider], [role=menu]')) return;

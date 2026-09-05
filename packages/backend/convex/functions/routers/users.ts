@@ -1,3 +1,5 @@
+import { accessibleRecording } from './listening';
+import type { MutationCtx } from '../_generated/server';
 import { z } from 'zod';
 import { v } from 'convex/values';
 import { getSession } from 'kitcn/auth';
@@ -59,6 +61,12 @@ export const getUserPlaylist = query
     for (const item of userItems) {
       const article = await ctx.db.get(item.articleId as any);
       if (article) {
+        if ('recordingId' in article && article.recordingId) {
+          try {
+            const recording = await accessibleRecording(ctx as any, { recordingId: String(article.recordingId) });
+            Object.assign(article, { url: recording.sourceUrl, recordingId: recording._id });
+          } catch { continue; }
+        }
         results.push({
           id: item._id,
           articleId: item.articleId,
@@ -178,6 +186,8 @@ export const deleteUserArticle = mutation
 export const addToPlaylist = mutation
   .input(
     z.object({
+      recordingId: z.string().optional(),
+      ownerToken: z.string().optional(),
       url: z.string().min(1),
       title: z.string(),
       content: z.string(),
@@ -194,6 +204,11 @@ export const addToPlaylist = mutation
       throw new Error('Unauthorized: You must be signed in to add articles to your playlist');
     }
 
+    const recording = input.recordingId ? await accessibleRecording(ctx as MutationCtx, { recordingId: input.recordingId, ownerToken: input.ownerToken }) : null;
+    if (recording) {
+      input = { ...input, url: `recording:${recording._id}`, title: recording.title, content: recording.content, author: recording.author, image: recording.image, sourceType: recording.sourceType };
+    }
+
     // 1. Find or insert into `articles` table
     let article = await ctx.db
       .query('articles')
@@ -203,6 +218,7 @@ export const addToPlaylist = mutation
     if (!article) {
       const wordCount = input.content.split(/\s+/).filter(Boolean).length;
       const articleData: Record<string, any> = {
+        ...(recording ? { recordingId: recording._id } : {}),
         url: input.url,
         title: input.title.trim() || 'Untitled',
         content: input.content.slice(0, 900_000),

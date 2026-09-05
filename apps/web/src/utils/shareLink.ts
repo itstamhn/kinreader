@@ -63,13 +63,14 @@ export function decodeShareId(id: string): string | null {
 }
 
 export function buildShareLink(article: {
+  recordingId?: string;
   sourceUrl?: string;
   title: string;
   author?: string;
   image?: string;
 }): string | null {
-  if (!article.sourceUrl) return null;
-  const id = encodeShareId(article.sourceUrl);
+  if (!article.recordingId && !article.sourceUrl) return null;
+  const id = article.recordingId ? `p_${article.recordingId}` : encodeShareId(article.sourceUrl!);
   if (!id) return null;
   const link = new URL(`/r/${id}`, SHARE_PAGE_ORIGIN);
   link.searchParams.set('t', article.title.slice(0, 200));

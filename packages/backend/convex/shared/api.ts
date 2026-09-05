@@ -11,6 +11,12 @@ export const api = {
     articles: {
       extract: createApiLeaf<"action", typeof import("../functions/routers/articles").extract>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/articles").extract>("routers/articles:extract"), { type: "action" }),
     },
+    listening: {
+      claim: createApiLeaf<"mutation", typeof import("../functions/routers/listening").claim>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").claim>("routers/listening:claim"), { type: "mutation" }),
+      create: createApiLeaf<"mutation", typeof import("../functions/routers/listening").create>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").create>("routers/listening:create"), { type: "mutation" }),
+      get: createApiLeaf<"query", typeof import("../functions/routers/listening").get>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/listening").get>("routers/listening:get"), { type: "query" }),
+      setVisibility: createApiLeaf<"mutation", typeof import("../functions/routers/listening").setVisibility>(createGeneratedFunctionReference<"mutation", "public", typeof import("../functions/routers/listening").setVisibility>("routers/listening:setVisibility"), { type: "mutation" }),
+    },
     narration: {
       page: createApiLeaf<"query", typeof import("../functions/routers/narration").page>(createGeneratedFunctionReference<"query", "public", typeof import("../functions/routers/narration").page>("routers/narration:page"), { type: "query" }),
       prepare: createApiLeaf<"action", typeof import("../functions/routers/narration").prepare>(createGeneratedFunctionReference<"action", "public", typeof import("../functions/routers/narration").prepare>("routers/narration:prepare"), { type: "action" }),

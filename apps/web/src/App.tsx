@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
+import { ListeningPage, type PreparationState } from './components/listening/ListeningPage';
+import { CreateListening, SaveListeningSheet, ShareListeningSheet, formatListeningTime } from './components/listening/ListeningSheets';
+import { ListeningLibrary } from './components/listening/ListeningLibrary';
+import './components/listening/listening.css';
+import { readListeningValue, writeListeningValue, listeningKey, recordingOwnerToken, listeningCallbackURL } from './utils/listeningSession';
 import { ReaderFrame } from './components/ReaderFrame';
 import { Header } from './components/Header';
 import { KineticDisplay } from './components/KineticDisplay';
@@ -17,7 +22,7 @@ import { playDurableNarration } from './utils/durableNarration';
 import { DURABLE_NARRATION_MAX_CHARS, DURABLE_NARRATION_MAX_WORDS, type NarrationPage } from '@kinreader/backend/tts/durableNarration';
 import { narrationText, MAX_PREGENERATION_CHARS } from '@kinreader/backend/tts/limits';
 import { articleCacheKey, articleContentDigest } from './utils/articleCacheKey';
-import { decodeShareId } from './utils/shareLink';
+import { decodeShareId, buildShareLink } from './utils/shareLink';
 import {
   uploadAndFinalizeExactTrack,
   type ExactTrackCacheEntry,
@@ -217,7 +222,7 @@ export function App({
   // article (by anyone) is an instant cached track instead of a live stream.
   const pregenerateArticle = (target: ArticleData) => {
     const text = getNarrationText(target.content).text;
-    if (!text || (!durableNarration && text.length > MAX_PREGENERATION_CHARS) || target.title === SAMPLE_ARTICLE.title) return;
+    if (target.recordingId || !text || (!durableNarration && text.length > MAX_PREGENERATION_CHARS) || target.title === SAMPLE_ARTICLE.title) return;
     const request: PregenerationRequest = {
       title: target.title,
       author: target.author,
@@ -240,6 +245,17 @@ export function App({
   const [queryUrl, setQueryUrl] = useQueryState('url', parseAsString.withDefault(''));
   const [activeView, setActiveView] = useQueryState('view', viewParser);
 
+  const [listening, setListening] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('read') || typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('listen') === '1');
+  const [listeningView, setListeningView] = useState<'listen' | 'create' | 'library'>('listen');
+  const [savePromptOpen, setSavePromptOpen] = useState(false);
+  const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [shareState, setShareState] = useState<{ visibility: 'private' | 'link'; canManage: boolean }>({ visibility: 'private', canManage: true });
+  const [listeningToast, setListeningToast] = useState<string | null>(null);
+  const [explicitlySaved, setExplicitlySaved] = useState<string[]>([]);
+  const savingRef = useRef(false);
+  const autoSaveAttemptRef = useRef('');
+  const restoreSecondsRef = useRef<number | null>((() => { const value = new URLSearchParams(window.location.search).get('t'); return value && /^\d+(\.\d+)?$/.test(value) ? Math.min(Number(value), 86400) : null; })());
+  const extractionRef = useRef(0);
   const [article, setArticle] = useState<ArticleData>(SAMPLE_ARTICLE);
   const [savedArticles, setSavedArticles] = useState<SavedArticleItem[]>(() => getSavedArticles());
   const [settings, setSettings] = useState<ReaderSettings>(() => {
@@ -404,7 +420,7 @@ export function App({
       setPreparationProgress(reason ? `${SONIOX_UNAVAILABLE_MESSAGE} ${reason}` : SONIOX_UNAVAILABLE_MESSAGE);
     };
 
-    if (art.title === SAMPLE_ARTICLE.title) {
+    if (!art.recordingId && art.title === SAMPLE_ARTICLE.title) {
       try {
         eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION, () => reportAudioFailure('The sample recording could not be loaded.'));
         if (loadIdRef.current === currentLoadId) {
@@ -733,10 +749,10 @@ export function App({
       applyResume(cachedTrack.words);
     };
 
-    if (canReadServerExactCache && cacheUrl) {
+    if ((canReadServerExactCache && cacheUrl) || art.recordingId) {
       try {
-        const cachedTrack = await withTimeout(
-          lookupExactTrack({ url: cacheUrl, voice }),
+        const cachedTrack = art.recordingId ? null : await withTimeout(
+          lookupExactTrack({ url: cacheUrl!, voice }),
           LOOKUP_TIMEOUT_MS,
           'cache lookup'
         );
@@ -761,10 +777,10 @@ export function App({
             resumeWordIndex: pendingResumeIndex,
             onAudioError: () => { if (isCurrentLoad()) reportAudioFailure('The saved Soniox recording could not be played.'); },
             prepare: () => {
-              const input = { text: narratedText, voice, clientId, title: art.title, author: art.author };
+              const input = { text: narratedText, voice, clientId, title: art.title, author: art.author, ...(art.recordingId ? { recordingId: art.recordingId, ownerToken: recordingOwnerToken(art.recordingId) } : {}) };
               return requestPregeneration ? requestPregeneration(input) : prepareNarrationMutation.mutateAsync(input);
             },
-            page: from => narrationPage ? narrationPage({ contentDigest, voice, from }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from }),
+            page: from => narrationPage ? narrationPage({ contentDigest, voice, from }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from, ...(art.recordingId ? { recordingId: art.recordingId, ownerToken: recordingOwnerToken(art.recordingId) } : {}) }),
             pollMs: pregenerationPollMs,
             onProgress: (completed, total) => {
               if (isCurrentLoad()) setPreparationProgress(completed === total ? null : `Audio saved: ${completed} of ${total} sections. Preparation continues if you leave.`);
@@ -808,7 +824,7 @@ export function App({
           setAwaitingPregeneration(false);
           if (job.status === 'done') {
             const cachedTrack = await withTimeout(
-              lookupExactTrack({ url: cacheUrl, voice }),
+              lookupExactTrack({ url: cacheUrl!, voice }),
               LOOKUP_TIMEOUT_MS,
               'cache lookup'
             );
@@ -838,6 +854,7 @@ export function App({
       return cloudPlaylist.map((cp: any) => ({
         id: cp.article.url || cp.articleId,
         article: {
+          recordingId: cp.article.recordingId,
           title: cp.article.title,
           author: cp.article.author,
           authorHandle: cp.article.authorHandle,
@@ -858,6 +875,10 @@ export function App({
   // The saved reading position for an article, from the cloud playlist when
   // signed in and the local library otherwise.
   const resumeIndexFor = (target: ArticleData): number => {
+    const callbackWord = new URLSearchParams(window.location.search).get('w');
+    if (listening && callbackWord && /^\d+$/.test(callbackWord)) return Number(callbackWord);
+    const position = readListeningValue<{ wordIndex: number } | null>(`position_${listeningKey(target)}`, null);
+    if (listening && position) return position.wordIndex;
     const id = articleLibraryId(target);
     const item =
       effectiveSavedArticles.find((entry) => entry.id === id || entry.article.title === target.title) ??
@@ -869,16 +890,17 @@ export function App({
     const resumeWordIndex = options.resume === false ? 0 : resumeIndexFor(newArticle);
     setPendingLoadUrl(null);
     setArticle(newArticle);
-    saveArticleToLibrary(newArticle);
-    setSavedArticles(getSavedArticles());
+    if (!listening) { saveArticleToLibrary(newArticle); setSavedArticles(getSavedArticles()); }
 
-    if (newArticle.sourceUrl && newArticle.sourceUrl !== SAMPLE_ARTICLE.sourceUrl) {
+    if (newArticle.recordingId) {
+      setQueryUrl(null, { history: 'replace' });
+    } else if (newArticle.sourceUrl && newArticle.sourceUrl !== SAMPLE_ARTICLE.sourceUrl) {
       setQueryUrl(newArticle.sourceUrl, { history: 'push' });
     } else {
       setQueryUrl(null, { history: 'replace' });
     }
 
-    if (user) {
+    if (user && !listening) {
       addToPlaylistMutation.mutate({
         url: newArticle.sourceUrl || newArticle.title,
         title: newArticle.title,
@@ -897,7 +919,8 @@ export function App({
   // Fetch a remote article and open it, with the reader showing that a load
   // is in progress and saying so when it fails. Shared by the `?url=` deep
   // link, the `?read=` share link and the library's quick-paste field.
-  const extractAndOpen = (url: string) => {
+  const extractAndOpen = (url: string, asListening = false) => {
+    const extraction = ++extractionRef.current;
     const decodedUrl = url.trim();
     let host = decodedUrl;
     try {
@@ -923,20 +946,40 @@ export function App({
 
     return extractArticleMutation
       .mutateAsync({ url: decodedUrl, clientId: getOrCreateClientId() })
-      .then((data) => {
-        if (!data.title || !data.content) {
+      .then(async (data) => {
+        if (extraction !== extractionRef.current) return null;
+        if (!data.title || !data.content || data.content === 'No readable text could be extracted from this page.') {
           throw new Error('No readable text could be extracted from this page.');
+        }
+        if (asListening) {
+          const ownerToken = crypto.randomUUID();
+          const content = getNarrationText(data.content).text;
+          const recordingId = await crpcClient.routers.listening.create.mutate({
+            ownerToken, title: data.title, content, author: data.author, sourceUrl: data.sourceUrl,
+            sourceType: data.sourceType, image: data.image, voice: settings.sonioxVoice || 'Adrian',
+          });
+          writeListeningValue(`owner_${recordingId}`, ownerToken);
+          const recording = { ...data, content, recordingId };
+          saveArticleToLibrary(recording); setSavedArticles(getSavedArticles());
+          if (extraction !== extractionRef.current) return null;
+          setShareState({ visibility: 'private', canManage: true });
+          handleLoadNewArticle(recording);
+          window.history.replaceState({}, '', `/?read=p_${recordingId}`);
+          return recording;
         }
         handleLoadNewArticle(data);
         return data;
       })
       .catch((err: unknown) => {
+        if (extraction !== extractionRef.current) return null;
         console.warn('Failed to load article:', err);
         const reason = err instanceof Error && err.message ? err.message : 'Please try again.';
         setPendingLoadUrl(null);
-        setArticle(SAMPLE_ARTICLE);
-        setQueryUrl(null, { history: 'replace' });
-        loadArticleContent(SAMPLE_ARTICLE, engine, settings);
+        if (!listening && !asListening) {
+          setArticle(SAMPLE_ARTICLE);
+          setQueryUrl(null, { history: 'replace' });
+          loadArticleContent(SAMPLE_ARTICLE, engine, settings);
+        }
         setLoadError(`Couldn’t read ${host}: ${reason}`);
         return null;
       });
@@ -1038,11 +1081,12 @@ export function App({
     }
 
     const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    if (!urlParams?.get('url')) {
+    if (!urlParams?.get('url') && !urlParams?.get('read')) {
       loadArticleContent(SAMPLE_ARTICLE, engine, savedSettings);
     }
 
     return () => {
+      extractionRef.current += 1;
       loadIdRef.current += 1;
       activeStreamRef.current?.cancel();
       activeStreamRef.current = null;
@@ -1073,9 +1117,9 @@ export function App({
       const artId = articleLibraryId(article);
       const progress = Number(playback.progress.toFixed(1));
       updateArticleProgress(artId, { progress, lastWordIndex: playback.currentWordIndex });
-      if (user) {
+      if (user && (!listening || explicitlySaved.includes(listeningKey(article)) || cloudPlaylist?.some((item: any) => item.article.recordingId === article.recordingId && article.recordingId))) {
         saveProgressMutation.mutate({
-          articleId: artId,
+          articleId: article.recordingId ? `recording:${article.recordingId}` : artId,
           progress,
           lastWordIndex: playback.currentWordIndex,
           currentTime: Number(playback.currentTime.toFixed(2)),
@@ -1107,7 +1151,7 @@ export function App({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeTag = (document.activeElement as HTMLElement)?.tagName;
-      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+      if (document.querySelector('[role=dialog]') || document.activeElement?.closest('button, a, [role=slider], [role=menu]') || activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -1170,9 +1214,10 @@ export function App({
     // variant -- see utils/shareLink.ts). Resolve it into the ordinary `?url=`
     // load so the address bar ends up on a link that reopens the same article.
     const shareId = urlParams.get('read');
-    if (shareId !== null) {
+    if (shareId !== null && !shareId.startsWith('p_')) {
       const sharedUrl = decodeShareId(shareId);
       urlParams.delete('read');
+      urlParams.set('listen', '1');
       if (sharedUrl) {
         urlParams.set('url', sharedUrl);
         const search = urlParams.toString();
@@ -1181,6 +1226,8 @@ export function App({
       } else {
         const search = urlParams.toString();
         window.history.replaceState({}, document.title, `${window.location.pathname}${search ? `?${search}` : ''}`);
+        setListening(false);
+        void loadArticleContent(SAMPLE_ARTICLE, engine, settings);
         setLoadError('That share link is not valid. Paste the article URL instead.');
       }
     }
@@ -1201,6 +1248,123 @@ export function App({
     }
   }, []);
 
+
+  const createListeningArticle = async (data: ArticleData) => {
+    setLoadError(null);
+    try {
+      const ownerToken = crypto.randomUUID();
+      const content = getNarrationText(data.content).text;
+      const recordingId = await crpcClient.routers.listening.create.mutate({ ownerToken, title: data.title, content, author: data.author, sourceUrl: data.sourceUrl, sourceType: data.sourceType, image: data.image, voice: settings.sonioxVoice || 'Adrian' });
+      writeListeningValue(`owner_${recordingId}`, ownerToken);
+      const target = { ...data, content, recordingId };
+      saveArticleToLibrary(target); setSavedArticles(getSavedArticles());
+      setShareState({ visibility: 'private', canManage: true });
+      handleLoadNewArticle(target);
+      window.history.replaceState({}, '', `/?read=p_${recordingId}`);
+    } catch (error) { setListeningToast(error instanceof Error ? error.message : 'Could not create audio. Try again.'); }
+  };
+  const openListeningArticle = async (target: ArticleData) => {
+    if (!target.recordingId) { handleLoadNewArticle(target); return; }
+    const extraction = ++extractionRef.current;
+    try {
+      const record = await crpcClient.routers.listening.get.query({ recordingId: target.recordingId, ownerToken: recordingOwnerToken(target.recordingId) });
+      if (extraction !== extractionRef.current) return;
+      if (record.ownerToken) writeListeningValue(`owner_${record.recordingId}`, record.ownerToken);
+      setShareState({ visibility: record.visibility, canManage: record.canManage });
+      setLoadError(null); setArticle(record); setPendingLoadUrl(null);
+      setSettings(previous => ({ ...previous, sonioxVoice: record.voice }));
+      const params = new URLSearchParams(window.location.search);
+      const callbackWord = params.get('read') === `p_${record.recordingId}` ? params.get('w') : null;
+      const remembered = readListeningValue<{ wordIndex: number } | null>(`position_${record.recordingId}`, null);
+      const resumeWordIndex = callbackWord && /^\d+$/.test(callbackWord) ? Number(callbackWord) : remembered?.wordIndex ?? resumeIndexFor(record);
+      const resumeParams = new URLSearchParams({ read: `p_${record.recordingId}` });
+      if (params.get('save') === '1') { resumeParams.set('save', '1'); if (callbackWord) resumeParams.set('w', callbackWord); if (params.get('t')) resumeParams.set('t', params.get('t')!); }
+      window.history.replaceState({}, '', `/?${resumeParams}`);
+      await loadArticleContent(record, engine, { ...settings, sonioxVoice: record.voice }, { resumeWordIndex });
+    } catch (error) {
+      if (extraction !== extractionRef.current) return;
+      setPendingLoadUrl(null); setLoadError(error instanceof Error ? error.message : 'This listening link is unavailable.');
+    }
+  };
+  const listeningSaved = !!user && (explicitlySaved.includes(listeningKey(article)) || !!cloudPlaylist?.some((item: any) => article.recordingId ? item.article.recordingId === article.recordingId : item.article.url === article.sourceUrl));
+  const saveListening = async () => {
+    if (!user || savingRef.current || !article.content || pendingLoadUrl || restoreSecondsRef.current !== null) return;
+    savingRef.current = true;
+    const snapshot = engine.getSnapshot();
+    const target = article;
+    try {
+      const ownerToken = recordingOwnerToken(target.recordingId);
+      if (target.recordingId && ownerToken) await crpcClient.routers.listening.claim.mutate({ recordingId: target.recordingId, ownerToken });
+      const result = await addToPlaylistMutation.mutateAsync({ ...target, ownerToken, url: target.sourceUrl || target.title });
+      if (result?.articleId) await saveProgressMutation.mutateAsync({ articleId: String(result.articleId), progress: snapshot.progress, lastWordIndex: snapshot.currentWordIndex, currentTime: snapshot.currentTime, isCompleted: snapshot.progress >= 98 });
+      saveArticleToLibrary(target, snapshot.progress);
+      updateArticleProgress(articleLibraryId(target), { progress: snapshot.progress, lastWordIndex: snapshot.currentWordIndex });
+      setSavedArticles(getSavedArticles());
+      setExplicitlySaved(previous => [...previous, listeningKey(target)]);
+      writeListeningValue('pendingSave', null); setSavePromptOpen(false);
+      setListeningToast(`Saved to your library. We’ll pick up at ${formatListeningTime(snapshot.currentTime / snapshot.rate)} wherever you open it next.`);
+      const url = new URL(window.location.href); url.searchParams.delete('save'); url.searchParams.delete('w'); url.searchParams.delete('t'); window.history.replaceState({}, '', url);
+    } catch (error) { setListeningToast(error instanceof Error ? error.message : 'Could not save. Please try again.'); }
+    finally { savingRef.current = false; }
+  };
+  const applyListeningVisibility = async (visibility: 'private' | 'link') => {
+    if (article.recordingId && shareState.canManage) {
+      await crpcClient.routers.listening.setVisibility.mutate({ recordingId: article.recordingId, ownerToken: recordingOwnerToken(article.recordingId), visibility });
+      setShareState(previous => ({ ...previous, visibility }));
+    }
+    if (visibility === 'private') return null;
+    const link = buildShareLink(article);
+    if (!link) throw new Error('Create a saved recording before sharing this text.');
+    return link;
+  };
+  const listeningPrepState: PreparationState = loadError ? 'extractFailed' : pendingLoadUrl ? 'finding'
+    : playbackStatus === 'error' ? 'audioFailed'
+    : (playback.isStreaming || preparationProgress) && playback.playbackReady && (playback.canStartPlayback || playback.isPlaying) ? 'partial'
+    : awaitingPregeneration || !playback.playbackReady || (!playback.canStartPlayback && !playback.isPlaying) ? 'preparing' : 'complete';
+  useEffect(() => {
+    if (!listeningToast) return;
+    const timer = setTimeout(() => setListeningToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [listeningToast]);
+  useEffect(() => {
+    if (!listening || pendingLoadUrl || !article.content) return;
+    const save = () => {
+      const snapshot = engine.getSnapshot();
+      if (snapshot.currentTime > 0 || snapshot.currentWordIndex > 0) writeListeningValue(`position_${listeningKey(article)}`, { seconds: snapshot.currentTime, wordIndex: snapshot.currentWordIndex });
+    };
+    if (!playback.isPlaying) save();
+    const timer = setInterval(save, 5000);
+    window.addEventListener('pagehide', save);
+    return () => { clearInterval(timer); window.removeEventListener('pagehide', save); save(); };
+  }, [listening, article, playback.isPlaying, pendingLoadUrl]);
+  useEffect(() => {
+    const seconds = restoreSecondsRef.current;
+    if (seconds === null || !listening || pendingLoadUrl || !playback.playbackReady || playback.duration <= 0) return;
+    const target = Math.min(seconds, playback.duration);
+    if (playback.isStreaming && playback.bufferedSeconds < target) return;
+    restoreSecondsRef.current = null;
+    handleSeekProgress(target / playback.duration * 100);
+  }, [listening, pendingLoadUrl, playback.playbackReady, playback.duration, playback.bufferedSeconds]);
+  useEffect(() => {
+    if (!listening || !user || !article.content || pendingLoadUrl || !playback.playbackReady) return;
+    const pending = readListeningValue<{ key: string } | null>('pendingSave', null);
+    if ((pending?.key === listeningKey(article) || new URLSearchParams(window.location.search).get('save') === '1') && !listeningSaved && restoreSecondsRef.current === null && autoSaveAttemptRef.current !== listeningKey(article)) { autoSaveAttemptRef.current = listeningKey(article); void saveListening(); }
+    else if (savePromptOpen) setSavePromptOpen(false);
+  }, [user?.email, article.recordingId, article.content, pendingLoadUrl, playback.playbackReady, playback.currentTime]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('read');
+    if (!id?.startsWith('p_')) return;
+    const recordingId = id.slice(2);
+    const claim = new URLSearchParams(window.location.hash.slice(1)).get('claim');
+    if (claim && claim.length >= 32) {
+      writeListeningValue(`owner_${recordingId}`, claim);
+      window.history.replaceState({}, '', window.location.pathname + window.location.search);
+    }
+    setPendingLoadUrl('recording');
+    void openListeningArticle({ recordingId, title: 'Loading article…', content: '' });
+  }, []);
+
   const remainingSeconds = Math.max(0, playback.duration - playback.currentTime);
 
   return (
@@ -1219,6 +1383,24 @@ export function App({
             handleViewChange('reader');
           }}
         />
+      ) : listening && activeView === 'reader' ? (
+        <div className="listening-shell">
+          <div style={{ height: '100%' }} inert={savePromptOpen || shareSheetOpen}>
+            {listeningView === 'create' ? <CreateListening isPlaying={playback.isPlaying} remainingSeconds={remainingSeconds / playback.rate}
+              onBack={() => setListeningView('listen')} onCreate={url => { setListeningView('listen'); void extractAndOpen(url, true); }} />
+              : listeningView === 'library' ? <ListeningLibrary items={effectiveSavedArticles} onBack={() => setListeningView('listen')}
+                onAdd={() => setIsInputOpen(true)} onSettings={() => handleViewChange('settings')} onSelect={target => { setListeningView('listen'); void openListeningArticle(target); }} />
+              : <ListeningPage article={article} playback={playback} prepState={listeningPrepState} signedIn={!!user} saved={listeningSaved}
+                onPlay={handleTogglePlay} onSeek={handleSeekProgress} onSpeed={handleSpeedChange} onWord={handleSelectWord}
+                onSave={() => { if (user) void saveListening(); else setSavePromptOpen(true); }} onShare={() => setShareSheetOpen(true)}
+                onCreate={() => setListeningView('create')} onLibrary={() => { setSavedArticles(getSavedArticles()); setListeningView('library'); }} onAuth={() => handleViewChange('auth')}
+                onRetry={() => loadArticleContent(article, engine, settings, { resumeWordIndex: engine.currentWordIndex })}
+                toast={listeningToast} notice={loadError || truncationNotice} />}
+          </div>
+          {savePromptOpen && <SaveListeningSheet currentTime={playback.currentTime / playback.rate} callbackURL={() => listeningCallbackURL(article, engine.getSnapshot().currentTime, engine.currentWordIndex)} onClose={() => setSavePromptOpen(false)} />}
+          {shareSheetOpen && <ShareListeningSheet article={article} duration={playback.duration} visibility={article.recordingId ? shareState.visibility : 'link'} canManage={!!article.recordingId && shareState.canManage}
+            onApply={applyListeningVisibility} onClose={() => setShareSheetOpen(false)} />}
+        </div>
       ) : activeView !== 'reader' ? (
         <LibraryDrawer
           isOpen={true}
@@ -1226,7 +1408,8 @@ export function App({
           savedArticles={effectiveSavedArticles}
           currentArticleId={article.sourceUrl || article.title}
           onSelectArticle={(newArt) => {
-            handleLoadNewArticle(newArt);
+            if (newArt.recordingId) { setListening(true); setListeningView('listen'); void openListeningArticle(newArt); }
+            else handleLoadNewArticle(newArt);
             handleViewChange('reader');
           }}
           onDeleteArticle={handleDeleteArticle}
@@ -1352,7 +1535,10 @@ export function App({
         isOpen={isInputOpen}
         onClose={() => setIsInputOpen(false)}
         onLoadArticle={(newArt) => {
-          handleLoadNewArticle(newArt);
+          if (listening) {
+            setListeningView('listen');
+            void createListeningArticle(newArt);
+          } else handleLoadNewArticle(newArt);
           handleViewChange('reader');
         }}
         onAddToQueue={handleAddToQueue}

@@ -76,6 +76,7 @@ export type DataModel = {
       content: string;
       createdAt: number;
       image?: string;
+      recordingId?: Id<"listeningRecords">;
       sourceType: "article" | "x" | "text";
       title: string;
       url: string;
@@ -92,6 +93,7 @@ export type DataModel = {
       | "content"
       | "createdAt"
       | "image"
+      | "recordingId"
       | "sourceType"
       | "title"
       | "url"
@@ -161,6 +163,44 @@ export type DataModel = {
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  listeningRecords: {
+    document: {
+      author?: string;
+      content: string;
+      createdAt: number;
+      image?: string;
+      ownerId?: string;
+      ownerToken: string;
+      sourceType?: "article" | "x" | "text";
+      sourceUrl?: string;
+      title: string;
+      visibility: "private" | "link";
+      voice: string;
+      _id: Id<"listeningRecords">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "author"
+      | "content"
+      | "createdAt"
+      | "image"
+      | "ownerId"
+      | "ownerToken"
+      | "sourceType"
+      | "sourceUrl"
+      | "title"
+      | "visibility"
+      | "voice";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_owner_token: ["ownerToken", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};

@@ -31,7 +31,7 @@ export function getSavedArticles(): SavedArticleItem[] {
 }
 
 export function articleLibraryId(article: ArticleData): string {
-  return article.sourceUrl || article.title;
+  return article.recordingId ? `recording:${article.recordingId}` : article.sourceUrl || article.title;
 }
 
 function writeSavedArticles(next: SavedArticleItem[]): void {
@@ -48,7 +48,7 @@ function writeSavedArticles(next: SavedArticleItem[]): void {
 export function saveArticleToLibrary(article: ArticleData, progress: number = 0): SavedArticleItem[] {
   const current = getSavedArticles();
   const id = articleLibraryId(article);
-  const existingIdx = current.findIndex((item) => item.id === id || item.article.title === article.title);
+  const existingIdx = current.findIndex((item) => item.id === id || (!article.recordingId && !item.article.recordingId && item.article.title === article.title));
 
   const updatedItem: SavedArticleItem = {
     id,

@@ -13,9 +13,24 @@ export const prerender = false;
 const { id } = Astro.params;
 const params = Astro.url.searchParams;
 
-const title = params.get('t') || 'Kinetic Reader Article';
-const author = params.get('a') || 'Author';
-const image = params.get('img') || '';
+let title = params.get('t') || 'Kinetic Reader Article';
+let author = params.get('a') || 'Author';
+let image = params.get('img') || '';
+// Saved recordings resolve their own public metadata. Query parameters never
+// reveal the title or cover of a private or revoked recording.
+if (id?.startsWith('p_')) {
+  title = 'Kinetic Reader'; author = ''; image = '';
+  try {
+    const origin = import.meta.env.PUBLIC_CONVEX_SITE_URL || 'https://notable-camel-807.convex.site';
+    const response = await fetch(`${origin}/api/listening/metadata?recordingId=${encodeURIComponent(id.slice(2))}`, { signal: AbortSignal.timeout(5000) });
+    if (response.ok) {
+      const metadata = await response.json() as { title?: string; author?: string; image?: string };
+      title = metadata.title || title; author = metadata.author || ''; image = metadata.image || '';
+    }
+  } catch { /* Keep a neutral card when the recording service is unavailable. */ }
+  Astro.response.headers.set('Cache-Control', 'no-store');
+}
+
 
 const ogImage = new URL(
   `/api/og?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&image=${encodeURIComponent(image)}`,

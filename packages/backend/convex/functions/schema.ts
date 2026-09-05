@@ -71,8 +71,17 @@ export default defineSchema({
     updatedAt: v.optional(v.number()),
   }),
 
+  listeningRecords: defineTable({
+    ownerToken: v.string(), ownerId: v.optional(v.string()),
+    title: v.string(), content: v.string(), author: v.optional(v.string()),
+    sourceUrl: v.optional(v.string()), image: v.optional(v.string()),
+    sourceType: v.optional(v.union(v.literal('article'), v.literal('x'), v.literal('text'))),
+    voice: v.string(), visibility: v.union(v.literal('private'), v.literal('link')), createdAt: v.number(),
+  }).index('by_owner_token', ['ownerToken']),
+
   // 6. Saved / Extracted Articles
   articles: defineTable({
+    recordingId: v.optional(v.id('listeningRecords')),
     url: v.string(),
     title: v.string(),
     content: v.string(),

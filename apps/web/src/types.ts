@@ -5,6 +5,7 @@ export interface WordTiming {
 }
 
 export interface ArticleData {
+  recordingId?: string;
   title: string;
   author?: string;
   authorHandle?: string;

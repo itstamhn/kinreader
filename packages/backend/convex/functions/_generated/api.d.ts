@@ -29,11 +29,56 @@ export declare const api: {
         any
       >;
     };
+    listening: {
+      claim: FunctionReference<
+        "mutation",
+        "public",
+        { ownerToken?: string; recordingId: string },
+        any
+      >;
+      create: FunctionReference<
+        "mutation",
+        "public",
+        {
+          author?: string;
+          content: string;
+          image?: string;
+          ownerToken: string;
+          sourceType?: "article" | "x" | "text";
+          sourceUrl?: string;
+          title: string;
+          voice: string;
+        },
+        any
+      >;
+      get: FunctionReference<
+        "query",
+        "public",
+        { ownerToken?: string; recordingId: string },
+        any
+      >;
+      setVisibility: FunctionReference<
+        "mutation",
+        "public",
+        {
+          ownerToken?: string;
+          recordingId: string;
+          visibility: "private" | "link";
+        },
+        any
+      >;
+    };
     narration: {
       page: FunctionReference<
         "query",
         "public",
-        { contentDigest: string; from: number; voice: string },
+        {
+          contentDigest: string;
+          from: number;
+          ownerToken?: string;
+          recordingId?: string;
+          voice: string;
+        },
         any
       >;
       prepare: FunctionReference<
@@ -42,6 +87,8 @@ export declare const api: {
         {
           author?: string;
           clientId: string;
+          ownerToken?: string;
+          recordingId?: string;
           text: string;
           title?: string;
           voice: string;
@@ -138,6 +185,8 @@ export declare const api: {
           authorHandle?: string;
           content: string;
           image?: string;
+          ownerToken?: string;
+          recordingId?: string;
           sourceType?: "article" | "x" | "text";
           title: string;
           url: string;
@@ -392,6 +441,40 @@ export declare const internal: {
         "internal",
         { email: string },
         any
+      >;
+    };
+    listeningInternal: {
+      access: FunctionReference<
+        "query",
+        "internal",
+        { ownerToken?: string; recordingId: string },
+        {
+          _creationTime: number;
+          _id: Id<"listeningRecords">;
+          author?: string;
+          content: string;
+          createdAt: number;
+          image?: string;
+          ownerId?: string;
+          ownerToken: string;
+          sourceType?: "article" | "x" | "text";
+          sourceUrl?: string;
+          title: string;
+          visibility: "private" | "link";
+          voice: string;
+        }
+      >;
+      metadata: FunctionReference<
+        "query",
+        "internal",
+        { recordingId: string },
+        null | { author?: string; image?: string; title: string }
+      >;
+      section: FunctionReference<
+        "query",
+        "internal",
+        { ownerToken?: string; recordingId: string; sectionId: string },
+        null | Id<"_storage">
       >;
     };
     narrationInternal: {
