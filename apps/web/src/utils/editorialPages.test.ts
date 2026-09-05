@@ -28,3 +28,22 @@ test('phone pages keep readable groups without losing words or making a page exc
   expect(pages.flatMap(p => p.lines.flat())).toEqual(words.map((_, i) => i));
   expect(pages.every(p => words.slice(p.startIndex, p.endIndex + 1).map(w => w.text).join(' ').length <= 76)).toBe(true);
 });
+
+test('measured pages fit three lines at a fixed size and preserve every word', () => {
+  const words = timings('Small words fit easily. Extraordinary typography requires considerably more horizontal room while reading a longer passage with the same selected font size. The reader should get fewer words per page instead of smaller letters.');
+  const measureText = (text: string) => text.length * 12;
+  const narrow = editorialPages(words, Infinity, { maxWidth: 210, measureText });
+  const wide = editorialPages(words, Infinity, { maxWidth: 600, measureText });
+  expect(narrow.length).toBeGreaterThan(wide.length);
+  expect(narrow.flatMap(p => p.lines.flat())).toEqual(words.map((_, i) => i));
+  for (const page of narrow) {
+    expect(page.lines.length).toBeLessThanOrEqual(3);
+    for (const line of page.lines) expect(measureText(line.map(i => words[i]!.text).join(' '))).toBeLessThanOrEqual(210);
+  }
+});
+
+test('a token wider than the reader gets its own page without losing subsequent words', () => {
+  const words = timings('short supercalifragilisticexpialidocious next words');
+  const pages = editorialPages(words, Infinity, { maxWidth: 10, measureText: text => text.length });
+  expect(pages.flatMap(p => p.lines.flat())).toEqual([0, 1, 2, 3]);
+});

@@ -1,120 +1,17 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { WordTiming } from '../types';
-import { editorialPages, editorialPageAtTime } from '../utils/editorialPages';
+import { editorialPages, editorialPageAtTime, type EditorialLayout } from '../utils/editorialPages';
 
 interface KineticDisplayProps {
   words: WordTiming[];
   currentWordIndex: number;
-  currentTime?: number;
+  currentTime: number;
   onSelectWord: (index: number) => void;
   viewMode: 'kinetic' | 'full';
   fontSize?: 'sm' | 'md' | 'lg';
   theme?: 'dark' | 'light';
-  clauseLength?: 4 | 6 | 9;
   /** Shown instead of the default hint while the word list is empty. */
   emptyMessage?: string;
-}
-
-export interface RhythmicCard {
-  id: number;
-  startIndex: number;
-  endIndex: number;
-  words: WordTiming[];
-}
-
-const SYNTACTIC_CONNECTORS = new Set([
-  'and', 'or', 'but', 'nor', 'for', 'yet', 'so',
-  'because', 'although', 'since', 'unless', 'while', 'whereas',
-  'that', 'which', 'who', 'whom', 'whose', 'where', 'when',
-  'with', 'without', 'through', 'into', 'under', 'between',
-]);
-
-const TERMINAL_PUNCT_REGEX = /[.!?]$/;
-const CLAUSE_PUNCT_REGEX = /[,;:]|—|–/;
-
-// Advanced Syntactic & Ergonomic Clause Segmentation. Module-level (not a
-// hook) so the keyboard clause navigation in App.tsx segments with exactly
-// the same rules the display renders -- one source of truth for "a clause".
-export function segmentClauses(words: WordTiming[], clauseLength: 4 | 6 | 9 = 6): RhythmicCard[] {
-  if (!words || words.length === 0) return [];
-  const result: RhythmicCard[] = [];
-  let cur: WordTiming[] = [];
-  let startIdx = 0;
-  let curCharLen = 0;
-
-  // Target constraints based on clauseLength setting (4 = Short, 6 = Flow, 9 = Long)
-  const targetWords = clauseLength;
-  const maxCharsPerLine = clauseLength <= 4 ? 32 : clauseLength <= 6 ? 44 : 56;
-
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]!;
-    const text = w.text.trim();
-    const hasTerminalPunct = TERMINAL_PUNCT_REGEX.test(text);
-    const hasClausePunct = CLAUSE_PUNCT_REGEX.test(text);
-
-    // Check if we should break before a syntactic connector
-    const isNextWordConnector =
-      i < words.length - 1 &&
-      SYNTACTIC_CONNECTORS.has(
-        words[i + 1]!.text.trim().replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
-      );
-
-    cur.push(w);
-    curCharLen += text.length + 1;
-
-    const isLongEnough = cur.length >= Math.max(2, targetWords - 2);
-    const isOverWordTarget = cur.length >= targetWords;
-    const isOverCharLimit = curCharLen >= maxCharsPerLine;
-
-    let shouldBreak = false;
-
-    // 1. Terminal sentence break
-    if (hasTerminalPunct) {
-      shouldBreak = true;
-    }
-    // 2. Natural punctuation break
-    else if (hasClausePunct && (isLongEnough || curCharLen >= 20)) {
-      shouldBreak = true;
-    }
-    // 3. Syntactic boundary split
-    else if (isNextWordConnector && (isLongEnough || curCharLen >= 26)) {
-      shouldBreak = true;
-    }
-    // 4. Capacity ceiling
-    else if (isOverCharLimit || (isOverWordTarget && cur.length >= targetWords + 1)) {
-      shouldBreak = true;
-    }
-
-    if (shouldBreak || i === words.length - 1) {
-      result.push({
-        id: result.length,
-        startIndex: startIdx,
-        endIndex: i,
-        words: [...cur],
-      });
-      cur = [];
-      startIdx = i + 1;
-      curCharLen = 0;
-    }
-  }
-
-  return result;
-}
-
-// The first word of the clause before/after the one containing `wordIndex`,
-// or null at either end. Backs the ArrowLeft/ArrowRight shortcuts.
-export function adjacentClauseStart(
-  words: WordTiming[],
-  wordIndex: number,
-  direction: -1 | 1,
-  clauseLength: 4 | 6 | 9 = 6
-): number | null {
-  const cards = editorialPages(words, typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches ? 76 : Infinity);
-  if (cards.length === 0) return null;
-  let active = cards.findIndex((c) => wordIndex >= c.startIndex && wordIndex <= c.endIndex);
-  if (active === -1) active = 0;
-  const target = cards[active + direction];
-  return target ? target.startIndex : null;
 }
 
 export function KineticDisplay({
@@ -125,7 +22,6 @@ export function KineticDisplay({
   viewMode,
   fontSize = 'md',
   theme = 'dark',
-  clauseLength = 6,
   emptyMessage,
 }: KineticDisplayProps) {
   const [compact, setCompact] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches);
@@ -135,14 +31,63 @@ export function KineticDisplay({
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
   }, []);
-  const textIdentity = words.map(word => word.text).join(' ');
-  // Boundaries contain indices only; receiving more exact timestamps must not
-  // repaginate the article or disturb the currently displayed lines.
-  const pages = useMemo(() => editorialPages(words, compact ? 76 : Infinity), [textIdentity, compact]);
-  const activePageIndex = editorialPageAtTime(pages, words, currentTime ?? words[currentWordIndex]?.start ?? 0);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<EditorialLayout>();
+  const hasWords = words.length > 0;
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const context = document.createElement('canvas').getContext('2d');
+    if (!context) return;
+    let disposed = false;
+    const measure = () => {
+      if (disposed || stage.clientWidth <= 0) return;
+      const style = getComputedStyle(stage);
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const spacing = parseFloat(style.letterSpacing) || 0;
+      const cache = new Map<string, number>();
+      setLayout({
+        maxWidth: Math.max(1, stage.clientWidth - 4),
+        measureText: text => {
+          let width = cache.get(text);
+          if (width === undefined) {
+            width = context.measureText(text).width + text.length * spacing;
+            cache.set(text, width);
+          }
+          return width;
+        },
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stage);
+    document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener('loadingdone', measure);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      document.fonts?.removeEventListener('loadingdone', measure);
+    };
+  }, [fontSize, compact, viewMode, hasWords]);
+  // Timing corrections do not affect the measured widths or line breaks.
+  const pages = useMemo(() => editorialPages(words, compact ? 76 : Infinity, layout), [words, compact, layout]);
+  const activePageIndex = editorialPageAtTime(pages, words, currentTime);
   const page = pages[activePageIndex];
 
-  if (!words || words.length === 0) {
+  useEffect(() => {
+    const handlePageKey = (event: KeyboardEvent) => {
+      if (event.code !== 'ArrowLeft' && event.code !== 'ArrowRight') return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]')) return;
+      event.preventDefault();
+      const next = pages[activePageIndex + (event.code === 'ArrowLeft' ? -1 : 1)];
+      if (next) onSelectWord(next.startIndex);
+    };
+    window.addEventListener('keydown', handlePageKey);
+    return () => window.removeEventListener('keydown', handlePageKey);
+  }, [pages, activePageIndex, onSelectWord]);
+
+  if (words.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-[#ECEAE4]/40">
         <p className="text-sm font-sans">{emptyMessage ?? 'No article loaded. Paste a URL or select from library.'}</p>
@@ -151,11 +96,10 @@ export function KineticDisplay({
   }
 
   if (viewMode === 'kinetic' && page) {
-    const longestLine = Math.max(...page.lines.map(line => line.reduce((length, index) => length + words[index]!.text.length + 1, -1)));
     return (
       <section className="editorial-reader" data-reader-theme={theme} aria-label="Kinetic reading page">
         <div className="editorial-page-count">{activePageIndex + 1} / {pages.length}</div>
-        <div className="editorial-stage" style={{ '--editorial-size': `${{ sm: 40, md: 48, lg: 56 }[fontSize]}px`, '--editorial-fit': `${180 / Math.max(1, longestLine)}cqw` } as React.CSSProperties}>
+        <div ref={stageRef} className="editorial-stage" style={{ '--editorial-size': `${(compact ? { sm: 26, md: 30, lg: 34 } : { sm: 40, md: 48, lg: 56 })[fontSize]}px` } as React.CSSProperties}>
           <div className="editorial-page" key={page.startIndex} data-page-start={page.startIndex}>
             {page.lines.map((line, row) => (
               <div className="editorial-line" key={row}>

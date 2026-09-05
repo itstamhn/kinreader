@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } fro
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsStringLiteral } from 'nuqs';
 import { Header } from './components/Header';
-import { KineticDisplay, adjacentClauseStart } from './components/KineticDisplay';
+import { KineticDisplay } from './components/KineticDisplay';
 import { Controls } from './components/Controls';
 import { UrlInputModal } from './components/UrlInputModal';
 import { LibraryDrawer, type SavedArticleItem } from './components/LibraryDrawer';
@@ -258,8 +258,6 @@ export function App({
     return DEFAULT_SETTINGS;
   });
 
-  // Prototype States: Clause segmentation length, Voice toggle, and Ramp mode
-  const [clauseLength, setClauseLength] = useState<4 | 6 | 9>(6);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [isRampEnabled, setIsRampEnabled] = useState(false);
 
@@ -295,7 +293,6 @@ export function App({
   // server job and stream (accepting a second synthesis for this article).
   const skipPregenerationWaitRef = useRef(false);
   const lastProgressSaveRef = useRef(0);
-  const clauseLengthRef = useRef<4 | 6 | 9>(6);
 
   // The engine is constructed once, lazily, on the first render rather than
   // inside an effect: `useSyncExternalStore` needs `subscribe`/`getSnapshot`
@@ -1056,10 +1053,6 @@ export function App({
     engine.muted = !isVoiceEnabled;
   }, [isVoiceEnabled]);
 
-  useEffect(() => {
-    clauseLengthRef.current = clauseLength;
-  }, [clauseLength]);
-
   // Persist the reading position: locally for everyone (the library's
   // "Continue" reads it back), and to the cloud playlist when signed in.
   // Throttled, with a trailing write, so it fires during continuous playback
@@ -1118,15 +1111,6 @@ export function App({
       } else if (e.code === 'Escape') {
         handleViewChange('reader');
         setIsInputOpen(false);
-      } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
-        e.preventDefault();
-        const target = adjacentClauseStart(
-          engine.words,
-          engine.currentWordIndex,
-          e.code === 'ArrowLeft' ? -1 : 1,
-          clauseLengthRef.current
-        );
-        if (target !== null) engine.seekToWordIndex(target);
       } else if (e.code === 'ArrowUp' || (e.shiftKey && (e.key === '=' || e.key === '+'))) {
         e.preventDefault();
         handleSpeedChange(Math.min(3.5, Number((engine.rate + 0.25).toFixed(2))));
@@ -1282,7 +1266,6 @@ export function App({
             viewMode={viewMode}
             fontSize={settings.fontSize || 'md'}
             theme={settings.readerTheme === 'light' ? 'light' : 'dark'}
-            clauseLength={clauseLength}
             emptyMessage={pendingLoadUrl ? 'Fetching article…' : undefined}
           />
 

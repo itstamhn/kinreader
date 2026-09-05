@@ -8,7 +8,13 @@ export interface EditorialPage {
 
 /** Text alone determines page and line boundaries. Incoming audio timings and
  * the active word never change the layout of an existing page. */
-export function editorialPages(words: WordTiming[], maxCharacters = Infinity): EditorialPage[] {
+export interface EditorialLayout {
+  maxWidth: number;
+  measureText: (text: string) => number;
+}
+
+export function editorialPages(words: WordTiming[], maxCharacters = Infinity, layout?: EditorialLayout): EditorialPage[] {
+  if (layout) return measuredPages(words, layout);
   const pages: EditorialPage[] = [];
   let start = 0;
   let characters = 0;
@@ -45,6 +51,36 @@ function balanceLines(words: WordTiming[], start: number, end: number, compact: 
   }
   split(start, rows, [], 0);
   return best;
+}
+
+/** Add words at the chosen font size until three lines are full. Font size
+ * never depends on page contents. An oversized token gets its own page and
+ * wraps in CSS, so URLs cannot force the whole article into tiny type. */
+function measuredPages(words: WordTiming[], layout: EditorialLayout): EditorialPage[] {
+  const pages: EditorialPage[] = [];
+  let start = 0;
+  while (start < words.length) {
+    const lines: number[][] = [[]];
+    let end = start;
+    for (; end < words.length && end < start + 18; end++) {
+      if (end > start && layout.measureText(words[end]!.text) > layout.maxWidth) break;
+      const line = lines.at(-1)!;
+      const candidate = [...line, end].map(i => words[i]!.text).join(' ');
+      if (layout.measureText(candidate) > layout.maxWidth && line.length) {
+        if (lines.length === 3) break;
+        lines.push([]);
+      }
+      lines.at(-1)!.push(end);
+      const count = end - start + 1;
+      const text = words[end]!.text;
+      if (layout.measureText(text) > layout.maxWidth ||
+          (count >= 10 && /[.!?]["'”’)]*$/.test(text)) ||
+          (count >= 12 && /[,;:]["'”’)]*$/.test(text))) { end++; break; }
+    }
+    pages.push({ startIndex: start, endIndex: end - 1, lines });
+    start = end;
+  }
+  return pages;
 }
 
 export function editorialPageAtTime(pages: EditorialPage[], words: WordTiming[], time: number): number {

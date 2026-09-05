@@ -1068,7 +1068,7 @@ test('a socket failure mid-article resumes the REST fallback from the current wo
   }
 });
 
-test('ArrowRight and ArrowLeft move between clauses', async () => {
+test('ArrowRight and ArrowLeft move between reading pages', async () => {
   const { container } = renderApp();
   await waitFor(() => expect(container.textContent).toContain('digital renaissance'));
   const engine = (window as any).__engine as SpeechEngine;

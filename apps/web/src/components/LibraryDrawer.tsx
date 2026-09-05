@@ -557,9 +557,9 @@ export function LibraryDrawer({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {(
                   [
-                    { id: 'sm', label: 'Compact', desc: '36px font scale' },
-                    { id: 'md', label: 'Standard', desc: '46px font scale (Default)' },
-                    { id: 'lg', label: 'Large', desc: '56px font scale' },
+                    { id: 'sm', label: 'Compact', desc: 'Smaller text' },
+                    { id: 'md', label: 'Standard', desc: 'Default size' },
+                    { id: 'lg', label: 'Large', desc: 'Larger text' },
                   ] as const
                 ).map((opt) => (
                   <button
