@@ -1276,6 +1276,7 @@ export function App({
           <KineticDisplay
             words={playback.words}
             currentWordIndex={playback.currentWordIndex}
+            currentTime={playback.currentTime}
             onSelectWord={handleSelectWord}
             viewMode={viewMode}
             fontSize={settings.fontSize || 'md'}

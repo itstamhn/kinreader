@@ -1,9 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import type { WordTiming } from '../types';
+import { editorialPages, editorialPageAtTime } from '../utils/editorialPages';
 
 interface KineticDisplayProps {
   words: WordTiming[];
   currentWordIndex: number;
+  currentTime?: number;
   onSelectWord: (index: number) => void;
   viewMode: 'kinetic' | 'full';
   fontSize?: 'sm' | 'md' | 'lg';
@@ -106,7 +108,7 @@ export function adjacentClauseStart(
   direction: -1 | 1,
   clauseLength: 4 | 6 | 9 = 6
 ): number | null {
-  const cards = segmentClauses(words, clauseLength);
+  const cards = editorialPages(words, typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches ? 76 : Infinity);
   if (cards.length === 0) return null;
   let active = cards.findIndex((c) => wordIndex >= c.startIndex && wordIndex <= c.endIndex);
   if (active === -1) active = 0;
@@ -117,26 +119,26 @@ export function adjacentClauseStart(
 export function KineticDisplay({
   words,
   currentWordIndex,
+  currentTime,
   onSelectWord,
   viewMode,
   fontSize = 'md',
   clauseLength = 6,
   emptyMessage,
 }: KineticDisplayProps) {
-  const cards = useMemo(() => segmentClauses(words, clauseLength), [words, clauseLength]);
-
-  // Find active clause index
-  const activeCardIndex = useMemo(() => {
-    const idx = cards.findIndex(
-      (c) => currentWordIndex >= c.startIndex && currentWordIndex <= c.endIndex
-    );
-    return idx !== -1 ? idx : 0;
-  }, [cards, currentWordIndex]);
-
-  const activeCard = cards[activeCardIndex] || cards[0];
-  const prevCard2 = activeCardIndex > 1 ? cards[activeCardIndex - 2] : null;
-  const prevCard1 = activeCardIndex > 0 ? cards[activeCardIndex - 1] : null;
-  const nextCard1 = activeCardIndex < cards.length - 1 ? cards[activeCardIndex + 1] : null;
+  const [compact, setCompact] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 640px)');
+    const update = () => setCompact(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  const textIdentity = words.map(word => word.text).join(' ');
+  // Boundaries contain indices only; receiving more exact timestamps must not
+  // repaginate the article or disturb the currently displayed lines.
+  const pages = useMemo(() => editorialPages(words, compact ? 76 : Infinity), [textIdentity, compact]);
+  const activePageIndex = editorialPageAtTime(pages, words, currentTime ?? words[currentWordIndex]?.start ?? 0);
+  const page = pages[activePageIndex];
 
   if (!words || words.length === 0) {
     return (
@@ -146,109 +148,37 @@ export function KineticDisplay({
     );
   }
 
-  // Font sizing styles based on preferences
-  const activeFontSize = {
-    sm: 'text-[32px] sm:text-[40px] lg:text-[42px]',
-    md: 'text-[34px] sm:text-[44px] lg:text-[46px]',
-    lg: 'text-[38px] sm:text-[48px] lg:text-[52px]',
-  }[fontSize];
-
-  // 1. Left-Aligned Typographic Cadence
-  if (viewMode === 'kinetic') {
+  if (viewMode === 'kinetic' && page) {
+    const longestLine = Math.max(...page.lines.map(line => line.reduce((length, index) => length + words[index]!.text.length + 1, -1)));
     return (
-      <div className="flex-1 flex flex-col justify-center items-start px-6 sm:px-16 select-none max-w-4xl mx-auto w-full relative min-h-0 text-left">
-        <div className="w-full flex flex-col items-start justify-center gap-5 sm:gap-6">
-          {/* Slot 1: Past Clause 2 (font: 300 24px/1.35 Newsreader, opacity 16%) */}
-          <div className="w-full h-8 flex items-center justify-start overflow-hidden">
-            {prevCard2 ? (
-              <div
-                onClick={() => onSelectWord(prevCard2.startIndex)}
-                title="Tap to re-read from here"
-                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/16 hover:text-[#ECEAE4]/60 cursor-pointer transition-all duration-200 text-left max-w-[760px] text-pretty truncate"
-              >
-                {prevCard2.words.map((w) => w.text).join(' ')}
+      <section className="editorial-reader" aria-label="Kinetic reading page">
+        <div className="editorial-page-count">{activePageIndex + 1} / {pages.length}</div>
+        <div className="editorial-stage" style={{ '--editorial-size': `${{ sm: 40, md: 48, lg: 56 }[fontSize]}px`, '--editorial-fit': `${180 / Math.max(1, longestLine)}cqw` } as React.CSSProperties}>
+          <div className="editorial-page" key={page.startIndex} data-page-start={page.startIndex}>
+            {page.lines.map((line, row) => (
+              <div className="editorial-line" key={row}>
+                {line.map((index, position) => (
+                  <React.Fragment key={index}>
+                    {position > 0 ? ' ' : null}
+                    <button
+                      type="button"
+                      className={`editorial-word ${index <= currentWordIndex ? 'is-spoken' : ''}`}
+                      aria-current={index === currentWordIndex ? 'true' : undefined}
+                      onClick={() => onSelectWord(index)}
+                      title="Read from this word"
+                    >{words[index]!.text}</button>
+                  </React.Fragment>
+                ))}
               </div>
-            ) : (
-              <div className="h-full pointer-events-none opacity-0" aria-hidden="true">
-                &nbsp;
-              </div>
-            )}
-          </div>
-
-          {/* Slot 2: Past Clause 1 (font: 300 24px/1.35 Newsreader, opacity 32%) */}
-          <div className="w-full h-8 flex items-center justify-start overflow-hidden">
-            {prevCard1 ? (
-              <div
-                onClick={() => onSelectWord(prevCard1.startIndex)}
-                title="Tap to re-read from here"
-                className="font-serif font-light text-[19px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/32 hover:text-[#ECEAE4]/75 cursor-pointer transition-all duration-200 text-left max-w-[760px] text-pretty truncate"
-              >
-                {prevCard1.words.map((w) => w.text).join(' ')}
-              </div>
-            ) : (
-              <div className="h-full pointer-events-none opacity-0" aria-hidden="true">
-                &nbsp;
-              </div>
-            )}
-          </div>
-
-          {/* Slot 3: Center Focal Active Clause (font: 400 46px/1.2 Newsreader, letter-spacing: -.01em) */}
-          <div className="w-full min-h-[76px] sm:min-h-[110px] flex items-center justify-start overflow-visible relative my-1">
-            <div
-              key={activeCard?.id ?? 0}
-              className={`w-full font-serif font-normal ${activeFontSize} leading-[1.2] tracking-[-0.01em] text-pretty max-w-[760px] text-left transition-all duration-150`}
-            >
-              {activeCard?.words.map((word, idx) => {
-                const globalIdx = activeCard.startIndex + idx;
-                const isActive = globalIdx === currentWordIndex;
-                const isPast = globalIdx < currentWordIndex;
-
-                return (
-                  <span
-                    key={`${activeCard.id}-${idx}-${word.text}`}
-                    onClick={() => onSelectWord(globalIdx)}
-                    className={`inline-block cursor-pointer mr-2 sm:mr-3 select-none transition-all duration-150 ${
-                      isActive
-                        ? 'text-[#FFF7EA] word-active-luminous font-medium scale-[1.02]'
-                        : isPast
-                        ? 'text-[rgba(240,238,232,0.9)]'
-                        : 'text-[rgba(236,234,228,0.55)] hover:text-[#ECEAE4]/80'
-                    }`}
-                    style={{
-                      textShadow: isActive
-                        ? '0 0 26px rgba(242,163,60,0.55), 0 0 8px rgba(242,163,60,0.85)'
-                        : 'none',
-                    }}
-                  >
-                    {word.text}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Slot 4: Next Clause Preview (font: 300 24px/1.35 Newsreader, opacity 14%) */}
-          <div className="w-full h-8 flex items-center justify-start overflow-hidden">
-            {nextCard1 ? (
-              <div
-                onClick={() => onSelectWord(nextCard1.startIndex)}
-                className="font-serif font-light text-[18px] sm:text-[22px] lg:text-[24px] leading-[1.35] text-[#ECEAE4]/14 hover:text-[#ECEAE4]/50 cursor-pointer transition-all duration-200 text-left max-w-[760px] text-pretty truncate"
-              >
-                {nextCard1.words.map((w) => w.text).join(' ')}
-              </div>
-            ) : (
-              <div className="h-full pointer-events-none opacity-0" aria-hidden="true">
-                &nbsp;
-              </div>
-            )}
+            ))}
           </div>
         </div>
-
-        {/* Keyboard Interaction Subtitle Hint */}
-        <div className="absolute bottom-3 font-mono text-[10px] text-[#ECEAE4]/30 pointer-events-none hidden sm:block">
-          Space play · ←→ clauses · ↑↓ tempo · tap dimmed lines to re-read
+        <div className="editorial-navigation">
+          <button type="button" disabled={activePageIndex === 0} onClick={() => onSelectWord(pages[activePageIndex - 1]!.startIndex)} aria-label="Previous reading page">←</button>
+          <span>Space play · ←→ pages · tap a word to re-read</span>
+          <button type="button" disabled={activePageIndex === pages.length - 1} onClick={() => onSelectWord(pages[activePageIndex + 1]!.startIndex)} aria-label="Next reading page">→</button>
         </div>
-      </div>
+      </section>
     );
   }
 
@@ -264,9 +194,9 @@ export function KineticDisplay({
             <span
               key={idx}
               onClick={() => onSelectWord(idx)}
-              className={`cursor-pointer transition-all duration-100 mr-2 inline-block ${
+              className={`cursor-pointer transition-colors duration-100 mr-2 inline-block ${
                 isActive
-                  ? 'bg-[#F2A33C]/20 text-[#FFF7EA] font-semibold rounded px-1.5 py-0.5 shadow-md word-active-luminous border border-[#F2A33C]/40'
+                  ? 'bg-[#F2A33C]/20 text-[#FFF7EA] rounded'
                   : isPast
                   ? 'text-[#ECEAE4]/85'
                   : 'text-[#ECEAE4]/30 hover:text-[#ECEAE4]/60'
