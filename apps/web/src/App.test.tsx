@@ -1088,24 +1088,18 @@ test('ArrowRight and ArrowLeft move between reading pages', async () => {
   expect(engine.currentWordIndex).toBe(afterRight);
 });
 
-test('the saved voice preference mutes the engine', async () => {
+test('narration stays enabled with legacy settings and no voice switches are offered', async () => {
+  localStorage.setItem('kinetic_reader_settings', JSON.stringify({ voiceEnabled: false, ttsProvider: 'browser' }));
   const { container } = renderApp();
   const engine = (window as any).__engine as SpeechEngine;
   expect(engine.muted).toBe(false);
 
   fireEvent.click(container.querySelector('button[title="More options"]')!);
   fireEvent.click(container.querySelector('button[title="Preferences"]')!);
-  const voiceButton = await waitFor(() => {
-    const toggle = container.querySelector('input[aria-label="Soniox voice"]') as HTMLInputElement;
-    expect(toggle).toBeTruthy();
-    return toggle;
-  });
-  fireEvent.click(voiceButton);
-  await waitFor(() => expect(engine.muted).toBe(true));
-  expect(voiceButton.checked).toBe(false);
-  await waitFor(() => expect(JSON.parse(localStorage.getItem('kinetic_reader_settings')!).voiceEnabled).toBe(false));
-  fireEvent.click(voiceButton);
-  await waitFor(() => expect(engine.muted).toBe(false));
+  await waitFor(() => expect(container.textContent).toContain('Default Playback Tempo'));
+  expect(container.querySelector('input[aria-label="Soniox voice"]')).toBeNull();
+  expect(container.textContent).not.toContain('Neural Voice Selection');
+  expect(engine.muted).toBe(false);
 });
 
 test('the header share button copies a kinreader.com/r/ link that decodes back to the source', async () => {

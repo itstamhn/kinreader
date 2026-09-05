@@ -218,7 +218,7 @@ export function LibraryDrawer({
         <div className="rounded-2xl bg-gradient-to-br from-[#F2A33C]/15 to-[#F2A33C]/5 border border-[#F2A33C]/25 p-3.5 flex flex-col gap-1.5">
           <span className="font-sans font-semibold text-xs text-[#F4F0E6]">Kinreader Pro</span>
           <span className="font-sans text-[11px] leading-relaxed text-[#ECEAE4]/50">
-            All neural voices, 3.5× tempo, unlimited articles.
+            Soniox narration, 3.5× tempo, unlimited articles.
           </span>
           <a
             href="https://buy.stripe.com/eVqfZbgvZeDH6Uc2zJ53O00"
@@ -571,8 +571,7 @@ export function LibraryDrawer({
             </div>
 
             <div className="space-y-4">
-              {[{ key: 'voiceEnabled' as const, label: 'Soniox voice', description: 'Listen to narration while reading.', checked: settings.voiceEnabled !== false },
-                { key: 'rampEnabled' as const, label: 'Gradually increase tempo', description: 'Increase speed as you continue reading.', checked: settings.rampEnabled === true }].map(option => (
+              {[{ key: 'rampEnabled' as const, label: 'Gradually increase tempo', description: 'Increase speed as you continue reading.', checked: settings.rampEnabled === true }].map(option => (
                 <label key={option.key} className="flex items-center justify-between gap-4 text-sm text-[#ECEAE4]/80">
                   <span>{option.label}<span className="block text-xs text-[#ECEAE4]/40 mt-1">{option.description}</span></span>
                   <input type="checkbox" role="switch" checked={option.checked} aria-label={option.label}

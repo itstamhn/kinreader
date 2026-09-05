@@ -259,7 +259,7 @@ export function App({
     return DEFAULT_SETTINGS;
   });
 
-  const isVoiceEnabled = settings.voiceEnabled !== false;
+  const isVoiceEnabled = true;
   const isRampEnabled = settings.rampEnabled === true;
   const [readerPage, setReaderPage] = useState({ number: 0, count: 0 });
 
@@ -1052,7 +1052,7 @@ export function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
-  // "Voice off" mutes the narration; the kinetic timeline keeps running.
+  // Narration stays enabled, including for readers with an old muted preference.
   useEffect(() => {
     engine.muted = !isVoiceEnabled;
   }, [isVoiceEnabled]);
