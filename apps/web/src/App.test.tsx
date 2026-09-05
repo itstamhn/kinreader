@@ -193,12 +193,8 @@ test('toggling ramp mode does not reconstruct the speech engine (plan 018 Bug 1)
   }
 });
 
-// Regression test for plan 018 Step 4: a rejected/empty TTS synthesis used
-// to fall back to the on-device voice completely silently -- the old loading
-// boolean only ever went back to `false`, indistinguishable from a normal
-// neural load. It must land in the 'degraded' status and say so in the
-// controls, not silently look like 'ready'.
-test('a failed synthesis lands in degraded status and is shown to the reader, not silently ready', async () => {
+// Soniox errors must never select a device voice, even when native speech exists.
+test('a failed synthesis offers a Soniox retry instead of a device voice', async () => {
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   SpeechEngine.prototype.loadAudioUrl = () => {
     throw new Error('audio load failed');
@@ -225,7 +221,7 @@ test('a failed synthesis lands in degraded status and is shown to the reader, no
     fireEvent.click(narrateButton);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Neural voice unavailable');
+      expect(container.textContent).toContain('Soniox audio is unavailable');
     });
 
     // Never silently reported as if the neural voice had loaded.
@@ -264,7 +260,7 @@ test('when speech synthesis is unsupported and neural synthesis fails, lands in 
     fireEvent.click(narrateButton);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Audio playback unavailable');
+      expect(container.textContent).toContain('Soniox audio is unavailable');
     });
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
@@ -601,7 +597,7 @@ test('temporary-key expiry resets the session, retries once, then uses REST with
   }
 });
 
-test('a WebSocket failure falls back to REST and reports degraded playback', async () => {
+test('a failed Soniox REST recording never switches to the on-device voice', async () => {
   const transport = fakeStreamingTransport();
   const originalLoadAudioUrl = SpeechEngine.prototype.loadAudioUrl;
   const originalLoadBrowserText = SpeechEngine.prototype.loadBrowserText;
@@ -635,8 +631,10 @@ test('a WebSocket failure falls back to REST and reports degraded playback', asy
     expect(restUrls[0]).toContain('clientId=');
 
     act(() => (window as any).__engine.audio.onerror(new Event('error')));
-    await waitFor(() => expect(browserFallbackTexts).toContain('Fallback through REST'));
-    await waitFor(() => expect(container.textContent).toContain('Neural voice unavailable'));
+    expect(browserFallbackTexts).toEqual([]);
+    await waitFor(() => expect(container.textContent).toContain('Soniox audio is unavailable'));
+    expect(container.textContent).toContain('Retry audio');
+    expect(container.textContent).not.toContain('using on-device speech');
   } finally {
     SpeechEngine.prototype.loadAudioUrl = originalLoadAudioUrl;
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
@@ -1439,4 +1437,45 @@ test('opening a long article prepares durable audio without a browser Soniox ses
   await narrateRawText(container, 'An article should keep its completed audio. '.repeat(800));
   await waitFor(() => expect(requests).toHaveLength(1));
   expect(keys).toBe(0);
+});
+
+test('Soniox preparation failure offers an explicit retry without invoking device speech', async () => {
+  const originalLoadBrowserText = SpeechEngine.prototype.loadBrowserText;
+  let deviceCalls = 0;
+  let preparationCalls = 0;
+  SpeechEngine.prototype.loadBrowserText = () => { deviceCalls++; return true; };
+  try {
+    const { container } = renderApp({
+      durableNarration: true,
+      requestPregeneration: async () => { preparationCalls++; throw new Error('Soniox is busy. Please retry.'); },
+    });
+    await narrateRawText(container, 'Only the saved Soniox voice should read this article.');
+    await waitFor(() => expect(container.textContent).toContain('Soniox is busy'));
+    expect(preparationCalls).toBe(1);
+    expect(deviceCalls).toBe(0);
+    const retry = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Retry audio')!;
+    expect(retry).toBeTruthy();
+    fireEvent.click(retry);
+    await waitFor(() => expect(preparationCalls).toBe(2));
+    expect(deviceCalls).toBe(0);
+    expect(container.textContent).not.toContain('on-device');
+  } finally {
+    SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
+  }
+});
+
+test('an asynchronous sample audio error never starts device speech', async () => {
+  const originalLoadBrowserText = SpeechEngine.prototype.loadBrowserText;
+  let deviceCalls = 0;
+  SpeechEngine.prototype.loadBrowserText = () => { deviceCalls++; return true; };
+  try {
+    const { container } = renderApp();
+    await waitFor(() => expect((window as any).__engine?.audio?.src).toContain('sample_audio.mp3'));
+    act(() => (window as any).__engine.audio.onerror(new Event('error')));
+    await waitFor(() => expect(container.textContent).toContain('Soniox audio is unavailable'));
+    expect(container.textContent).toContain('Retry audio');
+    expect(deviceCalls).toBe(0);
+  } finally {
+    SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
+  }
 });

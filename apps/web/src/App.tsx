@@ -49,16 +49,14 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   defaultRate: 1.5,
 };
 
-// The states article loading moves through. Replaces the old loading
-// boolean, which could only say "loading" or "not" and had no way to
-// represent a synthesis failure -- the reader could not tell a neural voice
-// from a silent fallback to the on-device one (plan 018, Step 4).
+// Playback always uses Soniox audio. A failure remains an explicit error;
+// degraded playback means estimated word timings, never a different voice.
 type PlaybackStatus =
   | 'idle' // sample article, nothing loaded
   | 'timing' // instant word timings computed, audio not yet requested
   | 'synthesizing' // waiting on the Convex TTS action
   | 'ready' // neural audio loaded
-  | 'degraded' // synthesis failed; on-device speech instead
+  | 'degraded' // Soniox audio with estimated word timings
   | 'error'; // nothing playable
 
 // Above this the article no longer fits in a GET query string (Cloudflare caps
@@ -94,10 +92,8 @@ export function fitEstimatedTail(words: WordTiming[], exactCount: number, audioS
   ];
 }
 
-const DEGRADED_MESSAGES = {
-  audio: 'Exact word sync unavailable — using estimated timing for this article.',
-  browser: 'Neural voice unavailable (using on-device speech).',
-} as const;
+const ESTIMATED_TIMING_MESSAGE = 'Exact word sync unavailable. Using estimated timing for this article.';
+const SONIOX_UNAVAILABLE_MESSAGE = 'Soniox audio is unavailable. Retry audio to try again.';
 
 export interface AppProps {
   durableNarration?: boolean;
@@ -379,6 +375,7 @@ export function App({
     setAwaitingPregeneration(false);
     setFallbackReason(null);
     setTruncationNotice(null);
+    setPreparationProgress(null);
     skipPregenerationWaitRef.current = false;
 
     const isCurrentLoad = () => loadIdRef.current === currentLoadId;
@@ -396,17 +393,27 @@ export function App({
       eng.seekToWordIndex(target);
     };
 
+    const reportAudioFailure = (reason?: string) => {
+      if (!isCurrentLoad()) return;
+      activeStreamRef.current?.cancel();
+      activeStreamRef.current = null;
+      // Preserve completed audio and the reading position. Never change voices.
+      eng.pause();
+      setPlaybackStatus('error');
+      setAwaitingPregeneration(false);
+      setPreparationProgress(reason ? `${SONIOX_UNAVAILABLE_MESSAGE} ${reason}` : SONIOX_UNAVAILABLE_MESSAGE);
+    };
+
     if (art.title === SAMPLE_ARTICLE.title) {
       try {
-        eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION);
+        eng.loadAudioUrl('/sample_audio.mp3', SAMPLE_TIMINGS, SAMPLE_DURATION, () => reportAudioFailure('The sample recording could not be loaded.'));
         if (loadIdRef.current === currentLoadId) {
           applyResume(SAMPLE_TIMINGS);
           setPlaybackStatus('ready');
         }
       } catch {
         if (loadIdRef.current === currentLoadId) {
-          const hasDeviceSpeech = eng.loadBrowserText(art.content, SAMPLE_TIMINGS);
-          setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
+          reportAudioFailure('The sample recording could not be loaded.');
         }
       }
       return;
@@ -488,14 +495,6 @@ export function App({
     const noteFallback = (reason: string | undefined) => {
       if (reason && isCurrentLoad()) setFallbackReason(reason.replace(/\s+/g, ' ').slice(0, 160));
     };
-    const useBrowserFallback = (reason?: string) => {
-      if (!isCurrentLoad()) return;
-      noteFallback(reason);
-      const wasPlaying = captureFallbackPosition();
-      const hasDeviceSpeech = eng.loadBrowserText(narratedText, initialWordTimings);
-      setPlaybackStatus(hasDeviceSpeech ? 'degraded' : 'error');
-      if (hasDeviceSpeech) restoreAfterFallback(initialWordTimings, wasPlaying);
-    };
     const useRestFallback = (reason?: string) => {
       if (!isCurrentLoad()) return;
       noteFallback(reason);
@@ -511,7 +510,7 @@ export function App({
             `/api/tts/stream?text=${encodeURIComponent(text)}` +
             `&voice=${encodeURIComponent(voice)}&speed=1.0&clientId=${encodeURIComponent(clientId)}`;
           eng.loadAudioUrl(streamUrl, initialWordTimings, totalDuration, () =>
-            useBrowserFallback('the audio fallback could not be loaded')
+            reportAudioFailure('the audio fallback could not be loaded')
           );
           setPlaybackStatus('degraded');
           restoreAfterFallback(initialWordTimings, wasPlaying);
@@ -557,11 +556,11 @@ export function App({
           if (!isCurrentLoad() || controller.signal.aborted) return;
           controller.abort();
           activeStreamRef.current = null;
-          console.warn('REST synthesis fallback failed; using on-device speech:', error);
-          useBrowserFallback(error instanceof Error ? error.message : 'the audio fallback failed');
+          console.warn('Soniox REST audio could not be loaded:', error);
+          reportAudioFailure(error instanceof Error ? error.message : 'the audio fallback failed');
         });
       } catch (error) {
-        useBrowserFallback(error instanceof Error ? error.message : undefined);
+        reportAudioFailure(error instanceof Error ? error.message : undefined);
       }
     };
     const mergeAuthoritativePrefix = (exactWords: WordTiming[]): WordTiming[] => {
@@ -726,8 +725,7 @@ export function App({
         if (cacheFailed || !isCurrentLoad()) return;
         cacheFailed = true;
         if (durableNarration) {
-          setPlaybackStatus('error');
-          setPreparationProgress('Could not download saved audio. Please retry.');
+          reportAudioFailure('Could not download the saved recording.');
         } else void runWebSocketAttempt(0);
       });
       eng.appendWordTimings(cachedTrack.words, cachedTrack.duration, { authoritative: true });
@@ -771,9 +769,7 @@ export function App({
           });
         } catch (error) {
           if (!isCurrentLoad() || controller.signal.aborted) return;
-          eng.pause();
-          setPlaybackStatus('error');
-          setPreparationProgress(error instanceof Error ? error.message : 'Audio preparation failed. Please retry.');
+          reportAudioFailure(error instanceof Error ? error.message : 'Audio preparation failed.');
         }
         return;
       }
@@ -828,8 +824,7 @@ export function App({
     }
 
     if (durableNarration) {
-      setPlaybackStatus('error');
-      setPreparationProgress('Saved audio is unavailable. Please retry.');
+      reportAudioFailure('Saved audio could not be found.');
       return;
     }
     void runWebSocketAttempt(0);
@@ -1316,7 +1311,7 @@ export function App({
             )}
             isDegraded={playbackStatus === 'degraded'}
             degradedMessage={
-              fallbackReason ? `${DEGRADED_MESSAGES[playback.mode]} Reason: ${fallbackReason}.` : DEGRADED_MESSAGES[playback.mode]
+              fallbackReason ? `${ESTIMATED_TIMING_MESSAGE} Reason: ${fallbackReason}.` : ESTIMATED_TIMING_MESSAGE
             }
             isError={playbackStatus === 'error'}
             noticeMessage={loadError ?? undefined}
@@ -1328,7 +1323,7 @@ export function App({
             }
             infoBusy={awaitingPregeneration}
             infoAction={
-              playbackStatus === 'error' && durableNarration
+              playbackStatus === 'error'
                 ? { label: 'Retry audio', onClick: () => loadArticleContent(article, engine, settings, { resumeWordIndex: engine.currentWordIndex }) }
                 : awaitingPregeneration
                 ? {
