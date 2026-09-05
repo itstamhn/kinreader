@@ -758,13 +758,14 @@ export function App({
         try {
           await playDurableNarration({
             engine: eng, initialWords: initialWordTimings, duration: totalDuration, signal: controller.signal,
+            resumeWordIndex: pendingResumeIndex,
+            onAudioError: () => { if (isCurrentLoad()) reportAudioFailure('The saved Soniox recording could not be played.'); },
             prepare: () => {
               const input = { text: narratedText, voice, clientId, title: art.title, author: art.author };
               return requestPregeneration ? requestPregeneration(input) : prepareNarrationMutation.mutateAsync(input);
             },
             page: from => narrationPage ? narrationPage({ contentDigest, voice, from }) : crpcClient.routers.narration.page.query({ contentDigest, voice, from }),
             pollMs: pregenerationPollMs,
-            onWords: words => { if (words.length > pendingResumeIndex && eng.playbackReady) applyResume(words); },
             onProgress: (completed, total) => setPreparationProgress(completed === total ? 'Audio saved. Ready to replay.' : `Audio saved: ${completed} of ${total} sections. Preparation continues if you leave.`),
           });
         } catch (error) {

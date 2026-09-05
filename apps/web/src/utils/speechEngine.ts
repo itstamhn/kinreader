@@ -89,6 +89,12 @@ export class SpeechEngine {
   private pendingSeekTime: number | null = null;
   private awaitingNextPart: boolean = false;
   private streamComplete: boolean = false;
+  private savedSections = false;
+  private exactWordCount = 0;
+  private pendingResumeWord: number | null = null;
+  private pendingPartSeek: number | null = null;
+  private playRequest = 0;
+  private playRequestPending = false;
 
   public isStreaming: boolean = false;
   public progressivePlaybackAvailable: boolean = false;
@@ -128,7 +134,8 @@ export class SpeechEngine {
       this.audio.oncanplay = () => {
         this.clearLoadingDeadline();
         if (this.audioErrorHandler && this.isBuffering) {
-          this.isBuffering = false;
+          if (this.partsMode) this.maybeResumeFromBuffering();
+          else this.isBuffering = false;
           this.notify();
         }
       };
@@ -144,6 +151,7 @@ export class SpeechEngine {
         this.notify();
       };
       this.audio.onended = () => {
+        if (this.savedSections && (!this.audio?.ended || this.audio.seeking || this.pendingPartSeek !== null)) return;
         if (this.partsMode) this.onPartEnded();
         else this.handleEnded();
       };
@@ -401,12 +409,13 @@ export class SpeechEngine {
   }
 
   private shouldHoldForBuffer(): boolean {
-    return this.moreAudioExpected() && this.bufferedAhead() < this.bufferTarget();
+    return this.pendingResumeWord !== null || (this.moreAudioExpected() && this.bufferedAhead() < this.bufferTarget());
   }
 
   private enterBuffering() {
     if (this.isBuffering) return;
     this.isBuffering = true;
+    this.invalidatePlayRequest();
     if (this.audio && !this.audio.paused) this.audio.pause();
     this.notify();
   }
@@ -427,11 +436,7 @@ export class SpeechEngine {
     this.isBuffering = false;
     this.hasStartedStreamingPlayback = true;
     this.lastAudioCurrentTime = -1;
-    this.audio.play().catch(() => {
-      this.isPlaying = false;
-      this.stopSyncLoop();
-      this.notify();
-    });
+    this.requestAudioPlay();
     this.notify();
   }
 
@@ -458,6 +463,11 @@ export class SpeechEngine {
       } catch {}
     }
     this.partsMode = false;
+    this.savedSections = false;
+    this.exactWordCount = 0;
+    this.pendingResumeWord = null;
+    this.pendingPartSeek = null;
+    if (this.audio) this.audio.onloadedmetadata = null;
     this.parts = [];
     this.partsTotalSeconds = 0;
     this.pendingPartBytes = [];
@@ -515,12 +525,25 @@ export class SpeechEngine {
   private loadPart(index: number, offsetWithin: number) {
     const part = this.parts[index];
     if (!part || !this.audio) return;
+    this.invalidatePlayRequest();
     this.currentPart = index;
     this.partOffset = part.start;
+    if (this.savedSections) {
+      this.pendingPartSeek = offsetWithin;
+      const generation = this.streamGeneration;
+      this.audio.onloadedmetadata = () => {
+        if (generation !== this.streamGeneration || this.currentPart !== index || !this.audio) return;
+        const target = this.pendingPartSeek;
+        this.pendingPartSeek = null;
+        if (target !== null) this.audio.currentTime = target;
+        this.maybeResumeFromBuffering();
+      };
+    }
     this.audio.src = part.url;
     this.audio.playbackRate = this._rate;
     this.audio.defaultPlaybackRate = this._rate;
     this.audio.currentTime = offsetWithin;
+    this.watchAudioLoad();
     this.lastAudioCurrentTime = -1;
   }
 
@@ -528,7 +551,7 @@ export class SpeechEngine {
     const next = this.currentPart + 1;
     if (this.parts[next]) {
       this.loadPart(next, 0);
-      if (this.isPlaying && !this.isBuffering && this.audio) this.audio.play().catch(() => {});
+      if (this.isPlaying && !this.isBuffering) this.requestAudioPlay();
       return;
     }
     if (this.streamComplete) {
@@ -545,7 +568,7 @@ export class SpeechEngine {
   private applyPendingSeek() {
     const target = this.pendingSeekTime;
     const end = this.bufferedEnd();
-    if (target === null || end <= 0 || (target >= end && this.moreAudioExpected())) return;
+    if (this.pendingResumeWord !== null || target === null || end <= 0 || (target >= end && this.moreAudioExpected())) return;
     this.pendingSeekTime = null;
     const resolved = Math.min(target, Math.max(0, end - 0.05));
     this.seekToProgress(this.duration > 0 ? resolved / this.duration * 100 : 0);
@@ -578,10 +601,45 @@ export class SpeechEngine {
     const within = Math.max(0, clamped - this.parts[index]!.start);
     this.awaitingNextPart = false;
     if (index !== this.currentPart) {
-      loadPartAndMaybePlay(this, index, within);
+      this.loadPart(index, within);
+      if (this.isPlaying && !this.isBuffering) this.requestAudioPlay();
     } else {
+      if (this.pendingPartSeek !== null) this.pendingPartSeek = within;
       this.audio.currentTime = within;
     }
+  }
+
+  /** Saved MP3s are independent recordings. Keep their headers and seek tables
+   * intact instead of concatenating them into a browser SourceBuffer. */
+  public startSavedSections(words: WordTiming[], duration: number, resumeWordIndex = 0, onError?: () => void) {
+    this.stop();
+    this.mode = 'audio';
+    this.isStreaming = true;
+    this.words = words;
+    this.duration = duration;
+    this.savedSections = true;
+    this.audioErrorHandler = onError ?? null;
+    this.pendingResumeWord = resumeWordIndex > 0 ? Math.min(words.length - 1, resumeWordIndex) : null;
+    if (this.pendingResumeWord !== null) {
+      this.currentWordIdx = this.pendingResumeWord;
+      this._currentTime = words[this.currentWordIdx]?.start ?? 0;
+      this._progress = duration > 0 ? this._currentTime / duration * 100 : 0;
+    }
+    this.enablePartsMode();
+    this.notify();
+  }
+
+  public appendSavedSection(bytes: Uint8Array, duration: number, wordCount: number) {
+    if (!this.savedSections || !this.isStreaming) return;
+    this.exactWordCount += wordCount;
+    this.addPart(bytes, duration);
+    if (this.pendingResumeWord !== null && this.pendingResumeWord < this.exactWordCount) {
+      const word = this.pendingResumeWord;
+      this.pendingResumeWord = null;
+      this.seekToWordIndex(word);
+    }
+    this.maybeResumeFromBuffering();
+    this.notify();
   }
 
   // --- Real-Time Audio Streaming (Soniox WebSocket) -----------------------
@@ -743,7 +801,7 @@ export class SpeechEngine {
       if (this.awaitingNextPart && this.parts[this.currentPart + 1]) {
         this.awaitingNextPart = false;
         this.loadPart(this.currentPart + 1, 0);
-        if (this.isPlaying && this.audio) this.audio.play().catch(() => {});
+        if (this.isPlaying) this.requestAudioPlay();
       } else if (this.awaitingNextPart) {
         // Ended on the last part while waiting for more: that was the end.
         this.awaitingNextPart = false;
@@ -851,27 +909,44 @@ export class SpeechEngine {
     this.synth.speak(utterance);
   }
 
+  private invalidatePlayRequest() {
+    this.playRequest++;
+    this.playRequestPending = false;
+  }
+
+  private requestAudioPlay() {
+    if (!this.audio || !this.isPlaying || this.playRequestPending) return;
+    const request = ++this.playRequest;
+    this.playRequestPending = true;
+    this.audio.play().then(() => {
+      if (request !== this.playRequest) return;
+      this.playRequestPending = false;
+      this.hasStartedStreamingPlayback = true;
+      this.notify();
+    }).catch(() => {
+      if (request !== this.playRequest) return;
+      this.playRequestPending = false;
+      this.isPlaying = false;
+      this.isBuffering = false;
+      this.stopSyncLoop();
+      this.notify();
+    });
+  }
+
   public play() {
     if (this.isPlaying || !this.playbackReady) return;
 
     if (this.mode === 'audio' && this.audio) {
+      if (this._progress >= 100) this.seekToProgress(0);
       this.audio.playbackRate = this._rate;
       this.audio.defaultPlaybackRate = this._rate;
-      if (this.shouldHoldForBuffer()) {
-        // Counts as playing from the listener's point of view; the element
-        // starts on its own once the cushion is there (see buffer control).
-        this.isPlaying = true;
-        this.isBuffering = true;
-        this.notify();
-        this.startSyncLoop();
-        return;
-      }
-      this.audio.play().then(() => {
-        this.hasStartedStreamingPlayback = true;
-        this.isPlaying = true;
-        this.notify();
-        this.startSyncLoop();
-      }).catch(console.error);
+      // Record intent synchronously. Source changes and Pause invalidate the
+      // promise so an earlier Play cannot control a later source or seek.
+      this.isPlaying = true;
+      this.isBuffering = this.shouldHoldForBuffer();
+      if (!this.isBuffering) this.requestAudioPlay();
+      this.notify();
+      this.startSyncLoop();
     } else if (this.mode === 'browser') {
       if (!this.synth) return;
       this.isPlaying = true;
@@ -881,7 +956,7 @@ export class SpeechEngine {
   }
 
   public pause() {
-    if (!this.isPlaying) return;
+    this.invalidatePlayRequest();
 
     if (this.mode === 'audio' && this.audio) {
       this.audio.pause();
@@ -982,6 +1057,7 @@ export class SpeechEngine {
   public seekToWordIndex(wordIndex: number) {
     if (this.words.length === 0) return;
     const safeIdx = Math.max(0, Math.min(this.words.length - 1, wordIndex));
+    this.pendingResumeWord = this.savedSections && safeIdx >= this.exactWordCount ? safeIdx : null;
     this.currentWordIdx = safeIdx;
     const targetWord = this.words[safeIdx];
     if (!targetWord) return;
@@ -993,6 +1069,7 @@ export class SpeechEngine {
 
     if (this.mode === 'audio' && this.audio) {
       this.seekAudioTo(targetTime);
+      this.maybeResumeFromBuffering();
       this.notify();
     } else if (this.mode === 'browser') {
       this.notify();
@@ -1004,6 +1081,7 @@ export class SpeechEngine {
 
   public seekToProgress(percent: number) {
     if (this.duration <= 0) return;
+    this.pendingResumeWord = null;
     const clampedPercent = Math.max(0, Math.min(100, percent));
     const targetTime = (clampedPercent / 100) * this.duration;
 
@@ -1029,6 +1107,7 @@ export class SpeechEngine {
 
     if (this.mode === 'audio' && this.audio) {
       this.seekAudioTo(targetTime);
+      this.maybeResumeFromBuffering();
       this.notify();
     } else if (this.mode === 'browser') {
       this.notify();
@@ -1103,7 +1182,7 @@ export class SpeechEngine {
   // Shared by the rAF sync loop to run the active-word scan + push logic.
   private syncFromAudioTick(dt: number = 0) {
     if (!this.audio || this.mode !== 'audio') return;
-    if (this.pendingSeekTime !== null) return;
+    if (this.pendingSeekTime !== null || this.pendingResumeWord !== null || this.pendingPartSeek !== null) return;
 
     // In parts mode the element only knows its current part; the timeline is
     // the part's start plus the element's position.
@@ -1178,7 +1257,7 @@ export class SpeechEngine {
         !this.audio.ended &&
         this.audio.readyState >= 3
       ) {
-        this.audio.play().catch(() => {});
+        this.requestAudioPlay();
       }
     }
 
@@ -1262,6 +1341,8 @@ export class SpeechEngine {
   }
 
   private handleEnded() {
+    this.invalidatePlayRequest();
+    this.isBuffering = false;
     // Stop the element too. It used to keep playing whenever the estimated
     // timeline ran out before the real audio did, leaving Soniox talking over
     // a UI that had already reported the article finished.
@@ -1274,16 +1355,4 @@ export class SpeechEngine {
     this.notify();
     this.stopSyncLoop();
   }
-}
-
-// Load a part for a seek and keep playing if playback was running.
-function loadPartAndMaybePlay(engine: SpeechEngine, index: number, offsetWithin: number) {
-  const self = engine as unknown as {
-    loadPart(index: number, offsetWithin: number): void;
-    isPlaying: boolean;
-    isBuffering: boolean;
-    audio: HTMLAudioElement | null;
-  };
-  self.loadPart(index, offsetWithin);
-  if (self.isPlaying && !self.isBuffering && self.audio) self.audio.play().catch(() => {});
 }

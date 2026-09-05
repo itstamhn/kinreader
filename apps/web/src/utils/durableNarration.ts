@@ -8,11 +8,13 @@ export async function playDurableNarration(options: {
   engine: SpeechEngine;
   initialWords: WordTiming[];
   duration: number;
+  resumeWordIndex?: number;
   signal: AbortSignal;
   prepare: () => Promise<unknown>;
   page: (from: number) => Promise<NarrationPage>;
   fetchAudio?: (url: string, signal: AbortSignal) => Promise<Uint8Array>;
   pollMs?: number;
+  onAudioError?: () => void;
   onWords?: (words: WordTiming[]) => void;
   onProgress?: (completed: number, total: number) => void;
 }): Promise<void> {
@@ -32,7 +34,7 @@ export async function playDurableNarration(options: {
   });
   await bounded(options.prepare());
   alive();
-  engine.startStreamingSession(initialWords, options.duration);
+  engine.startSavedSections(initialWords, options.duration, options.resumeWordIndex, options.onAudioError);
   let index = 0;
   let offset = 0;
   const exact: WordTiming[] = [];
@@ -52,7 +54,7 @@ export async function playDurableNarration(options: {
       const join = tail[0]?.start ?? 0;
       const words = [...exact, ...tail.map(w => ({ ...w, start: offset + w.start - join, end: offset + w.end - join }))];
       engine.appendWordTimings(words, Math.max(offset, words.at(-1)?.end ?? 0), { authoritative: true });
-      engine.appendAudioChunk(bytes);
+      engine.appendSavedSection(bytes, section.duration, section.words.length);
       options.onWords?.(exact);
       index++;
       lastProgress = Date.now();

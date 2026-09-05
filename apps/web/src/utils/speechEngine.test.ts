@@ -121,6 +121,7 @@ test('falling back to on-device speech is visible via engine.mode, not silent', 
 function fakeAudio(overrides: Record<string, any> = {}) {
   return {
     src: '',
+    onloadedmetadata: null as (() => void) | null,
     currentTime: 0,
     duration: NaN,
     paused: false,
@@ -1055,4 +1056,85 @@ test('resuming beyond downloaded parts waits for that position instead of playin
     expect(engine.getSnapshot().canStartPlayback).toBe(true);
     engine.stop();
   });
+});
+
+test('pause cancels an unresolved play request and a late resolution cannot restart playback', async () => {
+  const engine = new SpeechEngine();
+  let resolvePlay!: () => void;
+  const audio = fakeAudio({ paused: true, play() { this.paused = false; return new Promise<void>(resolve => { resolvePlay = resolve; }); } });
+  (engine as any).audio = audio;
+  engine.loadAudioUrl('saved.mp3', evenWords(120), 120);
+  engine.play();
+  engine.pause();
+  resolvePlay();
+  await Promise.resolve();
+  expect(engine.isPlaying).toBe(false);
+  expect(audio.paused).toBe(true);
+  engine.stop();
+});
+
+test('saved sections keep independent sources, latest rewind wins before metadata, and stale Play rejection is ignored', async () => {
+  const engine = new SpeechEngine();
+  const requests: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+  const audio = fakeAudio({ paused: true, play() { this.paused = false; return new Promise<void>((resolve, reject) => requests.push({ resolve, reject })); } });
+  (engine as any).audio = audio;
+  engine.startSavedSections(evenWords(120), 120);
+  engine.appendSavedSection(new Uint8Array([1]), 60, 60);
+  const firstSource = audio.src;
+  engine.appendSavedSection(new Uint8Array([2]), 60, 60);
+  engine.finishStreamingSession();
+  expect((engine as any).mediaSource).toBeNull();
+  expect((engine as any).parts).toHaveLength(2);
+  audio.onloadedmetadata?.();
+  engine.play();
+  engine.seekToProgress(75);
+  expect(audio.src).not.toBe(firstSource);
+  engine.seekToProgress(12.5);
+  engine.seekToProgress(0);
+  // Loading a new source can reset currentTime after the initial assignment.
+  audio.currentTime = 90;
+  audio.onloadedmetadata?.();
+  expect(audio.src).toBe(firstSource);
+  expect(audio.currentTime).toBe(0);
+  engine.rate = 3;
+  requests[0]!.reject(new DOMException('Source changed', 'AbortError'));
+  requests.at(-1)!.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(engine.isPlaying).toBe(true);
+  expect(audio.playbackRate).toBe(3);
+  audio.currentTime = 3;
+  (engine as any).syncFromAudioTick(0.1);
+  expect(engine.currentTime).toBe(3);
+  expect(engine.currentWordIndex).toBe(3);
+  engine.pause();
+  engine.play();
+  requests.at(-1)!.resolve();
+  await Promise.resolve();
+  expect(engine.isPlaying).toBe(true);
+  engine.stop();
+});
+
+test('saved progress waits for exact words and audio before Play, and explicit rewind cancels it', () => {
+  const engine = new SpeechEngine();
+  const audio = fakeAudio({ paused: true });
+  (engine as any).audio = audio;
+  engine.startSavedSections(evenWords(300), 300, 200);
+  engine.appendSavedSection(new Uint8Array([1]), 150, 150);
+  audio.onloadedmetadata?.();
+  expect(engine.getSnapshot().canStartPlayback).toBe(false);
+  expect(audio.paused).toBe(true);
+  engine.appendSavedSection(new Uint8Array([2]), 150, 150);
+  audio.onloadedmetadata?.();
+  expect(engine.currentTime).toBe(200);
+  expect(audio.currentTime).toBe(50);
+  expect(engine.getSnapshot().canStartPlayback).toBe(true);
+  engine.startSavedSections(evenWords(300), 300, 200);
+  engine.appendSavedSection(new Uint8Array([1]), 150, 150);
+  engine.seekToProgress(0);
+  engine.appendSavedSection(new Uint8Array([2]), 150, 150);
+  audio.onloadedmetadata?.();
+  expect(engine.currentTime).toBe(0);
+  expect(audio.currentTime).toBe(0);
+  engine.stop();
 });

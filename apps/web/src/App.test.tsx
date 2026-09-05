@@ -1479,3 +1479,36 @@ test('an asynchronous sample audio error never starts device speech', async () =
     SpeechEngine.prototype.loadBrowserText = originalLoadBrowserText;
   }
 });
+
+test('durable saved progress prevents playing the opening before the resume section arrives', async () => {
+  const words = Array.from({ length: 300 }, (_, i) => ({ text: `word${i}`, start: i, end: i + 0.8 }));
+  const url = 'https://example.com/durable-resume';
+  localStorage.setItem('kinetic_saved_articles_v2', JSON.stringify([{
+    id: url, article: { title: 'Durable resume', content: words.map(w => w.text).join(' '), sourceUrl: url },
+    progress: 73, lastWordIndex: 220, lastReadAt: Date.now(),
+  }]));
+  window.location.href = `http://localhost/?url=${encodeURIComponent(url)}`;
+  let release!: () => void;
+  const secondSection = new Promise<void>(resolve => { release = resolve; });
+  global.fetch = (async () => new Response(new Uint8Array([1, 2, 3]))) as unknown as typeof fetch;
+  const { container } = renderApp({
+    durableNarration: true,
+    narrationPage: async ({ from }) => {
+      if (from === 1) await secondSection;
+      return { status: 'done', total: 2, completed: 2, error: null, sections: [{
+        index: from, audioUrl: `https://audio.example/${from}.mp3`, duration: 150,
+        words: words.slice(from * 150, (from + 1) * 150).map(w => ({ ...w, start: w.start - from * 150, end: w.end - from * 150 })),
+      }] };
+    },
+  });
+  await waitFor(() => expect(((window as any).__engine as SpeechEngine).getSnapshot().bufferedSeconds).toBe(150));
+  const engine = (window as any).__engine as SpeechEngine;
+  expect(engine.getSnapshot().canStartPlayback).toBe(false);
+  fireEvent.keyDown(window, { code: 'Space' });
+  expect(engine.isPlaying).toBe(false);
+  release();
+  await waitFor(() => expect(engine.getSnapshot().canStartPlayback).toBe(true));
+  expect(engine.currentWordIndex).toBe(220);
+  expect(engine.currentTime).toBe(220);
+  expect(container.querySelector('button[title="Play (Space)"]')).toBeTruthy();
+});
