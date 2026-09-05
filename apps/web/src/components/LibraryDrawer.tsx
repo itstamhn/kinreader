@@ -10,8 +10,6 @@ import {
   Link as LinkIcon,
   Settings,
   Type,
-  Volume2,
-  Check,
   ExternalLink,
 } from 'lucide-react';
 import type { ArticleData, ReaderSettings } from '../types';
@@ -25,14 +23,6 @@ export interface SavedArticleItem {
   lastWordIndex?: number;
   isCachedAudio?: boolean;
 }
-
-const SONIOX_VOICES = [
-  { id: 'Adrian', name: 'Adrian', desc: 'Warm Narrative (Default)' },
-  { id: 'Emma', name: 'Emma', desc: 'Clear & Articulate' },
-  { id: 'Alex', name: 'Alex', desc: 'Deep & Authoritative' },
-  { id: 'Sophie', name: 'Sophie', desc: 'Engaging & Smooth' },
-  { id: 'Oliver', name: 'Oliver', desc: 'Calm & Rhythmic' },
-];
 
 // Listening-time estimates at the Adrian voice's measured ~177 WPM (plan 022,
 // Step 0), scaled by the reader's tempo. Replaces the placeholder "14 min →
@@ -620,36 +610,7 @@ export function LibraryDrawer({
               </div>
             </div>
 
-            {/* 3. Narrator Voice */}
-            <div className="flex flex-col gap-3">
-              <label className="font-sans text-xs sm:text-sm font-semibold text-[#ECEAE4]/80 flex items-center gap-2">
-                <Volume2 className="w-4 h-4 text-[#F2A33C]" />
-                <span>Neural Voice Selection</span>
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {SONIOX_VOICES.map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={() => {
-                      handleUpdateSettings({ sonioxVoice: v.id });
-                    }}
-                    className={`p-4 rounded-2xl border text-left flex flex-col gap-1.5 transition ${
-                      currentSonioxVoice === v.id
-                        ? 'border-[#F2A33C] bg-[#F2A33C]/10 text-[#F4F0E6] shadow-[0_0_20px_rgba(242,163,60,0.15)]'
-                        : 'border-white/10 bg-white/5 text-white/50 hover:border-white/20'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-sans font-bold text-sm text-[#F4F0E6]">{v.name}</span>
-                      {currentSonioxVoice === v.id && <Check className="w-4 h-4 text-[#F2A33C]" />}
-                    </div>
-                    <span className="font-sans text-xs text-[#ECEAE4]/50">{v.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 4. Kinreader Pro Banner */}
+            {/* 3. Kinreader Pro Banner */}
             <div className="rounded-3xl bg-gradient-to-br from-[#1B1D26] to-[#101117] border border-[#F2A33C]/30 p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-2">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-2xl bg-[#F2A33C]/10 border border-[#F2A33C]/20 flex items-center justify-center shrink-0">
@@ -665,7 +626,7 @@ export function LibraryDrawer({
                     </span>
                   </div>
                   <span className="font-sans text-xs text-[#ECEAE4]/50">
-                    Unlock full neural synthesis voices, 3.5× tempo acceleration, and priority queue sync.
+                    Listen with Soniox narration, adjust tempo up to 3.5×, and sync your queue.
                   </span>
                 </div>
               </div>
